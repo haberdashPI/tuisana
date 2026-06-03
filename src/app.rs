@@ -1,15 +1,18 @@
 use crate::{
     asana::AsanaClient,
     config::Config,
-    domain::Project,
     error::Result,
     input::KeyMap,
 };
 
+pub mod project_list;
+
+use self::project_list::ProjectListState;
+
 #[derive(Debug)]
 pub struct App<C> {
     pub config: Config,
-    pub projects: Vec<Project>,
+    pub projects: ProjectListState,
     client: C,
 }
 
@@ -17,13 +20,13 @@ impl<C: AsanaClient> App<C> {
     pub fn new(config: Config, client: C) -> Self {
         Self {
             config,
-            projects: Vec::new(),
+            projects: ProjectListState::new(),
             client,
         }
     }
 
     pub fn load_projects(&mut self) -> Result<()> {
-        self.projects = self.client.list_projects()?;
+        self.projects.load(&self.client)?;
         Ok(())
     }
 
@@ -45,7 +48,8 @@ mod tests {
 
         app.load_projects().expect("projects load");
 
-        assert_eq!(app.projects.len(), 1);
-        assert_eq!(app.projects[0].name, "Inbox");
+        assert_eq!(app.projects.items().len(), 1);
+        assert_eq!(app.projects.items()[0].name, "Inbox");
+        assert_eq!(app.projects.selected_index(), Some(0));
     }
 }
