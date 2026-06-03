@@ -8,6 +8,8 @@ pub struct Config {
     #[serde(default)]
     pub header: Header,
     #[serde(default)]
+    pub auth: Option<AuthConfig>,
+    #[serde(default)]
     pub bind: Vec<Bind>,
 }
 
@@ -15,6 +17,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             header: Header::default(),
+            auth: None,
             bind: default_bindings(),
         }
     }
@@ -52,9 +55,42 @@ impl Config {
             ));
         }
 
+        if let Some(auth) = &self.auth {
+            auth.validate()?;
+        }
+
         Ok(())
     }
 
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct AuthConfig {
+    pub personal_access_token: String,
+    #[serde(default)]
+    pub workspace_gid: Option<String>,
+}
+
+impl AuthConfig {
+    fn validate(&self) -> Result<()> {
+        if self.personal_access_token.trim().is_empty() {
+            return Err(Error::ConfigValidation(
+                "auth.personal_access_token must not be empty".to_string(),
+            ));
+        }
+
+        if self
+            .workspace_gid
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(Error::ConfigValidation(
+                "auth.workspace_gid must not be empty when provided".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -194,6 +230,43 @@ mod tests {
         .expect_err("empty type should be rejected");
 
         assert!(format!("{err}").contains("header.type must not be empty"));
+    }
+
+    #[test]
+    fn parses_asana_config() {
+        let config = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 1.0
+
+                [auth]
+                personal_access_token = "pat_123"
+                workspace_gid = "42"
+            "#,
+        )
+        .expect("auth config parses");
+
+        let auth = config.auth.expect("auth section present");
+        assert_eq!(auth.personal_access_token, "pat_123");
+        assert_eq!(auth.workspace_gid.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn rejects_empty_asana_token() {
+        let err = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 1.0
+
+                [auth]
+                personal_access_token = ""
+            "#,
+        )
+        .expect_err("empty token should be rejected");
+
+        assert!(format!("{err}").contains("auth.personal_access_token must not be empty"));
     }
 
     #[test]

@@ -144,7 +144,34 @@ Acceptance criteria:
 - selection state works for the list
 - tests verify ordering and rendering model behavior
 
-## Milestone 2: Configurable vim-like project navigation
+## Milestone 2: Asana API setup
+
+Goal:
+
+- define the real Asana API configuration and wire a production client behind the existing trait boundary
+
+Deliverables:
+
+- config schema for Asana authentication and API settings
+- real `AsanaClient` implementation for authenticated project listing
+- minimal client construction flow in the app startup path
+- tests for config parsing, validation, and client wiring with fakes or injected HTTP boundaries
+
+Implementation notes:
+
+- keep authentication inputs explicit and small
+- prefer config fields that can support both local development and future deployment modes
+- avoid exposing HTTP details to UI or app state code
+- keep the real client behind the existing trait so project-list and task-review code can stay testable
+
+Acceptance criteria:
+
+- config can express the information needed to authenticate with Asana
+- the app can construct a real Asana client from config
+- project listing can use the real client through the trait boundary
+- tests cover the new config and client construction seams without requiring live Asana credentials
+
+## Milestone 3: Configurable vim-like project navigation
 
 Goal:
 
@@ -169,7 +196,7 @@ Acceptance criteria:
 - key bindings are configurable from TOML
 - tests cover config parsing and action mapping
 
-## Milestone 3: Review tasks for one or many projects
+## Milestone 4: Review tasks for one or many projects
 
 Goal:
 
@@ -207,7 +234,7 @@ Acceptance criteria:
 - table columns include key fields and project-specific fields
 - tests cover field mapping and multi-project merging
 
-## Milestone 4: Navigate, filter, and sort tasks
+## Milestone 5: Navigate, filter, and sort tasks
 
 Goal:
 
@@ -238,7 +265,7 @@ Acceptance criteria:
 - sorting is deterministic
 - tests cover filter and sort combinations
 
-## Milestone 5: Edit tasks
+## Milestone 6: Edit tasks
 
 Goal:
 
@@ -268,7 +295,7 @@ Acceptance criteria:
 - date updates work
 - tests cover parsing, validation, and mutation application
 
-## Milestone 6: Hardening and polish
+## Milestone 7: Hardening and polish
 
 Goal:
 
@@ -338,11 +365,12 @@ Implement in this order:
 
 1. project skeleton and config
 2. project list
-3. navigation and key bindings
-4. task review table
-5. filtering and sorting
-6. editing
-7. hardening and polish
+3. Asana API setup
+4. navigation and key bindings
+5. task review table
+6. filtering and sorting
+7. editing
+8. hardening and polish
 
 ## Definition of Done
 

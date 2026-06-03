@@ -1,4 +1,5 @@
 target/
+tuisana.toml
 
 # Editor and OS noise
 .DS_Store

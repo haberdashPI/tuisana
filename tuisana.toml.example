@@ -1,0 +1,41 @@
+[header]
+type = "tuisana"
+version = 1.0
+
+[auth]
+# Create a personal access token in Asana's developer console.
+personal_access_token = "your-asana-pat-here"
+# Optional. Leave this out if you want to list projects without narrowing to a workspace.
+workspace_gid = "your-workspace-gid-here"
+
+[[bind]]
+key = "q"
+command = "quit"
+
+[[bind]]
+key = "ctrl-c"
+command = "quit"
+
+[[bind]]
+key = "k"
+command = "move_up"
+
+[[bind]]
+key = "j"
+command = "move_down"
+
+[[bind]]
+key = "enter"
+command = "open"
+
+[[bind]]
+key = "r"
+command = "refresh"
+
+[[bind]]
+key = "ctrl-u"
+command = "page_up"
+
+[[bind]]
+key = "ctrl-d"
+command = "page_down"
