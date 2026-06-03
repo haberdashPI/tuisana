@@ -1,0 +1,8 @@
+[tools]
+rust = "latest"
+
+[tasks.test]
+run = "cargo test"
+
+[tasks.run]
+run = "cargo run"
