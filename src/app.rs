@@ -2,7 +2,7 @@ use crate::{
     asana::AsanaClient,
     config::Config,
     error::Result,
-    input::KeyMap,
+    input::{Action, AppCommand, KeyMap},
 };
 
 pub mod project_list;
@@ -33,6 +33,10 @@ impl<C: AsanaClient> App<C> {
     pub fn keymap(&self) -> Result<KeyMap> {
         KeyMap::from_bindings(&self.config.bind)
     }
+
+    pub fn handle_action(&mut self, action: &Action) -> Option<AppCommand> {
+        self.projects.apply_action(action)
+    }
 }
 
 #[cfg(test)]
@@ -51,5 +55,22 @@ mod tests {
         assert_eq!(app.projects.items().len(), 1);
         assert_eq!(app.projects.items()[0].name, "Inbox");
         assert_eq!(app.projects.selected_index(), Some(0));
+    }
+
+    #[test]
+    fn app_handles_project_list_actions() {
+        let client = FakeAsanaClient::new(vec![
+            Project::new("1", "Inbox", true),
+            Project::new("2", "Backlog", false),
+        ]);
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+
+        assert_eq!(app.handle_action(&crate::input::Action::MoveDown), None);
+        assert_eq!(app.projects.selected_index(), Some(1));
+        assert_eq!(
+            app.handle_action(&crate::input::Action::Quit),
+            Some(crate::input::AppCommand::Quit)
+        );
     }
 }

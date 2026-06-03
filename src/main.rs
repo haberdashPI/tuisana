@@ -2,8 +2,10 @@ use tuisana::{
     app::App,
     asana::client::HttpAsanaClient,
     config::Config,
-    ui::project_list::render_project_list,
+    ui::runtime::{run_project_list_app, CrosstermKeySource},
 };
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
+use ratatui::{backend::CrosstermBackend, Terminal};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load_from_path("tuisana.toml")?;
@@ -15,11 +17,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new(config, client);
     app.load_projects()?;
 
-    let view = render_project_list(&app.projects);
-    println!("{}", view.title);
-    println!("{}", view.status_line);
-    for row in view.rows {
-        println!("{row}");
-    }
+    let mut source = CrosstermKeySource;
+    let mut stdout = std::io::stdout();
+    crossterm::execute!(&mut stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    let result = run_project_list_app(&mut app, &mut source, &mut terminal);
+    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    result?;
     Ok(())
 }

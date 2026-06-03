@@ -1,4 +1,9 @@
-use crate::{asana::AsanaClient, domain::Project, error::Result};
+use crate::{
+    asana::AsanaClient,
+    domain::Project,
+    error::Result,
+    input::{Action, AppCommand},
+};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectListState {
@@ -96,6 +101,36 @@ impl ProjectListState {
             }
         }
     }
+
+    pub fn page_up(&mut self) {
+        self.move_up();
+    }
+
+    pub fn page_down(&mut self) {
+        self.move_down();
+    }
+
+    pub fn apply_action(&mut self, action: &Action) -> Option<AppCommand> {
+        match action {
+            Action::MoveUp => {
+                self.move_up();
+                None
+            }
+            Action::MoveDown => {
+                self.move_down();
+                None
+            }
+            Action::PageUp => {
+                self.page_up();
+                None
+            }
+            Action::PageDown => {
+                self.page_down();
+                None
+            }
+            other => other.as_app_command(),
+        }
+    }
 }
 
 fn sort_projects(projects: &mut [Project]) {
@@ -114,6 +149,7 @@ mod tests {
         asana::{fake::FakeAsanaClient, AsanaClient},
         domain::Project,
         error::{Error, Result},
+        input::{Action, AppCommand},
     };
 
     use super::{ProjectListState, ProjectListStatus};
@@ -166,6 +202,21 @@ mod tests {
         assert_eq!(state.selected_index(), Some(1));
         state.move_down();
         assert_eq!(state.selected_index(), Some(1));
+    }
+
+    #[test]
+    fn applies_navigation_actions_and_app_commands() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1", "Inbox", true),
+            Project::new("2", "Backlog", false),
+        ]);
+
+        assert_eq!(state.apply_action(&Action::MoveDown), None);
+        assert_eq!(state.selected_index(), Some(1));
+        assert_eq!(state.apply_action(&Action::PageUp), None);
+        assert_eq!(state.selected_index(), Some(0));
+        assert_eq!(state.apply_action(&Action::Quit), Some(AppCommand::Quit));
+        assert_eq!(state.apply_action(&Action::Refresh), Some(AppCommand::Refresh));
     }
 
     #[test]

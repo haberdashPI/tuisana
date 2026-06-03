@@ -38,6 +38,26 @@ impl FromStr for KeyBinding {
     }
 }
 
+impl KeyBinding {
+    pub fn from_crossterm_event(event: crossterm::event::KeyEvent) -> Option<Self> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        match event.code {
+            KeyCode::Char(c) if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Self::Ctrl(c.to_ascii_lowercase()))
+            }
+            KeyCode::Char(c) => Some(Self::Char(c.to_ascii_lowercase())),
+            KeyCode::Enter => Some(Self::Enter),
+            KeyCode::Esc => Some(Self::Esc),
+            KeyCode::Up => Some(Self::Up),
+            KeyCode::Down => Some(Self::Down),
+            KeyCode::PageUp => Some(Self::PageUp),
+            KeyCode::PageDown => Some(Self::PageDown),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Action {
     Quit,
@@ -60,6 +80,22 @@ impl Action {
             "page_up" => Ok(Self::PageUp),
             "page_down" => Ok(Self::PageDown),
             other => Err(Error::Backend(format!("unsupported command: {other}"))),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AppCommand {
+    Quit,
+    Refresh,
+}
+
+impl Action {
+    pub fn as_app_command(&self) -> Option<AppCommand> {
+        match self {
+            Action::Quit => Some(AppCommand::Quit),
+            Action::Refresh => Some(AppCommand::Refresh),
+            _ => None,
         }
     }
 }
@@ -102,7 +138,7 @@ impl KeyMap {
 
 #[cfg(test)]
 mod tests {
-    use super::{Action, KeyBinding, KeyMap};
+    use super::{Action, AppCommand, KeyBinding, KeyMap};
     use crate::config::Bind;
 
     #[test]
@@ -146,5 +182,12 @@ mod tests {
 
         let command_err = Action::from_command("launch").expect_err("unknown command should fail");
         assert!(format!("{command_err}").contains("unsupported command"));
+    }
+
+    #[test]
+    fn maps_app_commands() {
+        assert_eq!(Action::Quit.as_app_command(), Some(AppCommand::Quit));
+        assert_eq!(Action::Refresh.as_app_command(), Some(AppCommand::Refresh));
+        assert_eq!(Action::MoveDown.as_app_command(), None);
     }
 }
