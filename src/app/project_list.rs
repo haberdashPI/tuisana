@@ -110,9 +110,21 @@ fn sort_projects(projects: &mut [Project]) {
 
 #[cfg(test)]
 mod tests {
-    use crate::{asana::fake::FakeAsanaClient, domain::Project};
+    use crate::{
+        asana::{fake::FakeAsanaClient, AsanaClient},
+        domain::Project,
+        error::{Error, Result},
+    };
 
     use super::{ProjectListState, ProjectListStatus};
+
+    struct FailingAsanaClient;
+
+    impl AsanaClient for FailingAsanaClient {
+        fn list_projects(&self) -> Result<Vec<Project>> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+    }
 
     #[test]
     fn sorts_starred_projects_first_then_name() {
@@ -154,5 +166,19 @@ mod tests {
         assert_eq!(state.selected_index(), Some(1));
         state.move_down();
         assert_eq!(state.selected_index(), Some(1));
+    }
+
+    #[test]
+    fn records_error_state_when_backend_fails() {
+        let mut state = ProjectListState::new();
+        let err = state.load(&FailingAsanaClient).expect_err("load should fail");
+
+        assert_eq!(err.to_string(), "backend error: backend unavailable");
+        assert_eq!(
+            state.status(),
+            &ProjectListStatus::Error("backend error: backend unavailable".to_string())
+        );
+        assert!(state.items().is_empty());
+        assert_eq!(state.selected_index(), None);
     }
 }

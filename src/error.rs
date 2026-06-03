@@ -34,3 +34,28 @@ impl From<std::io::Error> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn formats_validation_and_backend_errors() {
+        let validation = Error::ConfigValidation("bad version".to_string());
+        let backend = Error::Backend("offline".to_string());
+
+        assert_eq!(validation.to_string(), "invalid config: bad version");
+        assert_eq!(backend.to_string(), "backend error: offline");
+    }
+
+    #[test]
+    fn converts_io_and_toml_errors() {
+        let io_error = std::io::Error::other("disk full");
+        let error: Error = io_error.into();
+        assert!(matches!(error, Error::Io(_)));
+
+        let toml_error = toml::from_str::<toml::Value>("=").expect_err("toml should fail");
+        let error: Error = toml_error.into();
+        assert!(matches!(error, Error::ConfigParse(_)));
+    }
+}

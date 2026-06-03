@@ -127,4 +127,24 @@ mod tests {
         assert_eq!(keymap.action_for(&KeyBinding::Char('j')), Some(&Action::MoveDown));
         assert_eq!(keymap.action_for(&KeyBinding::Ctrl('u')), Some(&Action::PageUp));
     }
+
+    #[test]
+    fn parses_key_aliases_and_commands() {
+        assert_eq!("enter".parse::<KeyBinding>().expect("enter parses"), KeyBinding::Enter);
+        assert_eq!("esc".parse::<KeyBinding>().expect("esc parses"), KeyBinding::Esc);
+        assert_eq!("page-up".parse::<KeyBinding>().expect("page-up parses"), KeyBinding::PageUp);
+        assert_eq!(Action::from_command("open").expect("open parses"), Action::Open);
+        assert_eq!(Action::from_command("refresh").expect("refresh parses"), Action::Refresh);
+    }
+
+    #[test]
+    fn rejects_unknown_key_and_command() {
+        let key_err = "meta-x"
+            .parse::<KeyBinding>()
+            .expect_err("unknown key should fail");
+        assert!(format!("{key_err}").contains("unsupported key binding"));
+
+        let command_err = Action::from_command("launch").expect_err("unknown command should fail");
+        assert!(format!("{command_err}").contains("unsupported command"));
+    }
 }

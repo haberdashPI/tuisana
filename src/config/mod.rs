@@ -140,6 +140,7 @@ fn default_bindings() -> Vec<Bind> {
 #[cfg(test)]
 mod tests {
     use super::Config;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn parses_toml_and_keeps_defaults() {
@@ -179,5 +180,32 @@ mod tests {
         .expect_err("version should be rejected");
 
         assert!(format!("{err}").contains("expected header.version = 1"));
+    }
+
+    #[test]
+    fn rejects_empty_type() {
+        let err = Config::from_toml_str(
+            r#"
+                [header]
+                type = ""
+                version = 1.0
+            "#,
+        )
+        .expect_err("empty type should be rejected");
+
+        assert!(format!("{err}").contains("header.type must not be empty"));
+    }
+
+    #[test]
+    fn loads_default_when_path_is_missing() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time ok")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("tuisana-missing-{unique}.toml"));
+
+        let config = Config::load_from_path(&path).expect("missing path should fall back");
+
+        assert_eq!(config, Config::default());
     }
 }

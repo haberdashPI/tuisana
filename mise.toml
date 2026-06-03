@@ -1,4 +1,5 @@
 [tools]
+"cargo:cargo-llvm-cov" = "latest"
 rust = "latest"
 
 [tasks.test]
@@ -6,3 +7,6 @@ run = "cargo test"
 
 [tasks.run]
 run = "cargo run"
+
+[tasks.coverage]
+run = "cargo llvm-cov --all-features --workspace --ignore-filename-regex 'target/'"
