@@ -1,6 +1,9 @@
 use std::{collections::HashMap, fmt::Display, str::FromStr};
 
-use crate::{config::KeyBindings, error::{Error, Result}};
+use crate::{
+    config::Bind,
+    error::{Error, Result},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum KeyBinding {
@@ -46,6 +49,21 @@ pub enum Action {
     PageDown,
 }
 
+impl Action {
+    pub fn from_command(command: &str) -> Result<Self> {
+        match command.trim().to_ascii_lowercase().as_str() {
+            "quit" => Ok(Self::Quit),
+            "move_up" => Ok(Self::MoveUp),
+            "move_down" => Ok(Self::MoveDown),
+            "open" => Ok(Self::Open),
+            "refresh" => Ok(Self::Refresh),
+            "page_up" => Ok(Self::PageUp),
+            "page_down" => Ok(Self::PageDown),
+            other => Err(Error::Backend(format!("unsupported command: {other}"))),
+        }
+    }
+}
+
 impl Display for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
@@ -67,15 +85,13 @@ pub struct KeyMap {
 }
 
 impl KeyMap {
-    pub fn from_key_bindings(bindings: &KeyBindings) -> Result<Self> {
+    pub fn from_bindings(bindings: &[Bind]) -> Result<Self> {
         let mut map = HashMap::new();
-        insert_many(&mut map, Action::Quit, &bindings.quit)?;
-        insert_many(&mut map, Action::MoveUp, &bindings.up)?;
-        insert_many(&mut map, Action::MoveDown, &bindings.down)?;
-        insert_many(&mut map, Action::Open, &bindings.open)?;
-        insert_many(&mut map, Action::Refresh, &bindings.refresh)?;
-        insert_many(&mut map, Action::PageUp, &bindings.page_up)?;
-        insert_many(&mut map, Action::PageDown, &bindings.page_down)?;
+        for bind in bindings {
+            let key = bind.key.parse()?;
+            let action = Action::from_command(&bind.command)?;
+            map.insert(key, action);
+        }
         Ok(Self { bindings: map })
     }
 
@@ -84,29 +100,27 @@ impl KeyMap {
     }
 }
 
-fn insert_many(map: &mut HashMap<KeyBinding, Action>, action: Action, keys: &[String]) -> Result<()> {
-    for key in keys {
-        map.insert(key.parse()?, action.clone());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Action, KeyBinding, KeyMap};
-    use crate::config::KeyBindings;
+    use crate::config::Bind;
 
     #[test]
     fn parses_keys_and_builds_keymap() {
-        let keymap = KeyMap::from_key_bindings(&KeyBindings {
-            quit: vec!["x".to_string()],
-            up: vec!["k".to_string()],
-            down: vec!["j".to_string()],
-            open: vec!["enter".to_string()],
-            refresh: vec!["r".to_string()],
-            page_up: vec!["ctrl-u".to_string()],
-            page_down: vec!["ctrl-d".to_string()],
-        })
+        let keymap = KeyMap::from_bindings(&[
+            Bind {
+                key: "x".to_string(),
+                command: "quit".to_string(),
+            },
+            Bind {
+                key: "j".to_string(),
+                command: "move_down".to_string(),
+            },
+            Bind {
+                key: "ctrl-u".to_string(),
+                command: "page_up".to_string(),
+            },
+        ])
         .expect("keymap parses");
 
         assert_eq!(keymap.action_for(&KeyBinding::Char('x')), Some(&Action::Quit));
@@ -114,4 +128,3 @@ mod tests {
         assert_eq!(keymap.action_for(&KeyBinding::Ctrl('u')), Some(&Action::PageUp));
     }
 }
-

@@ -1,25 +1,30 @@
 use serde::Deserialize;
 use std::{fs, path::Path};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Config {
     #[serde(default)]
-    pub keys: KeyBindings,
+    pub header: Header,
+    #[serde(default)]
+    pub bind: Vec<Bind>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            keys: KeyBindings::default(),
+            header: Header::default(),
+            bind: default_bindings(),
         }
     }
 }
 
 impl Config {
     pub fn from_toml_str(input: &str) -> Result<Self> {
-        Ok(toml::from_str(input)?)
+        let config: Self = toml::from_str(input)?;
+        config.validate()?;
+        Ok(config)
     }
 
     pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self> {
@@ -31,95 +36,148 @@ impl Config {
         let contents = fs::read_to_string(path)?;
         Self::from_toml_str(&contents)
     }
+
+    fn validate(&self) -> Result<()> {
+        if self.header.version != Header::EXPECTED_VERSION {
+            return Err(Error::ConfigValidation(format!(
+                "expected header.version = {}, found {}",
+                Header::EXPECTED_VERSION,
+                self.header.version
+            )));
+        }
+
+        if self.header.kind.trim().is_empty() {
+            return Err(Error::ConfigValidation(
+                "header.type must not be empty".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-pub struct KeyBindings {
-    #[serde(default = "default_quit")]
-    pub quit: Vec<String>,
-    #[serde(default = "default_up")]
-    pub up: Vec<String>,
-    #[serde(default = "default_down")]
-    pub down: Vec<String>,
-    #[serde(default = "default_open")]
-    pub open: Vec<String>,
-    #[serde(default = "default_refresh")]
-    pub refresh: Vec<String>,
-    #[serde(default = "default_page_up")]
-    pub page_up: Vec<String>,
-    #[serde(default = "default_page_down")]
-    pub page_down: Vec<String>,
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Header {
+    #[serde(rename = "type", default = "default_header_type")]
+    pub kind: String,
+    #[serde(default = "default_header_version")]
+    pub version: f64,
 }
 
-impl Default for KeyBindings {
+impl Header {
+    const EXPECTED_VERSION: f64 = 1.0;
+}
+
+impl Default for Header {
     fn default() -> Self {
         Self {
-            quit: default_quit(),
-            up: default_up(),
-            down: default_down(),
-            open: default_open(),
-            refresh: default_refresh(),
-            page_up: default_page_up(),
-            page_down: default_page_down(),
+            kind: default_header_type(),
+            version: default_header_version(),
         }
     }
 }
 
-fn default_quit() -> Vec<String> {
-    vec!["q".to_string(), "ctrl-c".to_string()]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct Bind {
+    pub key: String,
+    pub command: String,
 }
 
-fn default_up() -> Vec<String> {
-    vec!["k".to_string(), "up".to_string()]
+fn default_header_type() -> String {
+    "tuisana".to_string()
 }
 
-fn default_down() -> Vec<String> {
-    vec!["j".to_string(), "down".to_string()]
+fn default_header_version() -> f64 {
+    1.0
 }
 
-fn default_open() -> Vec<String> {
-    vec!["enter".to_string()]
-}
-
-fn default_refresh() -> Vec<String> {
-    vec!["r".to_string()]
-}
-
-fn default_page_up() -> Vec<String> {
-    vec!["ctrl-u".to_string()]
-}
-
-fn default_page_down() -> Vec<String> {
-    vec!["ctrl-d".to_string()]
+fn default_bindings() -> Vec<Bind> {
+    vec![
+        Bind {
+            key: "q".to_string(),
+            command: "quit".to_string(),
+        },
+        Bind {
+            key: "ctrl-c".to_string(),
+            command: "quit".to_string(),
+        },
+        Bind {
+            key: "k".to_string(),
+            command: "move_up".to_string(),
+        },
+        Bind {
+            key: "up".to_string(),
+            command: "move_up".to_string(),
+        },
+        Bind {
+            key: "j".to_string(),
+            command: "move_down".to_string(),
+        },
+        Bind {
+            key: "down".to_string(),
+            command: "move_down".to_string(),
+        },
+        Bind {
+            key: "enter".to_string(),
+            command: "open".to_string(),
+        },
+        Bind {
+            key: "r".to_string(),
+            command: "refresh".to_string(),
+        },
+        Bind {
+            key: "ctrl-u".to_string(),
+            command: "page_up".to_string(),
+        },
+        Bind {
+            key: "ctrl-d".to_string(),
+            command: "page_down".to_string(),
+        },
+    ]
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, KeyBindings};
+    use super::Config;
 
     #[test]
     fn parses_toml_and_keeps_defaults() {
         let config = Config::from_toml_str(
             r#"
-                [keys]
-                quit = ["x"]
-                down = ["j", "down"]
+                [header]
+                type = "tuisana"
+                version = 1.0
+
+                [[bind]]
+                key = "x"
+                command = "quit"
+
+                [[bind]]
+                key = "j"
+                command = "move_down"
             "#,
         )
         .expect("config parses");
 
-        assert_eq!(
-            config.keys,
-            KeyBindings {
-                quit: vec!["x".to_string()],
-                up: vec!["k".to_string(), "up".to_string()],
-                down: vec!["j".to_string(), "down".to_string()],
-                open: vec!["enter".to_string()],
-                refresh: vec!["r".to_string()],
-                page_up: vec!["ctrl-u".to_string()],
-                page_down: vec!["ctrl-d".to_string()],
-            }
-        );
+        assert_eq!(config.header.kind, "tuisana");
+        assert_eq!(config.header.version, 1.0);
+        assert_eq!(config.bind.len(), 2);
+        assert_eq!(config.bind[0].key, "x");
+        assert_eq!(config.bind[0].command, "quit");
+    }
+
+    #[test]
+    fn rejects_wrong_version() {
+        let err = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 2.0
+            "#,
+        )
+        .expect_err("version should be rejected");
+
+        assert!(format!("{err}").contains("expected header.version = 1"));
     }
 }
-

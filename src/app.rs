@@ -28,7 +28,7 @@ impl<C: AsanaClient> App<C> {
     }
 
     pub fn keymap(&self) -> Result<KeyMap> {
-        KeyMap::from_key_bindings(&self.config.keys)
+        KeyMap::from_bindings(&self.config.bind)
     }
 }
 
@@ -49,4 +49,3 @@ mod tests {
         assert_eq!(app.projects[0].name, "Inbox");
     }
 }
-

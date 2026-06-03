@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug)]
 pub enum Error {
     ConfigParse(toml::de::Error),
+    ConfigValidation(String),
     Io(std::io::Error),
     Backend(String),
 }
@@ -11,6 +12,7 @@ impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::ConfigParse(err) => write!(f, "failed to parse config: {err}"),
+            Error::ConfigValidation(err) => write!(f, "invalid config: {err}"),
             Error::Io(err) => write!(f, "io error: {err}"),
             Error::Backend(err) => write!(f, "backend error: {err}"),
         }
@@ -32,4 +34,3 @@ impl From<std::io::Error> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
-
