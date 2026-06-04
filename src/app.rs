@@ -26,7 +26,8 @@ impl<C: AsanaClient> App<C> {
     }
 
     pub fn load_projects(&mut self) -> Result<()> {
-        self.projects.load(&self.client)?;
+        self.projects
+            .load_with_visibility(&self.client, &self.config.project_visibility)?;
         Ok(())
     }
 
@@ -41,7 +42,11 @@ impl<C: AsanaClient> App<C> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{asana::fake::FakeAsanaClient, config::Config, domain::Project};
+    use crate::{
+        asana::fake::FakeAsanaClient,
+        config::{Config, ProjectVisibilityConfig},
+        domain::Project,
+    };
 
     use super::App;
 
@@ -72,5 +77,26 @@ mod tests {
             app.handle_action(&crate::input::Action::Quit),
             Some(crate::input::AppCommand::Quit)
         );
+    }
+
+    #[test]
+    fn app_applies_project_visibility_preferences_from_config() {
+        let client = FakeAsanaClient::new(vec![
+            Project::new("1", "Inbox", false),
+            Project::new("2", "Backlog", false),
+        ]);
+        let mut config = Config::default();
+        config.project_visibility = vec![ProjectVisibilityConfig {
+            gid: "2".to_string(),
+            starred: true,
+            hidden: true,
+        }];
+        let mut app = App::new(config, client);
+
+        app.load_projects().expect("projects load");
+
+        assert_eq!(app.projects.items().len(), 1);
+        assert_eq!(app.projects.items()[0].id, "1");
+        assert_eq!(app.projects.hidden_count(), 1);
     }
 }

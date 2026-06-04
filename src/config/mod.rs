@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::{fs, path::Path};
 
 use crate::error::{Error, Result};
@@ -11,6 +12,8 @@ pub struct Config {
     pub auth: Option<AuthConfig>,
     #[serde(default)]
     pub bind: Vec<Bind>,
+    #[serde(default, rename = "project")]
+    pub project_visibility: Vec<ProjectVisibilityConfig>,
 }
 
 impl Default for Config {
@@ -19,6 +22,7 @@ impl Default for Config {
             header: Header::default(),
             auth: None,
             bind: default_bindings(),
+            project_visibility: Vec::new(),
         }
     }
 }
@@ -59,9 +63,19 @@ impl Config {
             auth.validate()?;
         }
 
+        let mut seen_project_ids = HashSet::new();
+        for project in &self.project_visibility {
+            project.validate()?;
+            if !seen_project_ids.insert(project.gid.as_str()) {
+                return Err(Error::ConfigValidation(format!(
+                    "duplicate project.gid value: {}",
+                    project.gid
+                )));
+            }
+        }
+
         Ok(())
     }
-
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -86,6 +100,27 @@ impl AuthConfig {
         {
             return Err(Error::ConfigValidation(
                 "auth.workspace_gid must not be empty when provided".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ProjectVisibilityConfig {
+    pub gid: String,
+    #[serde(default)]
+    pub starred: bool,
+    #[serde(default)]
+    pub hidden: bool,
+}
+
+impl ProjectVisibilityConfig {
+    fn validate(&self) -> Result<()> {
+        if self.gid.trim().is_empty() {
+            return Err(Error::ConfigValidation(
+                "project.gid must not be empty".to_string(),
             ));
         }
 
@@ -170,6 +205,10 @@ fn default_bindings() -> Vec<Bind> {
             key: "ctrl-d".to_string(),
             command: "page_down".to_string(),
         },
+        Bind {
+            key: "h".to_string(),
+            command: "toggle_hidden".to_string(),
+        },
     ]
 }
 
@@ -243,6 +282,11 @@ mod tests {
                 [auth]
                 personal_access_token = "pat_123"
                 workspace_gid = "42"
+
+                [[project]]
+                gid = "123"
+                starred = true
+                hidden = false
             "#,
         )
         .expect("auth config parses");
@@ -250,6 +294,10 @@ mod tests {
         let auth = config.auth.expect("auth section present");
         assert_eq!(auth.personal_access_token, "pat_123");
         assert_eq!(auth.workspace_gid.as_deref(), Some("42"));
+        assert_eq!(config.project_visibility.len(), 1);
+        assert_eq!(config.project_visibility[0].gid, "123");
+        assert!(config.project_visibility[0].starred);
+        assert!(!config.project_visibility[0].hidden);
     }
 
     #[test]
@@ -280,5 +328,27 @@ mod tests {
         let config = Config::load_from_path(&path).expect("missing path should fall back");
 
         assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn rejects_duplicate_project_visibility_entries() {
+        let err = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 1.0
+
+                [[project]]
+                gid = "123"
+                starred = true
+
+                [[project]]
+                gid = "123"
+                hidden = true
+            "#,
+        )
+        .expect_err("duplicate project ids should be rejected");
+
+        assert!(format!("{err}").contains("duplicate project.gid value"));
     }
 }

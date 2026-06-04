@@ -12,6 +12,7 @@ use crate::{
     app::App,
     asana::AsanaClient,
     input::{AppCommand, KeyBinding},
+    ui::project_list::render_project_list,
 };
 
 pub trait KeySource {
@@ -36,6 +37,7 @@ impl KeySource for CrosstermKeySource {
 }
 
 fn draw<B: Backend, C: AsanaClient>(terminal: &mut Terminal<B>, app: &App<C>) -> io::Result<()> {
+    let view = render_project_list(&app.projects);
     terminal
         .draw(|frame| {
             let size = frame.area();
@@ -44,28 +46,21 @@ fn draw<B: Backend, C: AsanaClient>(terminal: &mut Terminal<B>, app: &App<C>) ->
                 .constraints([
                     Constraint::Length(1),
                     Constraint::Length(1),
+                    Constraint::Length(1),
                     Constraint::Min(1),
                     Constraint::Length(1),
                 ])
                 .split(size);
 
-            frame.render_widget(Paragraph::new("Projects"), chunks[0]);
-            frame.render_widget(Paragraph::new(status_line(&app.projects)), chunks[1]);
+            frame.render_widget(Paragraph::new(view.title.as_str()), chunks[0]);
+            frame.render_widget(Paragraph::new(view.status_line.as_str()), chunks[1]);
+            frame.render_widget(Paragraph::new(view.hint_line.as_str()), chunks[2]);
 
-            let items: Vec<ListItem> = app
-                .projects
-                .items()
+            let items: Vec<ListItem> = view
+                .rows
                 .iter()
-                .enumerate()
-                .map(|(index, project)| {
-                    let selected = if app.projects.selected_index() == Some(index) {
-                        ">"
-                    } else {
-                        " "
-                    };
-                    let starred = if project.starred { "*" } else { " " };
-                    ListItem::new(format!("{selected} [{starred}] {}", project.name))
-                })
+                .cloned()
+                .map(ListItem::new)
                 .collect();
 
             let list = List::new(items)
@@ -73,26 +68,14 @@ fn draw<B: Backend, C: AsanaClient>(terminal: &mut Terminal<B>, app: &App<C>) ->
                 .highlight_symbol("> ");
 
             let mut state = list_state(app.projects.selected_index());
-            frame.render_stateful_widget(list, chunks[2], &mut state);
+            frame.render_stateful_widget(list, chunks[3], &mut state);
 
             frame.render_widget(
-                Paragraph::new("j/down: move down, k/up: move up, r: refresh, q/ctrl-c: quit"),
-                chunks[3],
+                Paragraph::new("q: quit"),
+                chunks[4],
             );
         })
         .map(|_| ())
-}
-
-fn status_line(state: &crate::app::project_list::ProjectListState) -> String {
-    match state.status() {
-        crate::app::project_list::ProjectListStatus::Idle => "Project list idle".to_string(),
-        crate::app::project_list::ProjectListStatus::Loading => "Loading projects...".to_string(),
-        crate::app::project_list::ProjectListStatus::Ready => {
-            format!("{} project(s)", state.items().len())
-        }
-        crate::app::project_list::ProjectListStatus::Empty => "No projects".to_string(),
-        crate::app::project_list::ProjectListStatus::Error(message) => format!("Error: {message}"),
-    }
 }
 
 fn list_state(selected: Option<usize>) -> ListState {

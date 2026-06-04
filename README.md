@@ -6,7 +6,7 @@ Tuisana is a terminal UI for reviewing Asana projects and tasks.
 
 The program reads `tuisana.toml` from the repository root.
 
-Start from [`tuisana.toml.example`](./tuisana.toml.example) and copy it to `tuisana.toml`, then fill in the auth values.
+Start from [`tuisana.toml.example`](./tuisana.toml.example) and copy it to `tuisana.toml`, then fill in the auth values and any project visibility preferences.
 
 ### Fixed header values
 
@@ -51,6 +51,39 @@ Asana docs:
 - https://developers.asana.com/reference/getworkspaces
 - https://developers.asana.com/reference/getworkspace
 
+### Project visibility
+
+The repeated `[[project]]` section lets you pin project-specific visibility preferences by Asana project GID.
+
+Each entry supports:
+
+- `gid`
+- `starred`
+- `hidden`
+
+How it works:
+
+- `starred = true` sorts the project ahead of unstarred projects.
+- `hidden = true` keeps the project in the hidden group.
+- Hidden projects stay available in the list, but they are shown after the visible projects only when you toggle them on.
+- Hidden projects are marked explicitly in the UI so they are easy to spot.
+
+The default toggle for hidden projects is `h`.
+
+Example:
+
+```toml
+[[project]]
+gid = "123"
+starred = true
+hidden = false
+
+[[project]]
+gid = "456"
+starred = false
+hidden = true
+```
+
 ### Key bindings
 
 The `[[bind]]` section maps keyboard input to command names.
@@ -64,6 +97,7 @@ Current commands include:
 - `refresh`
 - `page_up`
 - `page_down`
+- `toggle_hidden` (bound to `h`)
 
 Example:
 

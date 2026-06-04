@@ -39,3 +39,17 @@ command = "page_up"
 [[bind]]
 key = "ctrl-d"
 command = "page_down"
+
+[[bind]]
+key = "h"
+command = "toggle_hidden"
+
+[[project]]
+gid = "project-gid-here"
+starred = true
+hidden = false
+
+[[project]]
+gid = "another-project-gid-here"
+starred = false
+hidden = true

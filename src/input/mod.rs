@@ -65,6 +65,7 @@ pub enum Action {
     MoveDown,
     Open,
     Refresh,
+    ToggleHidden,
     PageUp,
     PageDown,
 }
@@ -77,6 +78,7 @@ impl Action {
             "move_down" => Ok(Self::MoveDown),
             "open" => Ok(Self::Open),
             "refresh" => Ok(Self::Refresh),
+            "toggle_hidden" => Ok(Self::ToggleHidden),
             "page_up" => Ok(Self::PageUp),
             "page_down" => Ok(Self::PageDown),
             other => Err(Error::Backend(format!("unsupported command: {other}"))),
@@ -108,6 +110,7 @@ impl Display for Action {
             Action::MoveDown => "move_down",
             Action::Open => "open",
             Action::Refresh => "refresh",
+            Action::ToggleHidden => "toggle_hidden",
             Action::PageUp => "page_up",
             Action::PageDown => "page_down",
         };
@@ -171,6 +174,10 @@ mod tests {
         assert_eq!("page-up".parse::<KeyBinding>().expect("page-up parses"), KeyBinding::PageUp);
         assert_eq!(Action::from_command("open").expect("open parses"), Action::Open);
         assert_eq!(Action::from_command("refresh").expect("refresh parses"), Action::Refresh);
+        assert_eq!(
+            Action::from_command("toggle_hidden").expect("toggle_hidden parses"),
+            Action::ToggleHidden
+        );
     }
 
     #[test]
@@ -189,5 +196,6 @@ mod tests {
         assert_eq!(Action::Quit.as_app_command(), Some(AppCommand::Quit));
         assert_eq!(Action::Refresh.as_app_command(), Some(AppCommand::Refresh));
         assert_eq!(Action::MoveDown.as_app_command(), None);
+        assert_eq!(Action::ToggleHidden.as_app_command(), None);
     }
 }
