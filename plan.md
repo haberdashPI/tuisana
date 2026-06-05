@@ -307,10 +307,17 @@ Goal:
 
 Deliverables:
 
+- a task view that shows up below the project list
 - task loading from Asana
 - section data loading
 - custom field discovery for project-specific fields
 - task table model with common columns and project-specific columns
+- when visible the task view should take up most of the screen: e.g. just show the first 4-6 lines of the project view.
+- task view can be easily toggled as visible / hidden
+- user can toggle between "project" mode (which interacts with the project list) and "task" mode (which interacts with the tasks)
+    - toggling between these modes only changes visibility of the task list
+      when the user switches to the task mode: in this case the task list is
+      made visible if it isn't already
 
 Suggested default table fields:
 

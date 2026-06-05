@@ -1,5 +1,5 @@
 use tuisana::{
-    app::App,
+    app::{debug_log, App},
     asana::client::HttpAsanaClient,
     config::Config,
     ui::runtime::{run_project_list_app, CrosstermKeySource},
@@ -13,9 +13,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .auth
         .as_ref()
         .ok_or_else(|| std::io::Error::other("missing [auth] config in tuisana.toml"))?;
+    if std::env::var_os("TUISANA_DEBUG").is_some() {
+        let bind_list = config
+            .bind
+            .iter()
+            .map(|bind| format!("{}={}", bind.key, bind.command))
+            .collect::<Vec<_>>()
+            .join(", ");
+        debug_log(&format!("startup binds: {bind_list}"));
+    }
     let client = HttpAsanaClient::from_config(auth)?;
     let mut app = App::with_config_path("tuisana.toml", config, client);
     app.load_projects()?;
+    app.load_tasks()?;
 
     let mut source = CrosstermKeySource;
     let mut stdout = std::io::stdout();

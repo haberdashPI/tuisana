@@ -89,6 +89,14 @@ key = "v"
 command = "toggle_hidden_group"
 
 [[bind]]
+key = "t"
+command = "toggle_task_view"
+
+[[bind]]
+key = "m"
+command = "toggle_task_mode"
+
+[[bind]]
 key = "o"
 command = "toggle_only_selected"
 

@@ -87,6 +87,7 @@ hidden = true
 ### Key bindings
 
 The `[[bind]]` section maps keyboard input to command names.
+If you omit a command from your config, the built-in default binding for that command still applies.
 
 Current commands include:
 
@@ -105,6 +106,8 @@ Current commands include:
 - `toggle_starred_selected`
 - `toggle_hidden_selected`
 - `toggle_hidden_group`
+- `toggle_task_view`
+- `toggle_task_mode`
 - `toggle_only_selected`
 - `start_search`
 - `search_fuzzy`
@@ -129,10 +132,14 @@ Project view shortcuts include:
 - `*` to toggle starred state for the current selection
 - `h` to toggle hidden state for the current selection
 - `v` to show or hide hidden projects
+- `t` to toggle the task panel
+- `m` to switch task/project focus mode
 - `o` to filter to selected projects only
 - `/` to start search entry
 - `ctrl-l` to clear the search string
 - `ctrl-f`, `ctrl-s`, `ctrl-r` to switch search mode
+
+When the task panel is visible, the screen is split so the project list keeps just the top part of the view and the task table gets the remaining space.
 
 Search entry accepts ordinary typing, `backspace`, `enter`, and `esc`.
 The status area now shows a dedicated search line so you can see whether the view is not searching, awaiting input, or filtering by a query.

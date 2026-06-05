@@ -4,7 +4,7 @@ use crossterm::event::{self, Event, KeyEvent};
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState},
     Terminal,
 };
 
@@ -12,6 +12,7 @@ use crate::{
     app::App,
     asana::AsanaClient,
     ui::project_list::render_project_list,
+    ui::task_table::render_task_table,
 };
 
 pub trait KeySource {
@@ -40,6 +41,13 @@ fn draw<B: Backend, C: AsanaClient>(terminal: &mut Terminal<B>, app: &App<C>) ->
             let view = render_project_list(&app.projects);
             let size = frame.area();
             let hint_height = view.hint_lines.len().max(1) as u16;
+            let task_visible = app.tasks.visible();
+            let project_height = if task_visible {
+                7u16.min(size.height.max(1))
+            } else {
+                size.height
+            };
+            let project_area = Rect::new(size.x, size.y, size.width, project_height);
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
@@ -49,7 +57,7 @@ fn draw<B: Backend, C: AsanaClient>(terminal: &mut Terminal<B>, app: &App<C>) ->
                     Constraint::Length(hint_height),
                     Constraint::Min(1),
                 ])
-                .split(size);
+                .split(project_area);
             page_size = chunks[4].height.saturating_sub(2).max(1) as usize;
 
             frame.render_widget(Paragraph::new(view.title.as_str()), chunks[0]);
@@ -70,6 +78,47 @@ fn draw<B: Backend, C: AsanaClient>(terminal: &mut Terminal<B>, app: &App<C>) ->
 
             let mut state = list_state(app.projects.selected_index());
             frame.render_stateful_widget(list, chunks[4], &mut state);
+
+            if task_visible {
+                let task_area = Rect::new(
+                    size.x,
+                    size.y + project_height,
+                    size.width,
+                    size.height.saturating_sub(project_height),
+                );
+                let task_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(1),
+                        Constraint::Length(1),
+                        Constraint::Min(1),
+                    ])
+                    .split(task_area);
+                let task_view = render_task_table(&app.tasks);
+
+                frame.render_widget(Paragraph::new(task_view.title.as_str()), task_chunks[0]);
+                frame.render_widget(Paragraph::new(task_view.status_line.as_str()), task_chunks[1]);
+
+                let rows = task_view
+                    .rows
+                    .iter()
+                    .map(|row| Row::new(row.iter().cloned().map(Cell::from)))
+                    .collect::<Vec<_>>();
+                let widths = task_column_widths(task_view.columns.len());
+                let table = Table::new(rows, widths)
+                    .header(Row::new(
+                        task_view
+                            .columns
+                            .iter()
+                            .cloned()
+                            .map(Cell::from)
+                            .collect::<Vec<_>>(),
+                    ))
+                    .block(Block::default().borders(Borders::ALL).title("Tasks"))
+                    .highlight_symbol("> ");
+                let mut table_state = table_state(app.tasks.selected_index());
+                frame.render_stateful_widget(table, task_chunks[2], &mut table_state);
+            }
         })
         .map(|_| page_size)
 }
@@ -78,6 +127,29 @@ fn list_state(selected: Option<usize>) -> ListState {
     let mut state = ListState::default();
     state.select(selected);
     state
+}
+
+fn table_state(selected: Option<usize>) -> TableState {
+    let mut state = TableState::default();
+    state.select(selected);
+    state
+}
+
+fn task_column_widths(column_count: usize) -> Vec<Constraint> {
+    let mut widths = vec![
+        Constraint::Length(20),
+        Constraint::Length(14),
+        Constraint::Length(14),
+        Constraint::Length(12),
+        Constraint::Length(12),
+        Constraint::Length(8),
+        Constraint::Length(18),
+    ];
+    while widths.len() < column_count {
+        widths.push(Constraint::Length(16));
+    }
+    widths.truncate(column_count);
+    widths
 }
 
 pub fn run_project_list_session<C, S, B>(

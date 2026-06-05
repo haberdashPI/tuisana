@@ -53,6 +53,12 @@ impl Config {
         Ok(())
     }
 
+    pub fn effective_bindings(&self) -> Vec<Bind> {
+        let mut bindings = default_bindings();
+        bindings.extend(self.bind.clone());
+        bindings
+    }
+
     fn validate(&self) -> Result<()> {
         if self.header.version != Header::EXPECTED_VERSION {
             return Err(Error::ConfigValidation(format!(
@@ -261,6 +267,14 @@ fn default_bindings() -> Vec<Bind> {
         Bind {
             key: "v".to_string(),
             command: "toggle_hidden_group".to_string(),
+        },
+        Bind {
+            key: "t".to_string(),
+            command: "toggle_task_view".to_string(),
+        },
+        Bind {
+            key: "m".to_string(),
+            command: "toggle_task_mode".to_string(),
         },
         Bind {
             key: "o".to_string(),

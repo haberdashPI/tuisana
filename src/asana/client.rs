@@ -3,7 +3,9 @@ use serde_json::Value;
 
 use crate::{
     asana::{
-        dto::{CollectionResponse, ProjectDto},
+        dto::{
+            CollectionResponse, ProjectCustomFieldSettingDto, ProjectDto, SectionDto, TaskDto,
+        },
         AsanaClient,
     },
     config::AuthConfig,
@@ -104,6 +106,80 @@ impl<T: Transport> HttpAsanaClient<T> {
         serde_json::from_value(json)
             .map_err(|err| Error::Backend(format!("failed to decode project list: {err}")))
     }
+
+    fn list_tasks_page(
+        &self,
+        project_gid: &str,
+        offset: Option<&str>,
+    ) -> Result<CollectionResponse<TaskDto>> {
+        let mut query = vec![
+            (
+                "opt_fields",
+                "gid,name,completed,due_on,start_on,assignee.gid,assignee.name,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.enum_value.gid,custom_fields.enum_value.name"
+                    .to_string(),
+            ),
+            ("limit", "100".to_string()),
+        ];
+        if let Some(offset) = offset {
+            query.push(("offset", offset.to_string()));
+        }
+
+        let json = self.transport.get_json(
+            &format!("projects/{project_gid}/tasks"),
+            &query,
+            &self.personal_access_token,
+        )?;
+
+        serde_json::from_value(json)
+            .map_err(|err| Error::Backend(format!("failed to decode task list: {err}")))
+    }
+
+    fn list_sections_page(
+        &self,
+        project_gid: &str,
+        offset: Option<&str>,
+    ) -> Result<CollectionResponse<SectionDto>> {
+        let mut query = vec![
+            ("opt_fields", "gid,name".to_string()),
+            ("limit", "100".to_string()),
+        ];
+        if let Some(offset) = offset {
+            query.push(("offset", offset.to_string()));
+        }
+
+        let json = self.transport.get_json(
+            &format!("projects/{project_gid}/sections"),
+            &query,
+            &self.personal_access_token,
+        )?;
+
+        serde_json::from_value(json)
+            .map_err(|err| Error::Backend(format!("failed to decode section list: {err}")))
+    }
+
+    fn list_custom_field_settings_page(
+        &self,
+        project_gid: &str,
+        offset: Option<&str>,
+    ) -> Result<CollectionResponse<ProjectCustomFieldSettingDto>> {
+        let mut query = vec![
+            ("opt_fields", "gid,custom_field.gid,custom_field.name".to_string()),
+            ("limit", "100".to_string()),
+        ];
+        if let Some(offset) = offset {
+            query.push(("offset", offset.to_string()));
+        }
+
+        let json = self.transport.get_json(
+            &format!("projects/{project_gid}/custom_field_settings"),
+            &query,
+            &self.personal_access_token,
+        )?;
+
+        serde_json::from_value(json).map_err(|err| {
+            Error::Backend(format!("failed to decode custom field settings: {err}"))
+        })
+    }
 }
 
 impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
@@ -126,6 +202,60 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
         }
 
         Ok(projects)
+    }
+
+    fn list_tasks(&self, project_gid: &str) -> Result<Vec<TaskDto>> {
+        let mut tasks = Vec::new();
+        let mut offset: Option<String> = None;
+
+        loop {
+            let page = self.list_tasks_page(project_gid, offset.as_deref())?;
+            tasks.extend(page.data);
+
+            match page.next_page {
+                Some(next_page) => offset = Some(next_page.offset),
+                None => break,
+            }
+        }
+
+        Ok(tasks)
+    }
+
+    fn list_sections(&self, project_gid: &str) -> Result<Vec<SectionDto>> {
+        let mut sections = Vec::new();
+        let mut offset: Option<String> = None;
+
+        loop {
+            let page = self.list_sections_page(project_gid, offset.as_deref())?;
+            sections.extend(page.data);
+
+            match page.next_page {
+                Some(next_page) => offset = Some(next_page.offset),
+                None => break,
+            }
+        }
+
+        Ok(sections)
+    }
+
+    fn list_project_custom_field_settings(
+        &self,
+        project_gid: &str,
+    ) -> Result<Vec<ProjectCustomFieldSettingDto>> {
+        let mut settings = Vec::new();
+        let mut offset: Option<String> = None;
+
+        loop {
+            let page = self.list_custom_field_settings_page(project_gid, offset.as_deref())?;
+            settings.extend(page.data);
+
+            match page.next_page {
+                Some(next_page) => offset = Some(next_page.offset),
+                None => break,
+            }
+        }
+
+        Ok(settings)
     }
 }
 

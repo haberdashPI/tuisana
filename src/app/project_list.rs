@@ -140,6 +140,14 @@ impl ProjectListState {
         &self.visible_projects
     }
 
+    pub fn selected_projects(&self) -> Vec<Project> {
+        self.all_projects
+            .iter()
+            .filter(|project| self.selected_ids.contains(&project.id))
+            .cloned()
+            .collect()
+    }
+
     pub fn selected_index(&self) -> Option<usize> {
         self.selected
     }
@@ -680,6 +688,21 @@ mod tests {
 
     impl AsanaClient for FailingAsanaClient {
         fn list_projects(&self) -> Result<Vec<Project>> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
+        fn list_tasks(&self, _project_gid: &str) -> Result<Vec<crate::asana::dto::TaskDto>> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
+        fn list_sections(&self, _project_gid: &str) -> Result<Vec<crate::asana::dto::SectionDto>> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
+        fn list_project_custom_field_settings(
+            &self,
+            _project_gid: &str,
+        ) -> Result<Vec<crate::asana::dto::ProjectCustomFieldSettingDto>> {
             Err(Error::Backend("backend unavailable".to_string()))
         }
     }
