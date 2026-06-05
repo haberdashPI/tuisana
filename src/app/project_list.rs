@@ -23,6 +23,8 @@ pub struct ProjectListState {
     all_projects: Vec<Project>,
     visible_projects: Vec<Project>,
     selected_ids: HashSet<String>,
+    undo_selection_history: Vec<SelectionSnapshot>,
+    redo_selection_history: Vec<SelectionSnapshot>,
     selected: Option<usize>,
     status: ProjectListStatus,
     show_hidden: bool,
@@ -31,6 +33,7 @@ pub struct ProjectListState {
     search_query: String,
     search_active: bool,
     search_error: Option<String>,
+    show_help_details: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +43,12 @@ pub enum ProjectListStatus {
     Ready,
     Empty,
     Error(String),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SelectionSnapshot {
+    selected_ids: HashSet<String>,
+    focused_project_id: Option<String>,
 }
 
 impl Default for ProjectListStatus {
@@ -69,6 +78,8 @@ impl ProjectListState {
                 self.all_projects.clear();
                 self.visible_projects.clear();
                 self.selected_ids.clear();
+                self.undo_selection_history.clear();
+                self.redo_selection_history.clear();
                 self.selected = None;
                 self.status = ProjectListStatus::Error(err.to_string());
                 return Err(err);
@@ -77,6 +88,10 @@ impl ProjectListState {
         apply_visibility_preferences(&mut projects, visibility);
         sort_projects(&mut projects);
         self.all_projects = projects;
+        self.selected_ids.clear();
+        self.undo_selection_history.clear();
+        self.redo_selection_history.clear();
+        self.selected = None;
         self.rebuild_visible_projects(None);
         self.status = if self.all_projects.is_empty() {
             ProjectListStatus::Empty
@@ -100,6 +115,8 @@ impl ProjectListState {
             all_projects: projects,
             visible_projects: Vec::new(),
             selected_ids: HashSet::new(),
+            undo_selection_history: Vec::new(),
+            redo_selection_history: Vec::new(),
             selected: None,
             status: ProjectListStatus::Idle,
             show_hidden: false,
@@ -108,6 +125,7 @@ impl ProjectListState {
             search_query: String::new(),
             search_active: false,
             search_error: None,
+            show_help_details: false,
         };
         state.rebuild_visible_projects(None);
         state.status = if state.all_projects.is_empty() {
@@ -139,6 +157,14 @@ impl ProjectListState {
         self.selected_ids.contains(project_id)
     }
 
+    pub fn can_undo_selection(&self) -> bool {
+        !self.undo_selection_history.is_empty()
+    }
+
+    pub fn can_redo_selection(&self) -> bool {
+        !self.redo_selection_history.is_empty()
+    }
+
     pub fn status(&self) -> &ProjectListStatus {
         &self.status
     }
@@ -167,6 +193,10 @@ impl ProjectListState {
         self.search_error.as_deref()
     }
 
+    pub fn help_details_visible(&self) -> bool {
+        self.show_help_details
+    }
+
     pub fn hidden_count(&self) -> usize {
         self.all_projects.iter().filter(|project| project.hidden).count()
     }
@@ -188,12 +218,39 @@ impl ProjectListState {
         }
     }
 
-    pub fn page_up(&mut self) {
-        self.move_up();
+    pub fn page_up(&mut self, page_size: usize) {
+        let step = page_size.max(1);
+        match self.selected {
+            Some(0) | None => {}
+            Some(index) => self.selected = Some(index.saturating_sub(step)),
+        }
     }
 
-    pub fn page_down(&mut self) {
-        self.move_down();
+    pub fn page_down(&mut self, page_size: usize) {
+        let step = page_size.max(1);
+        if let Some(index) = self.selected {
+            if index + 1 < self.visible_projects.len() {
+                self.selected = Some((index + step).min(self.visible_projects.len() - 1));
+            }
+        } else if !self.visible_projects.is_empty() {
+            self.selected = Some(0);
+        }
+    }
+
+    pub fn jump_top(&mut self) {
+        if self.visible_projects.is_empty() {
+            self.selected = None;
+        } else {
+            self.selected = Some(0);
+        }
+    }
+
+    pub fn jump_bottom(&mut self) {
+        if self.visible_projects.is_empty() {
+            self.selected = None;
+        } else {
+            self.selected = Some(self.visible_projects.len() - 1);
+        }
     }
 
     pub fn toggle_hidden_group(&mut self) {
@@ -202,9 +259,21 @@ impl ProjectListState {
         self.rebuild_visible_projects(cursor_id);
     }
 
+    pub fn toggle_help_details(&mut self) {
+        self.show_help_details = !self.show_help_details;
+    }
+
     pub fn toggle_selected_only(&mut self) {
         let cursor_id = self.selected_project().map(|project| project.id.clone());
         self.show_selected_only = !self.show_selected_only;
+        self.rebuild_visible_projects(cursor_id);
+    }
+
+    pub fn clear_search(&mut self) {
+        let cursor_id = self.selected_project().map(|project| project.id.clone());
+        self.search_query.clear();
+        self.search_error = None;
+        self.search_active = false;
         self.rebuild_visible_projects(cursor_id);
     }
 
@@ -241,6 +310,58 @@ impl ProjectListState {
         }
     }
 
+    pub fn clear_selection(&mut self) {
+        if self.selected_ids.is_empty() {
+            return;
+        }
+
+        self.push_selection_history();
+        self.selected_ids.clear();
+        self.rebuild_visible_projects(self.selected_project().map(|project| project.id.clone()));
+    }
+
+    pub fn select_all_visible(&mut self) {
+        if self.visible_projects.is_empty() {
+            return;
+        }
+
+        self.push_selection_history();
+        for project in &self.visible_projects {
+            self.selected_ids.insert(project.id.clone());
+        }
+        self.rebuild_visible_projects(self.selected_project().map(|project| project.id.clone()));
+    }
+
+    pub fn invert_selection_visible(&mut self) {
+        if self.visible_projects.is_empty() {
+            return;
+        }
+
+        self.push_selection_history();
+        for project in &self.visible_projects {
+            if !self.selected_ids.insert(project.id.clone()) {
+                self.selected_ids.remove(&project.id);
+            }
+        }
+        self.rebuild_visible_projects(self.selected_project().map(|project| project.id.clone()));
+    }
+
+    pub fn undo_selection(&mut self) {
+        if let Some(snapshot) = self.undo_selection_history.pop() {
+            let current = self.capture_selection_snapshot();
+            self.redo_selection_history.push(current);
+            self.restore_selection_snapshot(snapshot);
+        }
+    }
+
+    pub fn redo_selection(&mut self) {
+        if let Some(snapshot) = self.redo_selection_history.pop() {
+            let current = self.capture_selection_snapshot();
+            self.undo_selection_history.push(current);
+            self.restore_selection_snapshot(snapshot);
+        }
+    }
+
     pub fn toggle_starred_selected(&mut self) {
         self.toggle_project_flags(ProjectFlag::Starred);
     }
@@ -249,7 +370,7 @@ impl ProjectListState {
         self.toggle_project_flags(ProjectFlag::Hidden);
     }
 
-    pub fn apply_action(&mut self, action: &Action) -> Option<AppCommand> {
+    pub fn apply_action(&mut self, action: &Action, page_size: usize) -> Option<AppCommand> {
         match action {
             Action::MoveUp => {
                 self.move_up();
@@ -260,15 +381,19 @@ impl ProjectListState {
                 None
             }
             Action::PageUp => {
-                self.page_up();
+                self.page_up(page_size);
                 None
             }
             Action::PageDown => {
-                self.page_down();
+                self.page_down(page_size);
                 None
             }
             Action::ToggleHiddenGroup => {
                 self.toggle_hidden_group();
+                None
+            }
+            Action::ToggleHelpDetails => {
+                self.toggle_help_details();
                 None
             }
             Action::ToggleSelection => {
@@ -277,6 +402,26 @@ impl ProjectListState {
             }
             Action::ToggleOnlySelected => {
                 self.toggle_selected_only();
+                None
+            }
+            Action::ClearSelection => {
+                self.clear_selection();
+                None
+            }
+            Action::SelectAllVisible => {
+                self.select_all_visible();
+                None
+            }
+            Action::InvertSelection => {
+                self.invert_selection_visible();
+                None
+            }
+            Action::UndoSelection => {
+                self.undo_selection();
+                None
+            }
+            Action::RedoSelection => {
+                self.redo_selection();
                 None
             }
             Action::ToggleStarredSelected => {
@@ -291,6 +436,10 @@ impl ProjectListState {
                 self.start_search();
                 None
             }
+            Action::ClearSearch => {
+                self.clear_search();
+                None
+            }
             Action::SearchFuzzy => {
                 self.set_search_mode(SearchMode::Fuzzy);
                 None
@@ -301,6 +450,14 @@ impl ProjectListState {
             }
             Action::SearchRegex => {
                 self.set_search_mode(SearchMode::Regex);
+                None
+            }
+            Action::JumpTop => {
+                self.jump_top();
+                None
+            }
+            Action::JumpBottom => {
+                self.jump_bottom();
                 None
             }
             other => other.as_app_command(),
@@ -323,6 +480,7 @@ impl ProjectListState {
     }
 
     fn toggle_selection_for_project_id(&mut self, project_id: &str) {
+        self.push_selection_history();
         if !self.selected_ids.insert(project_id.to_string()) {
             self.selected_ids.remove(project_id);
         }
@@ -432,6 +590,25 @@ impl ProjectListState {
             SearchMode::Substring => haystack.contains(&query),
             SearchMode::Regex => regex.is_some_and(|regex| regex.is_match(&haystack)),
         }
+    }
+
+    fn push_selection_history(&mut self) {
+        self.undo_selection_history
+            .push(self.capture_selection_snapshot());
+        self.redo_selection_history.clear();
+    }
+
+    fn capture_selection_snapshot(&self) -> SelectionSnapshot {
+        SelectionSnapshot {
+            selected_ids: self.selected_ids.clone(),
+            focused_project_id: self.selected_project().map(|project| project.id.clone()),
+        }
+    }
+
+    fn restore_selection_snapshot(&mut self, snapshot: SelectionSnapshot) {
+        let focused_project_id = snapshot.focused_project_id.clone();
+        self.selected_ids = snapshot.selected_ids;
+        self.rebuild_visible_projects(focused_project_id);
     }
 }
 
@@ -584,13 +761,13 @@ mod tests {
             Project::new("2", "Backlog", false),
         ]);
 
-        assert_eq!(state.apply_action(&Action::MoveDown), None);
+        assert_eq!(state.apply_action(&Action::MoveDown, 5), None);
         assert_eq!(state.selected_index(), Some(1));
-        assert_eq!(state.apply_action(&Action::PageUp), None);
+        assert_eq!(state.apply_action(&Action::PageUp, 5), None);
         assert_eq!(state.selected_index(), Some(0));
-        assert_eq!(state.apply_action(&Action::Quit), Some(AppCommand::Quit));
-        assert_eq!(state.apply_action(&Action::Refresh), Some(AppCommand::Refresh));
-        assert_eq!(state.apply_action(&Action::ToggleSelection), None);
+        assert_eq!(state.apply_action(&Action::Quit, 5), Some(AppCommand::Quit));
+        assert_eq!(state.apply_action(&Action::Refresh, 5), Some(AppCommand::Refresh));
+        assert_eq!(state.apply_action(&Action::ToggleSelection, 5), None);
     }
 
     #[test]
@@ -629,6 +806,24 @@ mod tests {
     }
 
     #[test]
+    fn pages_and_jumps_by_page_size() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1", "Alpha", false),
+            Project::new("2", "Beta", false),
+            Project::new("3", "Gamma", false),
+        ]);
+
+        state.page_down(2);
+        assert_eq!(state.selected_index(), Some(2));
+        state.page_up(2);
+        assert_eq!(state.selected_index(), Some(0));
+        state.jump_bottom();
+        assert_eq!(state.selected_index(), Some(2));
+        state.jump_top();
+        assert_eq!(state.selected_index(), Some(0));
+    }
+
+    #[test]
     fn filters_projects_by_search_mode() {
         let mut state = ProjectListState::from_projects(vec![
             Project::new("1", "Inbox", true),
@@ -653,6 +848,63 @@ mod tests {
         state.push_search_char('d');
         let names: Vec<_> = state.items().iter().map(|project| project.name.as_str()).collect();
         assert_eq!(names, vec!["Roadmap"]);
+    }
+
+    #[test]
+    fn clears_search_and_restores_all_items() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1", "Inbox", true),
+            Project::new("2", "Backlog", false),
+            Project::new("3", "Roadmap", false),
+        ]);
+
+        state.start_search();
+        state.push_search_char('b');
+        state.push_search_char('a');
+        state.push_search_char('c');
+        state.push_search_char('k');
+        assert_eq!(state.items().len(), 1);
+
+        state.clear_search();
+
+        assert_eq!(state.items().len(), 3);
+        assert!(!state.search_active());
+        assert!(state.search_query().is_empty());
+    }
+
+    #[test]
+    fn undoes_and_redoes_selection_changes() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1", "Alpha", false),
+            Project::new("2", "Beta", false),
+            Project::new("3", "Gamma", false),
+        ]);
+
+        state.toggle_current_selection();
+        state.move_down();
+        state.toggle_current_selection();
+        assert_eq!(state.selected_count(), 2);
+
+        state.undo_selection();
+        assert_eq!(state.selected_count(), 1);
+
+        state.redo_selection();
+        assert_eq!(state.selected_count(), 2);
+    }
+
+    #[test]
+    fn selects_and_inverts_visible_projects() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1", "Alpha", false),
+            Project::new("2", "Beta", false),
+            Project::new("3", "Gamma", false),
+        ]);
+
+        state.select_all_visible();
+        assert_eq!(state.selected_count(), 3);
+
+        state.invert_selection_visible();
+        assert_eq!(state.selected_count(), 0);
     }
 
     #[test]

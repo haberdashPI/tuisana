@@ -9,6 +9,10 @@ personal_access_token = "your-asana-pat-here"
 workspace_gid = "your-workspace-gid-here"
 
 [[bind]]
+key = "?"
+command = "toggle_help_details"
+
+[[bind]]
 key = "q"
 command = "quit"
 
@@ -33,8 +37,44 @@ key = "r"
 command = "refresh"
 
 [[bind]]
+key = "/"
+command = "start_search"
+
+[[bind]]
+key = "ctrl-l"
+command = "clear_search"
+
+[[bind]]
 key = "space"
 command = "toggle_selection"
+
+[[bind]]
+key = "a"
+command = "select_all_visible"
+
+[[bind]]
+key = "i"
+command = "invert_selection"
+
+[[bind]]
+key = "c"
+command = "clear_selection"
+
+[[bind]]
+key = "u"
+command = "undo_selection"
+
+[[bind]]
+key = "ctrl-y"
+command = "redo_selection"
+
+[[bind]]
+key = "home"
+command = "jump_top"
+
+[[bind]]
+key = "end"
+command = "jump_bottom"
 
 [[bind]]
 key = "*"
@@ -51,10 +91,6 @@ command = "toggle_hidden_group"
 [[bind]]
 key = "o"
 command = "toggle_only_selected"
-
-[[bind]]
-key = "/"
-command = "start_search"
 
 [[bind]]
 key = "ctrl-f"

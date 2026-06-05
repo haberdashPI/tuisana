@@ -4,13 +4,15 @@ use crate::app::project_list::{ProjectListState, ProjectListStatus};
 pub struct ProjectListView {
     pub title: String,
     pub status_line: String,
-    pub hint_line: String,
+    pub search_line: String,
+    pub hint_lines: Vec<String>,
     pub rows: Vec<String>,
 }
 
 pub fn render_project_list(state: &ProjectListState) -> ProjectListView {
     let status_line = build_status_line(state);
-    let hint_line = build_hint_line(state);
+    let search_line = build_search_line(state);
+    let hint_lines = build_hint_lines(state);
 
     let rows = state
         .items()
@@ -26,7 +28,8 @@ pub fn render_project_list(state: &ProjectListState) -> ProjectListView {
     ProjectListView {
         title: "Projects".to_string(),
         status_line,
-        hint_line,
+        search_line,
+        hint_lines,
         rows,
     }
 }
@@ -52,10 +55,8 @@ mod tests {
 
         assert_eq!(view.title, "Projects");
         assert_eq!(view.status_line, "2 visible, 0 selected");
-        assert_eq!(
-            view.hint_line,
-            "space: select, *: star selected, h: hide selected, v: toggle hidden projects, o: only selected, /: search, ctrl-f: fuzzy, ctrl-s: substring, ctrl-r: regex, r: refresh, q/ctrl-c: quit"
-        );
+        assert_eq!(view.search_line, "Search: not searching (substring)");
+        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select, /: search, r: refresh, q: quit"]);
         assert_eq!(view.rows, vec!["[ ] [*] Inbox", "[ ] [ ] Backlog"]);
     }
 
@@ -66,10 +67,8 @@ mod tests {
         let view = render_project_list(&state);
 
         assert_eq!(view.status_line, "No projects");
-        assert_eq!(
-            view.hint_line,
-            "space: select, *: star selected, h: hide selected, v: toggle hidden projects, o: only selected, /: search, ctrl-f: fuzzy, ctrl-s: substring, ctrl-r: regex, r: refresh, q/ctrl-c: quit"
-        );
+        assert_eq!(view.search_line, "Search: not searching (substring)");
+        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select, /: search, r: refresh, q: quit"]);
         assert!(view.rows.is_empty());
     }
 
@@ -90,11 +89,38 @@ mod tests {
         let view = render_project_list(&state);
 
         assert_eq!(view.status_line, "1 visible, 0 selected, 1 hidden");
-        assert_eq!(
-            view.hint_line,
-            "space: select, *: star selected, h: hide selected, v: toggle hidden projects, o: only selected, /: search, ctrl-f: fuzzy, ctrl-s: substring, ctrl-r: regex, r: refresh, q/ctrl-c: quit"
-        );
+        assert_eq!(view.search_line, "Search: not searching (substring)");
+        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select, /: search, r: refresh, q: quit"]);
         assert_eq!(view.rows, vec!["[ ] [ ] Visible"]);
+    }
+
+    #[test]
+    fn renders_contextual_selection_commands_when_items_are_selected() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1", "Alpha", false),
+            Project::new("2", "Beta", false),
+        ]);
+
+        state.toggle_current_selection();
+        state.toggle_help_details();
+
+        let view = render_project_list(&state);
+
+        assert!(view.hint_lines.iter().any(|line| line.contains("c: clear selection")));
+        assert!(view.hint_lines.iter().any(|line| line.contains("a: select all visible")));
+        assert!(view.hint_lines.iter().any(|line| line.contains("i: invert selection")));
+        assert!(view.hint_lines.iter().any(|line| line.contains("u: undo")));
+    }
+
+    #[test]
+    fn renders_expanded_help_with_toggle_at_front() {
+        let mut state = ProjectListState::from_projects(vec![Project::new("1", "Alpha", false)]);
+        state.toggle_help_details();
+
+        let view = render_project_list(&state);
+
+        assert_eq!(view.hint_lines[0], "?: fewer hints");
+        assert!(view.hint_lines.len() > 1);
     }
 }
 
@@ -147,17 +173,61 @@ fn build_status_line(state: &ProjectListState) -> String {
     }
 }
 
-fn build_hint_line(state: &ProjectListState) -> String {
-    let search_mode_hint = if state.search_active() {
-        format!("search: {} (enter/esc/backspace)", state.search_query())
-    } else {
-        String::new()
+fn build_search_line(state: &ProjectListState) -> String {
+    let mode = match state.search_mode() {
+        crate::app::project_list::SearchMode::Fuzzy => "fuzzy",
+        crate::app::project_list::SearchMode::Substring => "substring",
+        crate::app::project_list::SearchMode::Regex => "regex",
     };
 
-    let base = "space: select, *: star selected, h: hide selected, v: toggle hidden projects, o: only selected, /: search, ctrl-f: fuzzy, ctrl-s: substring, ctrl-r: regex, r: refresh, q/ctrl-c: quit";
-    if search_mode_hint.is_empty() {
-        base.to_string()
-    } else {
-        format!("{base} | {search_mode_hint}")
+    if state.search_active() && state.search_query().is_empty() {
+        return format!("Search: awaiting input ({mode})");
     }
+
+    if state.search_query().is_empty() {
+        return format!("Search: not searching ({mode})");
+    }
+
+    format!("Search: {mode} \"{}\"", state.search_query())
+}
+
+fn build_hint_lines(state: &ProjectListState) -> Vec<String> {
+    if !state.help_details_visible() {
+        return vec!["?: more hints, j/k: move, space: select, /: search, r: refresh, q: quit".to_string()];
+    }
+
+    let mut lines = vec![
+        "?: fewer hints".to_string(),
+        "j/down: move down, k/up: move up, ctrl-u: page up, ctrl-d: page down, home: top, end: bottom"
+            .to_string(),
+        "space: select".to_string(),
+    ];
+
+    if state.selected_count() > 0 {
+        lines.push("a: select all visible, i: invert selection, c: clear selection".to_string());
+    }
+
+    let mut selection_line = vec!["*: star selected".to_string(), "h: hide selected".to_string()];
+    selection_line.push("v: toggle hidden projects".to_string());
+    selection_line.push("o: only selected".to_string());
+    if state.can_undo_selection() {
+        selection_line.push("u: undo".to_string());
+    }
+    if state.can_redo_selection() {
+        selection_line.push("ctrl-y: redo".to_string());
+    }
+    lines.push(selection_line.join(", "));
+
+    let mut search_line = vec!["/: search".to_string()];
+    if state.search_active() || !state.search_query().is_empty() {
+        search_line.push("ctrl-l: clear search".to_string());
+    }
+    search_line.push("ctrl-f: fuzzy".to_string());
+    search_line.push("ctrl-s: substring".to_string());
+    search_line.push("ctrl-r: regex".to_string());
+    search_line.push("r: refresh".to_string());
+    search_line.push("q/ctrl-c: quit".to_string());
+    lines.push(search_line.join(", "));
+
+    lines
 }

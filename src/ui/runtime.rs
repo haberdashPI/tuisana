@@ -33,25 +33,29 @@ impl KeySource for CrosstermKeySource {
     }
 }
 
-fn draw<B: Backend, C: AsanaClient>(terminal: &mut Terminal<B>, app: &App<C>) -> io::Result<()> {
-    let view = render_project_list(&app.projects);
+fn draw<B: Backend, C: AsanaClient>(terminal: &mut Terminal<B>, app: &App<C>) -> io::Result<usize> {
+    let mut page_size = 1usize;
     terminal
         .draw(|frame| {
+            let view = render_project_list(&app.projects);
             let size = frame.area();
+            let hint_height = view.hint_lines.len().max(1) as u16;
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(1),
                     Constraint::Length(1),
                     Constraint::Length(1),
+                    Constraint::Length(hint_height),
                     Constraint::Min(1),
-                    Constraint::Length(1),
                 ])
                 .split(size);
+            page_size = chunks[4].height.saturating_sub(2).max(1) as usize;
 
             frame.render_widget(Paragraph::new(view.title.as_str()), chunks[0]);
             frame.render_widget(Paragraph::new(view.status_line.as_str()), chunks[1]);
-            frame.render_widget(Paragraph::new(view.hint_line.as_str()), chunks[2]);
+            frame.render_widget(Paragraph::new(view.search_line.as_str()), chunks[2]);
+            frame.render_widget(Paragraph::new(view.hint_lines.join("\n")), chunks[3]);
 
             let items: Vec<ListItem> = view
                 .rows
@@ -65,14 +69,9 @@ fn draw<B: Backend, C: AsanaClient>(terminal: &mut Terminal<B>, app: &App<C>) ->
                 .highlight_symbol("> ");
 
             let mut state = list_state(app.projects.selected_index());
-            frame.render_stateful_widget(list, chunks[3], &mut state);
-
-            frame.render_widget(
-                Paragraph::new("q: quit"),
-                chunks[4],
-            );
+            frame.render_stateful_widget(list, chunks[4], &mut state);
         })
-        .map(|_| ())
+        .map(|_| page_size)
 }
 
 fn list_state(selected: Option<usize>) -> ListState {
@@ -91,19 +90,19 @@ where
     S: KeySource,
     B: Backend,
 {
-    draw(terminal, app)?;
+    let mut page_size = draw(terminal, app)?;
     let keymap = app.keymap().map_err(|err| io::Error::other(err.to_string()))?;
 
     while let Some(key_event) = source.next_key()? {
-        match app.handle_key_event(&keymap, key_event) {
+        match app.handle_key_event(&keymap, key_event, page_size) {
             Ok(Some(crate::input::AppCommand::Quit)) => break,
             Ok(Some(crate::input::AppCommand::Refresh)) => {
                 app.load_projects()
                     .map_err(|err| io::Error::other(err.to_string()))?;
-                draw(terminal, app)?;
+                page_size = draw(terminal, app)?;
             }
             Ok(None) => {
-                draw(terminal, app)?;
+                page_size = draw(terminal, app)?;
             }
             Err(err) => {
                 return Err(io::Error::other(err.to_string()));

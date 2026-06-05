@@ -51,8 +51,8 @@ impl<C: AsanaClient> App<C> {
         KeyMap::from_bindings(&self.config.bind)
     }
 
-    pub fn handle_action(&mut self, action: &Action) -> Result<Option<AppCommand>> {
-        let result = self.projects.apply_action(action);
+    pub fn handle_action(&mut self, action: &Action, page_size: usize) -> Result<Option<AppCommand>> {
+        let result = self.projects.apply_action(action, page_size);
         if matches!(
             action,
             Action::ToggleStarredSelected | Action::ToggleHiddenSelected
@@ -66,6 +66,7 @@ impl<C: AsanaClient> App<C> {
         &mut self,
         keymap: &KeyMap,
         event: crossterm::event::KeyEvent,
+        page_size: usize,
     ) -> Result<Option<AppCommand>> {
         if matches!(KeyBinding::from_crossterm_event(event), Some(KeyBinding::Ctrl('c'))) {
             return Ok(Some(AppCommand::Quit));
@@ -89,13 +90,13 @@ impl<C: AsanaClient> App<C> {
                     self.projects.push_search_char(c.to_ascii_lowercase());
                     return Ok(None);
                 }
-                _ => return Ok(None),
+                _ => {}
             }
         }
 
         if let Some(binding) = KeyBinding::from_crossterm_event(event) {
             if let Some(action) = keymap.action_for(&binding).cloned() {
-                return self.handle_action(&action);
+                return self.handle_action(&action, page_size);
             }
         }
 
@@ -143,13 +144,13 @@ mod tests {
         app.load_projects().expect("projects load");
 
         assert_eq!(
-            app.handle_action(&crate::input::Action::MoveDown)
+            app.handle_action(&crate::input::Action::MoveDown, 10)
                 .expect("action ok"),
             None
         );
         assert_eq!(app.projects.selected_index(), Some(1));
         assert_eq!(
-            app.handle_action(&crate::input::Action::Quit)
+            app.handle_action(&crate::input::Action::Quit, 10)
                 .expect("action ok"),
             Some(crate::input::AppCommand::Quit)
         );

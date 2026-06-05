@@ -175,6 +175,10 @@ fn default_header_version() -> f64 {
 fn default_bindings() -> Vec<Bind> {
     vec![
         Bind {
+            key: "?".to_string(),
+            command: "toggle_help_details".to_string(),
+        },
+        Bind {
             key: "q".to_string(),
             command: "quit".to_string(),
         },
@@ -207,8 +211,44 @@ fn default_bindings() -> Vec<Bind> {
             command: "refresh".to_string(),
         },
         Bind {
+            key: "/".to_string(),
+            command: "start_search".to_string(),
+        },
+        Bind {
+            key: "ctrl-l".to_string(),
+            command: "clear_search".to_string(),
+        },
+        Bind {
             key: "space".to_string(),
             command: "toggle_selection".to_string(),
+        },
+        Bind {
+            key: "a".to_string(),
+            command: "select_all_visible".to_string(),
+        },
+        Bind {
+            key: "i".to_string(),
+            command: "invert_selection".to_string(),
+        },
+        Bind {
+            key: "c".to_string(),
+            command: "clear_selection".to_string(),
+        },
+        Bind {
+            key: "u".to_string(),
+            command: "undo_selection".to_string(),
+        },
+        Bind {
+            key: "ctrl-y".to_string(),
+            command: "redo_selection".to_string(),
+        },
+        Bind {
+            key: "home".to_string(),
+            command: "jump_top".to_string(),
+        },
+        Bind {
+            key: "end".to_string(),
+            command: "jump_bottom".to_string(),
         },
         Bind {
             key: "*".to_string(),
@@ -225,10 +265,6 @@ fn default_bindings() -> Vec<Bind> {
         Bind {
             key: "o".to_string(),
             command: "toggle_only_selected".to_string(),
-        },
-        Bind {
-            key: "/".to_string(),
-            command: "start_search".to_string(),
         },
         Bind {
             key: "ctrl-f".to_string(),

@@ -12,6 +12,8 @@ pub enum KeyBinding {
     Enter,
     Esc,
     Backspace,
+    Home,
+    End,
     Up,
     Down,
     PageUp,
@@ -27,6 +29,8 @@ impl FromStr for KeyBinding {
             "enter" => Ok(Self::Enter),
             "esc" | "escape" => Ok(Self::Esc),
             "backspace" => Ok(Self::Backspace),
+            "home" => Ok(Self::Home),
+            "end" => Ok(Self::End),
             "up" => Ok(Self::Up),
             "down" => Ok(Self::Down),
             "pageup" | "page-up" => Ok(Self::PageUp),
@@ -53,6 +57,8 @@ impl KeyBinding {
             KeyCode::Enter => Some(Self::Enter),
             KeyCode::Esc => Some(Self::Esc),
             KeyCode::Backspace => Some(Self::Backspace),
+            KeyCode::Home => Some(Self::Home),
+            KeyCode::End => Some(Self::End),
             KeyCode::Up => Some(Self::Up),
             KeyCode::Down => Some(Self::Down),
             KeyCode::PageUp => Some(Self::PageUp),
@@ -69,8 +75,15 @@ pub enum Action {
     MoveDown,
     Open,
     Refresh,
+    ToggleHelpDetails,
     StartSearch,
+    ClearSearch,
     ToggleSelection,
+    SelectAllVisible,
+    InvertSelection,
+    ClearSelection,
+    UndoSelection,
+    RedoSelection,
     ToggleOnlySelected,
     ToggleStarredSelected,
     ToggleHiddenSelected,
@@ -78,6 +91,8 @@ pub enum Action {
     SearchFuzzy,
     SearchSubstring,
     SearchRegex,
+    JumpTop,
+    JumpBottom,
     PageUp,
     PageDown,
 }
@@ -90,8 +105,15 @@ impl Action {
             "move_down" => Ok(Self::MoveDown),
             "open" => Ok(Self::Open),
             "refresh" => Ok(Self::Refresh),
+            "toggle_help_details" => Ok(Self::ToggleHelpDetails),
             "start_search" => Ok(Self::StartSearch),
+            "clear_search" => Ok(Self::ClearSearch),
             "toggle_selection" => Ok(Self::ToggleSelection),
+            "select_all_visible" => Ok(Self::SelectAllVisible),
+            "invert_selection" => Ok(Self::InvertSelection),
+            "clear_selection" => Ok(Self::ClearSelection),
+            "undo_selection" => Ok(Self::UndoSelection),
+            "redo_selection" => Ok(Self::RedoSelection),
             "toggle_only_selected" => Ok(Self::ToggleOnlySelected),
             "toggle_starred_selected" => Ok(Self::ToggleStarredSelected),
             "toggle_hidden_selected" => Ok(Self::ToggleHiddenSelected),
@@ -99,6 +121,8 @@ impl Action {
             "search_fuzzy" => Ok(Self::SearchFuzzy),
             "search_substring" => Ok(Self::SearchSubstring),
             "search_regex" => Ok(Self::SearchRegex),
+            "jump_top" => Ok(Self::JumpTop),
+            "jump_bottom" => Ok(Self::JumpBottom),
             "page_up" => Ok(Self::PageUp),
             "page_down" => Ok(Self::PageDown),
             other => Err(Error::Backend(format!("unsupported command: {other}"))),
@@ -130,8 +154,15 @@ impl Display for Action {
             Action::MoveDown => "move_down",
             Action::Open => "open",
             Action::Refresh => "refresh",
+            Action::ToggleHelpDetails => "toggle_help_details",
             Action::StartSearch => "start_search",
+            Action::ClearSearch => "clear_search",
             Action::ToggleSelection => "toggle_selection",
+            Action::SelectAllVisible => "select_all_visible",
+            Action::InvertSelection => "invert_selection",
+            Action::ClearSelection => "clear_selection",
+            Action::UndoSelection => "undo_selection",
+            Action::RedoSelection => "redo_selection",
             Action::ToggleOnlySelected => "toggle_only_selected",
             Action::ToggleStarredSelected => "toggle_starred_selected",
             Action::ToggleHiddenSelected => "toggle_hidden_selected",
@@ -139,6 +170,8 @@ impl Display for Action {
             Action::SearchFuzzy => "search_fuzzy",
             Action::SearchSubstring => "search_substring",
             Action::SearchRegex => "search_regex",
+            Action::JumpTop => "jump_top",
+            Action::JumpBottom => "jump_bottom",
             Action::PageUp => "page_up",
             Action::PageDown => "page_down",
         };
@@ -176,6 +209,10 @@ mod tests {
     fn parses_keys_and_builds_keymap() {
         let keymap = KeyMap::from_bindings(&[
             Bind {
+                key: "?".to_string(),
+                command: "toggle_help_details".to_string(),
+            },
+            Bind {
                 key: "x".to_string(),
                 command: "quit".to_string(),
             },
@@ -191,12 +228,20 @@ mod tests {
                 key: "space".to_string(),
                 command: "toggle_selection".to_string(),
             },
+            Bind {
+                key: "home".to_string(),
+                command: "jump_top".to_string(),
+            },
         ])
         .expect("keymap parses");
 
         assert_eq!(keymap.action_for(&KeyBinding::Char('x')), Some(&Action::Quit));
         assert_eq!(keymap.action_for(&KeyBinding::Char('j')), Some(&Action::MoveDown));
         assert_eq!(keymap.action_for(&KeyBinding::Ctrl('u')), Some(&Action::PageUp));
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('?')),
+            Some(&Action::ToggleHelpDetails)
+        );
     }
 
     #[test]
@@ -207,13 +252,27 @@ mod tests {
             "backspace".parse::<KeyBinding>().expect("backspace parses"),
             KeyBinding::Backspace
         );
+        assert_eq!("home".parse::<KeyBinding>().expect("home parses"), KeyBinding::Home);
+        assert_eq!("end".parse::<KeyBinding>().expect("end parses"), KeyBinding::End);
         assert_eq!("space".parse::<KeyBinding>().expect("space parses"), KeyBinding::Char(' '));
         assert_eq!("page-up".parse::<KeyBinding>().expect("page-up parses"), KeyBinding::PageUp);
         assert_eq!(Action::from_command("open").expect("open parses"), Action::Open);
         assert_eq!(Action::from_command("refresh").expect("refresh parses"), Action::Refresh);
         assert_eq!(
+            Action::from_command("toggle_help_details").expect("toggle_help_details parses"),
+            Action::ToggleHelpDetails
+        );
+        assert_eq!(
             Action::from_command("toggle_selection").expect("toggle_selection parses"),
             Action::ToggleSelection
+        );
+        assert_eq!(
+            Action::from_command("clear_search").expect("clear_search parses"),
+            Action::ClearSearch
+        );
+        assert_eq!(
+            Action::from_command("select_all_visible").expect("select_all_visible parses"),
+            Action::SelectAllVisible
         );
         assert_eq!(
             Action::from_command("toggle_hidden_group").expect("toggle_hidden_group parses"),
@@ -223,6 +282,7 @@ mod tests {
             Action::from_command("search_regex").expect("search_regex parses"),
             Action::SearchRegex
         );
+        assert_eq!(Action::from_command("jump_top").expect("jump_top parses"), Action::JumpTop);
     }
 
     #[test]

@@ -264,30 +264,40 @@ Acceptance criteria:
 - a toggle exists to show only selected projects
 - tests cover selection, bulk actions, and filter-mode behavior
 
-### Milestone 5.5: improve selection commands
+## Milestone 5.5: Improve Selection Commands
 
-Improve the usability of project search and selection
+Goal:
 
-- add commands to:
-    - clear the search string (revealing all items)
-    - select all visible items
-    - invert the selection (for visible items)
-    - jump to the top or bottom
-    - undo/redo selection actions
-- fix page up and down: should jump by page size, right now just jumps one item
-- only show certain commands within a given context:
-  - only showing when search is non-empty:
-    - search toggles (for regex, fuzzy and substring)
-    - command to clear search
-  - only show the various selection modifiers when there is at least one item selected
-    - clear selection
-    - invert selection
-    - select all
-- add a more visually promenant label of the current search state:
-    - currently awaiting search input
-    - not searching
-    - search text is entered
-    - search mode (fuzzy, regex, substring)
+- improve the usability of project search and selection
+
+Deliverables:
+
+- commands to clear the search string and reveal all items
+- commands to select all visible items
+- commands to invert the selection for visible items
+- commands to jump to the top or bottom
+- undo and redo selection actions
+- page up and page down behavior that jumps by page size instead of one item
+- a more visually prominent label of the current search state
+
+Implementation notes:
+
+- only show search toggles when search is non-empty
+- only show the command to clear search when search is non-empty
+- only show selection modifiers when there is at least one item selected
+- keep the search-state label descriptive for the current mode and input state
+
+Acceptance criteria:
+
+- the search string can be cleared to reveal all items
+- visible items can be selected in bulk
+- visible selection can be inverted
+- the cursor can jump to the top or bottom
+- selection actions can be undone and redone
+- page up and page down move by page size
+- search toggles are only shown when search is active
+- selection modifiers are only shown when something is selected
+- the current search state is clearly labeled as awaiting input, not searching, entered text, and search mode
 
 ## Milestone 6: Review tasks for one or many projects
 

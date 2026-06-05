@@ -95,7 +95,13 @@ Current commands include:
 - `move_down`
 - `open`
 - `refresh`
+- `clear_search`
 - `toggle_selection`
+- `select_all_visible`
+- `invert_selection`
+- `clear_selection`
+- `undo_selection`
+- `redo_selection`
 - `toggle_starred_selected`
 - `toggle_hidden_selected`
 - `toggle_hidden_group`
@@ -109,15 +115,28 @@ Current commands include:
 
 Project view shortcuts include:
 
+- `?` to toggle compact vs expanded hint display
+- `j`/`down` to move down
+- `k`/`up` to move up
+- `ctrl-u` and `ctrl-d` to page through the list
+- `home` and `end` to jump to the top or bottom
 - `space` to toggle selection for the current project
+- `a` to select all visible projects
+- `i` to invert the visible selection
+- `c` to clear the selection
+- `u` to undo the last selection change
+- `ctrl-y` to redo the last selection change
 - `*` to toggle starred state for the current selection
 - `h` to toggle hidden state for the current selection
 - `v` to show or hide hidden projects
 - `o` to filter to selected projects only
 - `/` to start search entry
+- `ctrl-l` to clear the search string
 - `ctrl-f`, `ctrl-s`, `ctrl-r` to switch search mode
 
 Search entry accepts ordinary typing, `backspace`, `enter`, and `esc`.
+The status area now shows a dedicated search line so you can see whether the view is not searching, awaiting input, or filtering by a query.
+The compact hint line always starts with `?`, so the expanded help toggle is always discoverable.
 
 Example:
 
