@@ -33,8 +33,11 @@ pub fn render_task_table(state: &TaskReviewState, viewport_width: usize) -> Task
             };
             format!("Loading tasks{} {}", targets, state.loading_spinner())
         }
-        TaskReviewStatus::Ready => task_status(state, "ready"),
-        TaskReviewStatus::OutOfDate(message) => task_status(state, &format!("out of date - {message}")),
+        TaskReviewStatus::Ready => task_status(state, &format!("ready, {}", state.filter_summary())),
+        TaskReviewStatus::OutOfDate(message) => task_status(
+            state,
+            &format!("out of date - {message}, {}", state.filter_summary()),
+        ),
         TaskReviewStatus::Empty => "No tasks available".to_string(),
         TaskReviewStatus::Error(message) => format!("Error: {message}"),
     };
@@ -74,9 +77,13 @@ pub fn render_task_table(state: &TaskReviewState, viewport_width: usize) -> Task
     let max_scroll = total_width.saturating_sub(viewport_width);
     let scroll = state.horizontal_scroll().min(max_scroll);
     let scroll_hint_line = if max_scroll > 0 {
-        format!("left/right: scroll columns ({}/{})", scroll, max_scroll)
+        format!(
+            "left/right: scroll columns ({}/{}), []: section, {{}}: project, c: completed, z: subtasks, s: sort",
+            scroll, max_scroll
+        )
     } else {
-        "left/right: scroll columns".to_string()
+        "left/right: scroll columns, []: section, {}: project, c: completed, z: subtasks, s: sort"
+            .to_string()
     };
 
     TaskTableView {
@@ -319,6 +326,7 @@ mod tests {
                     due_on: Some("2026-06-10".to_string()),
                     start_on: Some("2026-06-01".to_string()),
                     assignee: None,
+                    num_subtasks: 0,
                     memberships: vec![],
                     custom_fields: vec![CustomFieldValueDto {
                         gid: "cf1".to_string(),
@@ -379,6 +387,57 @@ mod tests {
     }
 
     #[test]
+    fn renders_task_filter_and_sort_hints() {
+        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
+            .with_sections(
+                "p1",
+                vec![crate::asana::dto::SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_tasks(
+                "p1",
+                vec![crate::asana::dto::TaskDto {
+                    gid: "t1".to_string(),
+                    name: "Ship".to_string(),
+                    completed: false,
+                    due_on: Some("2026-06-10".to_string()),
+                    start_on: Some("2026-06-01".to_string()),
+                    assignee: None,
+                    num_subtasks: 0,
+                    memberships: vec![crate::asana::dto::TaskMembershipDto {
+                        project: crate::asana::dto::TaskMembershipProjectDto {
+                            gid: "p1".to_string(),
+                            name: "Inbox".to_string(),
+                        },
+                        section: Some(crate::asana::dto::TaskMembershipSectionDto {
+                            gid: "s1".to_string(),
+                            name: "Today".to_string(),
+                        }),
+                    }],
+                    custom_fields: vec![],
+                }],
+            );
+
+        let mut state = TaskReviewState::new();
+        state
+            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .expect("tasks load");
+        state.toggle_completed_filter();
+        state.toggle_subtask_visibility();
+        state.cycle_sort_field();
+
+        let view = render_task_table(&state, 80);
+
+        assert!(view.scroll_hint_line.contains("c: completed"));
+        assert!(view.scroll_hint_line.contains("z: subtasks"));
+        assert!(view.scroll_hint_line.contains("s: sort"));
+        assert!(view.status_line.contains("filters:"));
+        assert!(view.status_line.contains("sort:"));
+    }
+
+    #[test]
     fn keeps_column_markers_aligned_for_varied_lengths() {
         let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
             .with_sections(
@@ -418,6 +477,7 @@ mod tests {
                             name: Some("Al".to_string()),
                             display_name: Some("Al".to_string()),
                         }),
+                        num_subtasks: 0,
                         memberships: vec![crate::asana::dto::TaskMembershipDto {
                             project: crate::asana::dto::TaskMembershipProjectDto {
                                 gid: "p1".to_string(),
@@ -446,6 +506,7 @@ mod tests {
                             name: Some("A very very long assignee name".to_string()),
                             display_name: Some("A very very long assignee name".to_string()),
                         }),
+                        num_subtasks: 0,
                         memberships: vec![crate::asana::dto::TaskMembershipDto {
                             project: crate::asana::dto::TaskMembershipProjectDto {
                                 gid: "p1".to_string(),
@@ -510,6 +571,7 @@ mod tests {
                         due_on: Some("2026-06-01".to_string()),
                         start_on: None,
                         assignee: None,
+                        num_subtasks: 0,
                         memberships: vec![crate::asana::dto::TaskMembershipDto {
                             project: crate::asana::dto::TaskMembershipProjectDto {
                                 gid: "p1".to_string(),
@@ -529,6 +591,7 @@ mod tests {
                         due_on: Some("2026-06-02".to_string()),
                         start_on: None,
                         assignee: None,
+                        num_subtasks: 0,
                         memberships: vec![crate::asana::dto::TaskMembershipDto {
                             project: crate::asana::dto::TaskMembershipProjectDto {
                                 gid: "p1".to_string(),
@@ -590,6 +653,7 @@ mod tests {
                             name: Some("Al".to_string()),
                             display_name: Some("Al".to_string()),
                         }),
+                        num_subtasks: 0,
                         memberships: vec![crate::asana::dto::TaskMembershipDto {
                             project: crate::asana::dto::TaskMembershipProjectDto {
                                 gid: "p1".to_string(),
@@ -618,6 +682,7 @@ mod tests {
                             name: Some("A very very long assignee name".to_string()),
                             display_name: Some("A very very long assignee name".to_string()),
                         }),
+                        num_subtasks: 0,
                         memberships: vec![crate::asana::dto::TaskMembershipDto {
                             project: crate::asana::dto::TaskMembershipProjectDto {
                                 gid: "p1".to_string(),
@@ -692,6 +757,7 @@ mod tests {
                         name: Some("Alex".to_string()),
                         display_name: Some("Alex".to_string()),
                     }),
+                    num_subtasks: 0,
                     memberships: vec![],
                     custom_fields: vec![CustomFieldValueDto {
                         gid: "cf1".to_string(),
@@ -711,5 +777,33 @@ mod tests {
 
         assert!(view.total_width > 40);
         assert!(view.scroll_hint_line.contains("/"));
+    }
+
+    #[test]
+    fn renders_subtasks_with_an_indent_marker() {
+        let mut parent = crate::domain::TaskRecord::new("p1", "Parent task");
+        parent.projects = vec!["Inbox".to_string()];
+        parent.sections = vec!["Today".to_string()];
+
+        let mut child = crate::domain::TaskRecord::new("p2", "Child task");
+        child.parent_gid = Some("p1".to_string());
+        child.subtask_depth = 1;
+        child.projects = vec!["Inbox".to_string()];
+        child.sections = vec!["Today".to_string()];
+
+        let model = crate::domain::TaskTableModel::from_records_with_settings(
+            vec![parent, child],
+            vec![],
+            &crate::domain::TaskTableSettings::default(),
+        );
+
+        let task_titles = model
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.cells[0].clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(task_titles, vec!["Parent task", "  L Child task"]);
     }
 }

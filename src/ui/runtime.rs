@@ -73,7 +73,7 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                     Constraint::Min(1),
                 ])
                 .split(project_area);
-            page_size = chunks[4].height.saturating_sub(2).max(1) as usize;
+            let project_page_size = chunks[4].height.saturating_sub(2).max(1) as usize;
 
             frame.render_widget(Paragraph::new(view.title.as_str()), chunks[0]);
             frame.render_widget(Paragraph::new(view.status_line.as_str()), chunks[1]);
@@ -110,7 +110,10 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                         Constraint::Min(1),
                     ])
                     .split(task_area);
+                let task_body_height = task_chunks[3].height.saturating_sub(2) as usize;
+                app.tasks.ensure_selected_visible(task_body_height);
                 let task_view = render_task_table(&app.tasks, task_chunks[3].width.saturating_sub(2) as usize);
+                page_size = task_body_height.max(1);
 
                 frame.render_widget(Paragraph::new(task_view.title.as_str()), task_chunks[0]);
                 frame.render_widget(Paragraph::new(task_view.status_line.as_str()), task_chunks[1]);
@@ -121,9 +124,12 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                     app.tasks.selected_index(),
                     task_chunks[3].width.saturating_sub(2) as usize,
                 ))
+                .scroll((app.tasks.vertical_scroll() as u16, 0))
                 .block(Block::default().borders(Borders::ALL).title("Tasks"))
                 ;
                 frame.render_widget(body, task_chunks[3]);
+            } else {
+                page_size = project_page_size;
             }
         })
         .map(|_| page_size)

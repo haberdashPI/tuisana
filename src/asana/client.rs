@@ -116,7 +116,7 @@ impl<T: Transport> HttpAsanaClient<T> {
         let mut query = vec![
             (
                 "opt_fields",
-                "gid,name,completed,due_on,start_on,assignee.gid,assignee.name,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.enum_value.gid,custom_fields.enum_value.name"
+                "gid,name,completed,due_on,start_on,assignee.gid,assignee.name,num_subtasks,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.enum_value.gid,custom_fields.enum_value.name"
                     .to_string(),
             ),
             ("limit", "100".to_string()),
@@ -133,6 +133,33 @@ impl<T: Transport> HttpAsanaClient<T> {
 
         serde_json::from_value(json)
             .map_err(|err| Error::Backend(format!("failed to decode task list: {err}")))
+    }
+
+    fn list_subtasks_page(
+        &self,
+        task_gid: &str,
+        offset: Option<&str>,
+    ) -> Result<CollectionResponse<TaskDto>> {
+        let mut query = vec![
+            (
+                "opt_fields",
+                "gid,name,completed,due_on,start_on,assignee.gid,assignee.name,num_subtasks,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.enum_value.gid,custom_fields.enum_value.name"
+                    .to_string(),
+            ),
+            ("limit", "100".to_string()),
+        ];
+        if let Some(offset) = offset {
+            query.push(("offset", offset.to_string()));
+        }
+
+        let json = self.transport.get_json(
+            &format!("tasks/{task_gid}/subtasks"),
+            &query,
+            &self.personal_access_token,
+        )?;
+
+        serde_json::from_value(json)
+            .map_err(|err| Error::Backend(format!("failed to decode subtask list: {err}")))
     }
 
     fn list_sections_page(
@@ -211,6 +238,23 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
 
         loop {
             let page = self.list_tasks_page(project_gid, offset.as_deref())?;
+            tasks.extend(page.data);
+
+            match page.next_page {
+                Some(next_page) => offset = Some(next_page.offset),
+                None => break,
+            }
+        }
+
+        Ok(tasks)
+    }
+
+    fn list_subtasks(&self, task_gid: &str) -> Result<Vec<TaskDto>> {
+        let mut tasks = Vec::new();
+        let mut offset: Option<String> = None;
+
+        loop {
+            let page = self.list_subtasks_page(task_gid, offset.as_deref())?;
             tasks.extend(page.data);
 
             match page.next_page {

@@ -695,6 +695,10 @@ mod tests {
             Err(Error::Backend("backend unavailable".to_string()))
         }
 
+        fn list_subtasks(&self, _task_gid: &str) -> Result<Vec<crate::asana::dto::TaskDto>> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
         fn list_sections(&self, _project_gid: &str) -> Result<Vec<crate::asana::dto::SectionDto>> {
             Err(Error::Backend("backend unavailable".to_string()))
         }

@@ -308,6 +308,34 @@ fn default_bindings() -> Vec<Bind> {
             key: "right".to_string(),
             command: "scroll_right".to_string(),
         },
+        Bind {
+            key: "[".to_string(),
+            command: "move_section_up".to_string(),
+        },
+        Bind {
+            key: "]".to_string(),
+            command: "move_section_down".to_string(),
+        },
+        Bind {
+            key: "{".to_string(),
+            command: "move_project_up".to_string(),
+        },
+        Bind {
+            key: "}".to_string(),
+            command: "move_project_down".to_string(),
+        },
+        Bind {
+            key: "c".to_string(),
+            command: "toggle_completed_filter".to_string(),
+        },
+        Bind {
+            key: "z".to_string(),
+            command: "toggle_subtask_visibility".to_string(),
+        },
+        Bind {
+            key: "s".to_string(),
+            command: "cycle_task_sort".to_string(),
+        },
     ]
 }
 

@@ -13,6 +13,7 @@ use crate::{
 pub struct FakeAsanaClient {
     projects: Vec<Project>,
     tasks_by_project: HashMap<String, Vec<TaskDto>>,
+    subtasks_by_task: HashMap<String, Vec<TaskDto>>,
     sections_by_project: HashMap<String, Vec<SectionDto>>,
     custom_field_settings_by_project: HashMap<String, Vec<ProjectCustomFieldSettingDto>>,
 }
@@ -31,6 +32,11 @@ impl FakeAsanaClient {
 
     pub fn with_tasks(mut self, project_gid: impl Into<String>, tasks: Vec<TaskDto>) -> Self {
         self.tasks_by_project.insert(project_gid.into(), tasks);
+        self
+    }
+
+    pub fn with_subtasks(mut self, task_gid: impl Into<String>, subtasks: Vec<TaskDto>) -> Self {
+        self.subtasks_by_task.insert(task_gid.into(), subtasks);
         self
     }
 
@@ -60,7 +66,31 @@ impl AsanaClient for FakeAsanaClient {
             .tasks_by_project
             .get(project_gid)
             .cloned()
-            .unwrap_or_default())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|mut task| {
+                if let Some(subtasks) = self.subtasks_by_task.get(&task.gid) {
+                    task.num_subtasks = subtasks.len();
+                }
+                task
+            })
+            .collect())
+    }
+
+    fn list_subtasks(&self, task_gid: &str) -> Result<Vec<TaskDto>> {
+        Ok(self
+            .subtasks_by_task
+            .get(task_gid)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|mut task| {
+                if let Some(subtasks) = self.subtasks_by_task.get(&task.gid) {
+                    task.num_subtasks = subtasks.len();
+                }
+                task
+            })
+            .collect())
     }
 
     fn list_sections(&self, project_gid: &str) -> Result<Vec<SectionDto>> {

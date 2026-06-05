@@ -81,6 +81,8 @@ pub struct TaskDto {
     #[serde(default)]
     pub assignee: Option<UserDto>,
     #[serde(default)]
+    pub num_subtasks: usize,
+    #[serde(default)]
     pub memberships: Vec<TaskMembershipDto>,
     #[serde(default)]
     pub custom_fields: Vec<CustomFieldValueDto>,

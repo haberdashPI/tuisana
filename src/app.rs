@@ -30,7 +30,7 @@ pub struct App<C> {
 
 struct TaskLoadMessage {
     generation: u64,
-    result: Result<crate::domain::TaskTableModel>,
+    result: Result<crate::app::task_review::TaskDataset>,
 }
 
 impl<C: AsanaClient + Clone + Send + 'static> App<C> {
@@ -103,7 +103,22 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             _ => {}
         }
 
-        let result = if self.tasks.focus_mode() == TaskFocusMode::Tasks {
+        let task_action = matches!(
+            action,
+            Action::MoveSectionUp
+                | Action::MoveSectionDown
+                | Action::MoveProjectUp
+                | Action::MoveProjectDown
+                | Action::ScrollLeft
+                | Action::ScrollRight
+                | Action::PageUp
+                | Action::PageDown
+                | Action::ToggleCompletedFilter
+                | Action::ToggleSubtaskVisibility
+                | Action::CycleTaskSort
+        ) && self.tasks.visible();
+
+        let result = if task_action || self.tasks.focus_mode() == TaskFocusMode::Tasks {
             self.tasks.apply_action(action, page_size)
         } else {
             self.projects.apply_action(action, page_size)
@@ -195,6 +210,12 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
 
         if let Some(binding) = KeyBinding::from_crossterm_event(event) {
             debug_log(&format!("resolved binding: {binding:?}"));
+            if self.tasks.visible() {
+                if let Some(action) = task_view_action_for(&binding) {
+                    debug_log(&format!("task overlay action: {action}"));
+                    return self.handle_action(&action, page_size);
+                }
+            }
             if let Some(action) = keymap.action_for(&binding).cloned() {
                 debug_log(&format!("resolved action: {action}"));
                 return self.handle_action(&action, page_size);
@@ -217,7 +238,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             Ok(message) => {
                 if message.generation == self.task_load_generation {
                     match message.result {
-                        Ok(table) => self.tasks.finish_loading(table),
+                        Ok(dataset) => self.tasks.finish_loading_dataset(dataset),
                         Err(err) => {
                             debug_log(&format!("task load error: {err}"));
                             self.tasks.set_error(err.to_string());
@@ -241,7 +262,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         Ok(())
     }
 
-    fn task_target_projects(&self) -> Vec<crate::domain::Project> {
+fn task_target_projects(&self) -> Vec<crate::domain::Project> {
         let selected_projects = self.projects.selected_projects();
 
         if !selected_projects.is_empty() {
@@ -276,7 +297,8 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         ));
 
         if targets.is_empty() {
-            self.tasks.finish_loading(crate::domain::TaskTableModel::empty());
+            self.tasks
+                .finish_loading_dataset(crate::app::task_review::TaskDataset::default());
             return;
         }
 
@@ -289,12 +311,29 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         self.task_load_receiver = Some(receiver);
 
         thread::spawn(move || {
-            let result = crate::app::task_review::TaskReviewState::build_table_for_projects(
+            let result = crate::app::task_review::TaskReviewState::build_dataset_for_projects(
                 &client,
                 &targets,
             );
             let _ = sender.send(TaskLoadMessage { generation, result });
         });
+    }
+}
+
+fn task_view_action_for(binding: &KeyBinding) -> Option<Action> {
+    match binding {
+        KeyBinding::Char('c') => Some(Action::ToggleCompletedFilter),
+        KeyBinding::Char('z') => Some(Action::ToggleSubtaskVisibility),
+        KeyBinding::Char('s') => Some(Action::CycleTaskSort),
+        KeyBinding::Char('[') => Some(Action::MoveSectionUp),
+        KeyBinding::Char(']') => Some(Action::MoveSectionDown),
+        KeyBinding::Char('{') => Some(Action::MoveProjectUp),
+        KeyBinding::Char('}') => Some(Action::MoveProjectDown),
+        KeyBinding::Left => Some(Action::ScrollLeft),
+        KeyBinding::Right => Some(Action::ScrollRight),
+        KeyBinding::PageUp => Some(Action::PageUp),
+        KeyBinding::PageDown => Some(Action::PageDown),
+        _ => None,
     }
 }
 
@@ -307,7 +346,13 @@ pub fn debug_log(message: &str) {
 #[cfg(test)]
 mod tests {
     use crate::{
-        asana::fake::FakeAsanaClient,
+        asana::{
+            dto::{
+                CustomFieldDto, CustomFieldValueDto, ProjectCustomFieldSettingDto, TaskDto,
+                TaskMembershipDto, TaskMembershipProjectDto, TaskMembershipSectionDto, UserDto,
+            },
+            fake::FakeAsanaClient,
+        },
         config::{Config, ProjectVisibilityConfig},
         domain::Project,
         input::{Action, KeyBinding},
@@ -424,5 +469,247 @@ mod tests {
             crate::app::task_review::TaskReviewStatus::OutOfDate(message)
                 if message.contains("switch to task view")
         ));
+    }
+
+    #[test]
+    fn page_navigation_uses_the_task_view_when_it_is_visible() {
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)])
+            .with_sections(
+                "1",
+                vec![crate::asana::dto::SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_custom_field_settings(
+                "1",
+                vec![ProjectCustomFieldSettingDto {
+                    gid: "cfs1".to_string(),
+                    custom_field: CustomFieldDto {
+                        gid: "cf1".to_string(),
+                        name: "Priority".to_string(),
+                    },
+                }],
+            )
+            .with_tasks(
+                "1",
+                vec![
+                    TaskDto {
+                        gid: "t1".to_string(),
+                        name: "Task 1".to_string(),
+                        completed: false,
+                        due_on: Some("2026-06-01".to_string()),
+                        start_on: Some("2026-05-28".to_string()),
+                        assignee: Some(UserDto {
+                            gid: "user-1".to_string(),
+                            name: Some("Alex".to_string()),
+                            display_name: Some("Alex".to_string()),
+                        }),
+                        num_subtasks: 0,
+                        memberships: vec![TaskMembershipDto {
+                            project: TaskMembershipProjectDto {
+                                gid: "1".to_string(),
+                                name: "Inbox".to_string(),
+                            },
+                            section: Some(TaskMembershipSectionDto {
+                                gid: "s1".to_string(),
+                                name: "Today".to_string(),
+                            }),
+                        }],
+                        custom_fields: vec![CustomFieldValueDto {
+                            gid: "cf1".to_string(),
+                            name: "Priority".to_string(),
+                            display_value: Some("High".to_string()),
+                            enum_value: None,
+                        }],
+                    },
+                    TaskDto {
+                        gid: "t2".to_string(),
+                        name: "Task 2".to_string(),
+                        completed: false,
+                        due_on: Some("2026-06-01".to_string()),
+                        start_on: Some("2026-05-28".to_string()),
+                        assignee: Some(UserDto {
+                            gid: "user-1".to_string(),
+                            name: Some("Alex".to_string()),
+                            display_name: Some("Alex".to_string()),
+                        }),
+                        num_subtasks: 0,
+                        memberships: vec![TaskMembershipDto {
+                            project: TaskMembershipProjectDto {
+                                gid: "1".to_string(),
+                                name: "Inbox".to_string(),
+                            },
+                            section: Some(TaskMembershipSectionDto {
+                                gid: "s1".to_string(),
+                                name: "Today".to_string(),
+                            }),
+                        }],
+                        custom_fields: vec![CustomFieldValueDto {
+                            gid: "cf1".to_string(),
+                            name: "Priority".to_string(),
+                            display_value: Some("High".to_string()),
+                            enum_value: None,
+                        }],
+                    },
+                    TaskDto {
+                        gid: "t3".to_string(),
+                        name: "Task 3".to_string(),
+                        completed: false,
+                        due_on: Some("2026-06-01".to_string()),
+                        start_on: Some("2026-05-28".to_string()),
+                        assignee: Some(UserDto {
+                            gid: "user-1".to_string(),
+                            name: Some("Alex".to_string()),
+                            display_name: Some("Alex".to_string()),
+                        }),
+                        num_subtasks: 0,
+                        memberships: vec![TaskMembershipDto {
+                            project: TaskMembershipProjectDto {
+                                gid: "1".to_string(),
+                                name: "Inbox".to_string(),
+                            },
+                            section: Some(TaskMembershipSectionDto {
+                                gid: "s1".to_string(),
+                                name: "Today".to_string(),
+                            }),
+                        }],
+                        custom_fields: vec![CustomFieldValueDto {
+                            gid: "cf1".to_string(),
+                            name: "Priority".to_string(),
+                            display_value: Some("High".to_string()),
+                            enum_value: None,
+                        }],
+                    },
+                    TaskDto {
+                        gid: "t4".to_string(),
+                        name: "Task 4".to_string(),
+                        completed: false,
+                        due_on: Some("2026-06-01".to_string()),
+                        start_on: Some("2026-05-28".to_string()),
+                        assignee: Some(UserDto {
+                            gid: "user-1".to_string(),
+                            name: Some("Alex".to_string()),
+                            display_name: Some("Alex".to_string()),
+                        }),
+                        num_subtasks: 0,
+                        memberships: vec![TaskMembershipDto {
+                            project: TaskMembershipProjectDto {
+                                gid: "1".to_string(),
+                                name: "Inbox".to_string(),
+                            },
+                            section: Some(TaskMembershipSectionDto {
+                                gid: "s1".to_string(),
+                                name: "Today".to_string(),
+                            }),
+                        }],
+                        custom_fields: vec![CustomFieldValueDto {
+                            gid: "cf1".to_string(),
+                            name: "Priority".to_string(),
+                            display_value: Some("High".to_string()),
+                            enum_value: None,
+                        }],
+                    },
+                ],
+            );
+        let table = crate::app::task_review::TaskReviewState::build_table_for_projects(
+            &client,
+            &[Project::new("1", "Inbox", true)],
+        )
+        .expect("tasks load");
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+        app.tasks.begin_loading(&[Project::new("1", "Inbox", true)]);
+        app.tasks.finish_loading(table);
+        app.tasks.set_visible(true);
+
+        app.handle_action(&Action::PageDown, 2).expect("page down");
+        assert_eq!(app.tasks.selected_index(), Some(3));
+
+        app.handle_action(&Action::PageUp, 2).expect("page up");
+        assert_eq!(app.tasks.selected_index(), Some(1));
+    }
+
+    #[test]
+    fn task_view_bindings_override_project_bindings_when_tasks_are_visible() {
+        let config = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 1.0
+
+                [[bind]]
+                key = "c"
+                command = "clear_selection"
+            "#,
+        )
+        .expect("config parses");
+
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)])
+            .with_sections(
+                "1",
+                vec![crate::asana::dto::SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_tasks(
+                "1",
+                vec![
+                    TaskDto {
+                        gid: "t1".to_string(),
+                        name: "Open task".to_string(),
+                        completed: false,
+                        due_on: Some("2026-06-01".to_string()),
+                        start_on: Some("2026-05-28".to_string()),
+                        assignee: None,
+                        num_subtasks: 0,
+                        memberships: vec![TaskMembershipDto {
+                            project: TaskMembershipProjectDto {
+                                gid: "1".to_string(),
+                                name: "Inbox".to_string(),
+                            },
+                            section: Some(TaskMembershipSectionDto {
+                                gid: "s1".to_string(),
+                                name: "Today".to_string(),
+                            }),
+                        }],
+                        custom_fields: vec![],
+                    },
+                    TaskDto {
+                        gid: "t2".to_string(),
+                        name: "Closed task".to_string(),
+                        completed: true,
+                        due_on: Some("2026-06-01".to_string()),
+                        start_on: Some("2026-05-28".to_string()),
+                        assignee: None,
+                        num_subtasks: 0,
+                        memberships: vec![TaskMembershipDto {
+                            project: TaskMembershipProjectDto {
+                                gid: "1".to_string(),
+                                name: "Inbox".to_string(),
+                            },
+                            section: Some(TaskMembershipSectionDto {
+                                gid: "s1".to_string(),
+                                name: "Today".to_string(),
+                            }),
+                        }],
+                        custom_fields: vec![],
+                    },
+                ],
+            );
+
+        let mut app = App::new(config, client);
+        app.load_projects().expect("projects load");
+        app.tasks
+            .load_for_projects(&app.client, &[Project::new("1", "Inbox", true)])
+            .expect("tasks load");
+        app.tasks.set_visible(true);
+
+        assert_eq!(app.tasks.table().task_count(), 2);
+        app.handle_action(&Action::ToggleCompletedFilter, 10)
+            .expect("task filter action");
+        assert_eq!(app.tasks.table().task_count(), 1);
+        assert!(app.tasks.filter_summary().contains("completed: open"));
     }
 }

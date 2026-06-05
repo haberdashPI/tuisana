@@ -105,6 +105,13 @@ pub enum Action {
     PageDown,
     ScrollLeft,
     ScrollRight,
+    MoveSectionUp,
+    MoveSectionDown,
+    MoveProjectUp,
+    MoveProjectDown,
+    ToggleCompletedFilter,
+    ToggleSubtaskVisibility,
+    CycleTaskSort,
 }
 
 impl Action {
@@ -139,6 +146,13 @@ impl Action {
             "page_down" => Ok(Self::PageDown),
             "scroll_left" => Ok(Self::ScrollLeft),
             "scroll_right" => Ok(Self::ScrollRight),
+            "move_section_up" => Ok(Self::MoveSectionUp),
+            "move_section_down" => Ok(Self::MoveSectionDown),
+            "move_project_up" => Ok(Self::MoveProjectUp),
+            "move_project_down" => Ok(Self::MoveProjectDown),
+            "toggle_completed_filter" => Ok(Self::ToggleCompletedFilter),
+            "toggle_subtask_visibility" => Ok(Self::ToggleSubtaskVisibility),
+            "cycle_task_sort" => Ok(Self::CycleTaskSort),
             other => Err(Error::Backend(format!("unsupported command: {other}"))),
         }
     }
@@ -192,6 +206,13 @@ impl Display for Action {
             Action::PageDown => "page_down",
             Action::ScrollLeft => "scroll_left",
             Action::ScrollRight => "scroll_right",
+            Action::MoveSectionUp => "move_section_up",
+            Action::MoveSectionDown => "move_section_down",
+            Action::MoveProjectUp => "move_project_up",
+            Action::MoveProjectDown => "move_project_down",
+            Action::ToggleCompletedFilter => "toggle_completed_filter",
+            Action::ToggleSubtaskVisibility => "toggle_subtask_visibility",
+            Action::CycleTaskSort => "cycle_task_sort",
         };
         f.write_str(name)
     }
