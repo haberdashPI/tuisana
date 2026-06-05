@@ -60,6 +60,7 @@ impl Transport for ReqwestTransport {
     }
 }
 
+#[derive(Clone)]
 pub struct HttpAsanaClient<T = ReqwestTransport> {
     transport: T,
     personal_access_token: String,

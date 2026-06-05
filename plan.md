@@ -344,6 +344,38 @@ Acceptance criteria:
 - table columns include key fields and project-specific fields
 - tests cover field mapping and multi-project merging
 
+## Milestone 6.5: Improve task view behavior
+
+Goal:
+
+- make the task pane feel responsive, predictable, and easy to read
+
+Deliverables:
+
+- defer task loading until task mode is activated
+- show a visible indication that tasks are pending when a project is selected
+- load tasks asynchronously with a spinner or other loading indicator
+- render task columns with readable spacing and truncation
+- group tasks by project and section with clear visual separation
+
+Implementation notes:
+
+- avoid loading task data on every project cursor move
+- keep task loading non-blocking so the project list remains usable
+- use column alignment and truncation instead of raw tab-separated text
+- make the default sort order stable and section-aware
+- preserve the single-project and multi-project task table model introduced in Milestone 6
+
+Acceptance criteria:
+
+- selecting a project does not immediately trigger task loading
+- switching into task mode loads the relevant tasks for the current selection
+- the UI makes it clear when task data is pending or loading
+- task loading does not freeze the rest of the interface
+- task rows are legible with aligned columns and truncated overflow
+- tasks are visually grouped by project and section
+- tests cover deferred loading, loading-state presentation, and table formatting
+
 ## Milestone 7: Navigate, filter, and sort tasks
 
 Goal:

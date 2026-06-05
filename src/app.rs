@@ -5,7 +5,11 @@ use crate::{
     input::{Action, AppCommand, KeyBinding, KeyMap},
 };
 
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::mpsc::{self, Receiver},
+    thread,
+};
 
 pub mod project_list;
 pub mod task_review;
@@ -20,9 +24,16 @@ pub struct App<C> {
     pub tasks: TaskReviewState,
     client: C,
     config_path: Option<PathBuf>,
+    task_load_generation: u64,
+    task_load_receiver: Option<Receiver<TaskLoadMessage>>,
 }
 
-impl<C: AsanaClient> App<C> {
+struct TaskLoadMessage {
+    generation: u64,
+    result: Result<crate::domain::TaskTableModel>,
+}
+
+impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     pub fn new(config: Config, client: C) -> Self {
         Self::with_optional_config_path(None, config, client)
     }
@@ -42,6 +53,8 @@ impl<C: AsanaClient> App<C> {
             tasks: TaskReviewState::new(),
             client,
             config_path,
+            task_load_generation: 0,
+            task_load_receiver: None,
         }
     }
 
@@ -52,18 +65,8 @@ impl<C: AsanaClient> App<C> {
     }
 
     pub fn load_tasks(&mut self) -> Result<()> {
-        let targets = self.task_target_projects();
-        debug_log(&format!(
-            "load_tasks: visible={} focus={:?} targets={}",
-            self.tasks.visible(),
-            self.tasks.focus_mode(),
-            targets
-                .iter()
-                .map(|project| project.id.as_str())
-                .collect::<Vec<_>>()
-                .join(",")
-        ));
-        self.tasks.load_for_projects(&self.client, &targets)
+        self.start_task_load();
+        Ok(())
     }
 
     pub fn keymap(&self) -> Result<KeyMap> {
@@ -76,17 +79,30 @@ impl<C: AsanaClient> App<C> {
             return Ok(Some(command));
         }
 
-        let before_targets = self.task_target_projects();
+        let task_targets_before = if self.tasks.focus_mode() == TaskFocusMode::Projects {
+            Some(self.task_target_project_ids())
+        } else {
+            None
+        };
+
         debug_log(&format!(
-            "handle_action: action={action} focus={:?} visible_tasks={} before_targets={}",
+            "handle_action: action={action} focus={:?} visible_tasks={}",
             self.tasks.focus_mode(),
             self.tasks.visible(),
-            before_targets
-                .iter()
-                .map(|project| project.id.as_str())
-                .collect::<Vec<_>>()
-                .join(",")
         ));
+
+        match action {
+            Action::ScrollLeft => {
+                self.tasks.scroll_left();
+                return Ok(None);
+            }
+            Action::ScrollRight => {
+                self.tasks.scroll_right();
+                return Ok(None);
+            }
+            _ => {}
+        }
+
         let result = if self.tasks.focus_mode() == TaskFocusMode::Tasks {
             self.tasks.apply_action(action, page_size)
         } else {
@@ -100,6 +116,18 @@ impl<C: AsanaClient> App<C> {
             self.sync_visibility_preferences()?;
         }
 
+        if let Some(before) = task_targets_before {
+            let after = self.task_target_project_ids();
+            if before != after
+                && !matches!(self.tasks.status(), crate::app::task_review::TaskReviewStatus::Idle)
+            {
+                if self.task_load_receiver.is_some() {
+                    self.task_load_generation = self.task_load_generation.wrapping_add(1);
+                }
+                self.tasks.mark_out_of_date("selected projects changed; switch to task view to refresh");
+            }
+        }
+
         match action {
             Action::ToggleTaskView => {
                 self.tasks.toggle_visible();
@@ -108,9 +136,6 @@ impl<C: AsanaClient> App<C> {
                     self.tasks.visible(),
                     self.tasks.focus_mode()
                 ));
-                if self.tasks.visible() {
-                    self.load_tasks()?;
-                }
             }
             Action::ToggleTaskMode => {
                 self.tasks.toggle_focus_mode();
@@ -119,19 +144,14 @@ impl<C: AsanaClient> App<C> {
                     self.tasks.visible(),
                     self.tasks.focus_mode()
                 ));
-                if self.tasks.focus_mode() == TaskFocusMode::Tasks && !self.tasks.visible() {
-                    self.tasks.set_visible(true);
-                    self.load_tasks()?;
-                } else if self.tasks.visible() {
-                    self.load_tasks()?;
+                if self.tasks.focus_mode() == TaskFocusMode::Tasks {
+                    if !self.tasks.visible() {
+                        self.tasks.set_visible(true);
+                    }
+                    self.start_task_load();
                 }
             }
             _ => {}
-        }
-
-        let after_targets = self.task_target_projects();
-        if before_targets != after_targets && self.tasks.visible() {
-            self.load_tasks()?;
         }
 
         Ok(result)
@@ -146,6 +166,8 @@ impl<C: AsanaClient> App<C> {
         if matches!(KeyBinding::from_crossterm_event(event), Some(KeyBinding::Ctrl('c'))) {
             return Ok(Some(AppCommand::Quit));
         }
+
+        self.poll_task_load();
 
         debug_log(&format!("key event: {:?} {:?}", event.code, event.modifiers));
 
@@ -183,6 +205,34 @@ impl<C: AsanaClient> App<C> {
         Ok(None)
     }
 
+    pub fn poll_task_load(&mut self) {
+        let result = {
+            let Some(receiver) = self.task_load_receiver.as_ref() else {
+                return;
+            };
+            receiver.try_recv()
+        };
+
+        match result {
+            Ok(message) => {
+                if message.generation == self.task_load_generation {
+                    match message.result {
+                        Ok(table) => self.tasks.finish_loading(table),
+                        Err(err) => {
+                            debug_log(&format!("task load error: {err}"));
+                            self.tasks.set_error(err.to_string());
+                        }
+                    }
+                }
+                self.task_load_receiver = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.task_load_receiver = None;
+            }
+        }
+    }
+
     fn sync_visibility_preferences(&mut self) -> Result<()> {
         self.config.project_visibility = self.projects.visibility_preferences();
         if let Some(path) = &self.config_path {
@@ -203,6 +253,48 @@ impl<C: AsanaClient> App<C> {
             .cloned()
             .into_iter()
             .collect()
+    }
+
+    fn task_target_project_ids(&self) -> Vec<String> {
+        self.task_target_projects()
+            .into_iter()
+            .map(|project| project.id)
+            .collect()
+    }
+
+    fn start_task_load(&mut self) {
+        let targets = self.task_target_projects();
+        debug_log(&format!(
+            "start_task_load: visible={} focus={:?} targets={}",
+            self.tasks.visible(),
+            self.tasks.focus_mode(),
+            targets
+                .iter()
+                .map(|project| project.id.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+
+        if targets.is_empty() {
+            self.tasks.finish_loading(crate::domain::TaskTableModel::empty());
+            return;
+        }
+
+        self.task_load_generation = self.task_load_generation.wrapping_add(1);
+        let generation = self.task_load_generation;
+        self.tasks.begin_loading(&targets);
+
+        let (sender, receiver) = mpsc::channel();
+        let client = self.client.clone();
+        self.task_load_receiver = Some(receiver);
+
+        thread::spawn(move || {
+            let result = crate::app::task_review::TaskReviewState::build_table_for_projects(
+                &client,
+                &targets,
+            );
+            let _ = sender.send(TaskLoadMessage { generation, result });
+        });
     }
 }
 
@@ -302,5 +394,35 @@ mod tests {
             keymap.action_for(&KeyBinding::Char('m')),
             Some(&Action::ToggleTaskMode)
         );
+    }
+
+    #[test]
+    fn app_marks_tasks_out_of_date_when_project_selection_changes() {
+        let client = FakeAsanaClient::new(vec![
+            Project::new("1", "Inbox", true),
+            Project::new("2", "Backlog", false),
+        ]);
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+
+        let table = crate::app::task_review::TaskReviewState::build_table_for_projects(
+            &app.client,
+            &[Project::new("1", "Inbox", true)],
+        )
+        .expect("table builds");
+        app.tasks.begin_loading(&[Project::new("1", "Inbox", true)]);
+        app.tasks.finish_loading(table);
+
+        assert_eq!(app.tasks.status(), &crate::app::task_review::TaskReviewStatus::Empty);
+
+        app.handle_action(&Action::MoveDown, 10).expect("move down");
+        app.handle_action(&Action::ToggleSelection, 10)
+            .expect("toggle selection");
+
+        assert!(matches!(
+            app.tasks.status(),
+            crate::app::task_review::TaskReviewStatus::OutOfDate(message)
+                if message.contains("switch to task view")
+        ));
     }
 }

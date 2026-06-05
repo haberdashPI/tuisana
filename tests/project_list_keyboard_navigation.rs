@@ -2,22 +2,23 @@ use tuisana::{
     app::App,
     asana::fake::FakeAsanaClient,
     config::Config,
-    ui::runtime::{run_project_list_session, KeySource},
+    ui::runtime::{run_project_list_session, InputEvent, KeySource},
     domain::Project,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{backend::TestBackend, Terminal};
+use std::time::Duration;
 
 struct ScriptedSource {
     keys: Vec<KeyEvent>,
 }
 
 impl KeySource for ScriptedSource {
-    fn next_key(&mut self) -> std::io::Result<Option<KeyEvent>> {
+    fn next_event(&mut self, _timeout: Duration) -> std::io::Result<InputEvent> {
         if self.keys.is_empty() {
-            Ok(None)
+            Ok(InputEvent::Closed)
         } else {
-            Ok(Some(self.keys.remove(0)))
+            Ok(InputEvent::Key(self.keys.remove(0)))
         }
     }
 }

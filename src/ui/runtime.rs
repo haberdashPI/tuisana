@@ -1,10 +1,10 @@
-use std::{io, io::Stdout};
+use std::{io, io::Stdout, time::Duration};
 
 use crossterm::event::{self, Event, KeyEvent};
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     prelude::*,
-    widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Terminal,
 };
 
@@ -15,27 +15,42 @@ use crate::{
     ui::task_table::render_task_table,
 };
 
+const PROJECT_VISIBLE_ROWS: usize = 4;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InputEvent {
+    Key(KeyEvent),
+    Tick,
+    Closed,
+}
+
 pub trait KeySource {
-    fn next_key(&mut self) -> io::Result<Option<KeyEvent>>;
+    fn next_event(&mut self, timeout: Duration) -> io::Result<InputEvent>;
 }
 
 pub struct CrosstermKeySource;
 
 impl KeySource for CrosstermKeySource {
-    fn next_key(&mut self) -> io::Result<Option<KeyEvent>> {
+    fn next_event(&mut self, timeout: Duration) -> io::Result<InputEvent> {
+        if !event::poll(timeout)? {
+            return Ok(InputEvent::Tick);
+        }
+
         loop {
             match event::read()? {
-                Event::Key(key_event) => {
-                    return Ok(Some(key_event));
-                }
+                Event::Key(key_event) => return Ok(InputEvent::Key(key_event)),
                 _ => {}
             }
         }
     }
 }
 
-fn draw<B: Backend, C: AsanaClient>(terminal: &mut Terminal<B>, app: &App<C>) -> io::Result<usize> {
+fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
+    terminal: &mut Terminal<B>,
+    app: &mut App<C>,
+) -> io::Result<usize> {
     let mut page_size = 1usize;
+    app.poll_task_load();
     terminal
         .draw(|frame| {
             let view = render_project_list(&app.projects);
@@ -43,7 +58,7 @@ fn draw<B: Backend, C: AsanaClient>(terminal: &mut Terminal<B>, app: &App<C>) ->
             let hint_height = view.hint_lines.len().max(1) as u16;
             let task_visible = app.tasks.visible();
             let project_height = if task_visible {
-                7u16.min(size.height.max(1))
+                project_panel_height(size.height, hint_height, view.rows.len())
             } else {
                 size.height
             };
@@ -91,36 +106,37 @@ fn draw<B: Backend, C: AsanaClient>(terminal: &mut Terminal<B>, app: &App<C>) ->
                     .constraints([
                         Constraint::Length(1),
                         Constraint::Length(1),
+                        Constraint::Length(1),
                         Constraint::Min(1),
                     ])
                     .split(task_area);
-                let task_view = render_task_table(&app.tasks);
+                let task_view = render_task_table(&app.tasks, task_chunks[3].width.saturating_sub(2) as usize);
 
                 frame.render_widget(Paragraph::new(task_view.title.as_str()), task_chunks[0]);
                 frame.render_widget(Paragraph::new(task_view.status_line.as_str()), task_chunks[1]);
+                frame.render_widget(Paragraph::new(task_view.scroll_hint_line.as_str()), task_chunks[2]);
 
-                let rows = task_view
-                    .rows
-                    .iter()
-                    .map(|row| Row::new(row.iter().cloned().map(Cell::from)))
-                    .collect::<Vec<_>>();
-                let widths = task_column_widths(task_view.columns.len());
-                let table = Table::new(rows, widths)
-                    .header(Row::new(
-                        task_view
-                            .columns
-                            .iter()
-                            .cloned()
-                            .map(Cell::from)
-                            .collect::<Vec<_>>(),
-                    ))
-                    .block(Block::default().borders(Borders::ALL).title("Tasks"))
-                    .highlight_symbol("> ");
-                let mut table_state = table_state(app.tasks.selected_index());
-                frame.render_stateful_widget(table, task_chunks[2], &mut table_state);
+                let body = Paragraph::new(crate::ui::task_table::build_task_lines(
+                    &task_view,
+                    app.tasks.selected_index(),
+                    task_chunks[3].width.saturating_sub(2) as usize,
+                ))
+                .block(Block::default().borders(Borders::ALL).title("Tasks"))
+                ;
+                frame.render_widget(body, task_chunks[3]);
             }
         })
         .map(|_| page_size)
+}
+
+fn project_panel_height(total_height: u16, hint_height: u16, row_count: usize) -> u16 {
+    let visible_rows = row_count.max(3).min(PROJECT_VISIBLE_ROWS) as u16;
+    let desired_height = 3u16
+        .saturating_add(hint_height)
+        .saturating_add(2)
+        .saturating_add(visible_rows);
+
+    desired_height.min(total_height.max(1))
 }
 
 fn list_state(selected: Option<usize>) -> ListState {
@@ -129,56 +145,43 @@ fn list_state(selected: Option<usize>) -> ListState {
     state
 }
 
-fn table_state(selected: Option<usize>) -> TableState {
-    let mut state = TableState::default();
-    state.select(selected);
-    state
-}
-
-fn task_column_widths(column_count: usize) -> Vec<Constraint> {
-    let mut widths = vec![
-        Constraint::Length(20),
-        Constraint::Length(14),
-        Constraint::Length(14),
-        Constraint::Length(12),
-        Constraint::Length(12),
-        Constraint::Length(8),
-        Constraint::Length(18),
-    ];
-    while widths.len() < column_count {
-        widths.push(Constraint::Length(16));
-    }
-    widths.truncate(column_count);
-    widths
-}
-
 pub fn run_project_list_session<C, S, B>(
     app: &mut App<C>,
     source: &mut S,
     terminal: &mut Terminal<B>,
 ) -> io::Result<()>
 where
-    C: AsanaClient,
+    C: AsanaClient + Clone + Send + 'static,
     S: KeySource,
     B: Backend,
 {
+    const TICK_RATE: Duration = Duration::from_millis(100);
+
     let mut page_size = draw(terminal, app)?;
     let keymap = app.keymap().map_err(|err| io::Error::other(err.to_string()))?;
 
-    while let Some(key_event) = source.next_key()? {
-        match app.handle_key_event(&keymap, key_event, page_size) {
-            Ok(Some(crate::input::AppCommand::Quit)) => break,
-            Ok(Some(crate::input::AppCommand::Refresh)) => {
-                app.load_projects()
-                    .map_err(|err| io::Error::other(err.to_string()))?;
+    loop {
+        match source.next_event(TICK_RATE)? {
+            InputEvent::Key(key_event) => {
+                match app.handle_key_event(&keymap, key_event, page_size) {
+                    Ok(Some(crate::input::AppCommand::Quit)) => break,
+                    Ok(Some(crate::input::AppCommand::Refresh)) => {
+                        app.load_projects()
+                            .map_err(|err| io::Error::other(err.to_string()))?;
+                        page_size = draw(terminal, app)?;
+                    }
+                    Ok(None) => {
+                        page_size = draw(terminal, app)?;
+                    }
+                    Err(err) => {
+                        return Err(io::Error::other(err.to_string()));
+                    }
+                }
+            }
+            InputEvent::Tick => {
                 page_size = draw(terminal, app)?;
             }
-            Ok(None) => {
-                page_size = draw(terminal, app)?;
-            }
-            Err(err) => {
-                return Err(io::Error::other(err.to_string()));
-            }
+            InputEvent::Closed => break,
         }
     }
 
@@ -191,7 +194,7 @@ pub fn run_project_list_app<C, S>(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
 ) -> io::Result<()>
 where
-    C: AsanaClient,
+    C: AsanaClient + Clone + Send + 'static,
     S: KeySource,
 {
     crossterm::terminal::enable_raw_mode()?;
@@ -207,20 +210,21 @@ mod tests {
 
     use crate::{asana::fake::FakeAsanaClient, config::Config, domain::Project};
 
-    use super::{run_project_list_session, KeySource};
+    use super::{run_project_list_session, InputEvent, KeySource};
     use crate::app::App;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::time::Duration;
 
     struct ScriptedSource {
         keys: Vec<KeyEvent>,
     }
 
     impl KeySource for ScriptedSource {
-        fn next_key(&mut self) -> io::Result<Option<KeyEvent>> {
+        fn next_event(&mut self, _timeout: Duration) -> io::Result<InputEvent> {
             if self.keys.is_empty() {
-                Ok(None)
+                Ok(InputEvent::Closed)
             } else {
-                Ok(Some(self.keys.remove(0)))
+                Ok(InputEvent::Key(self.keys.remove(0)))
             }
         }
     }
@@ -255,5 +259,12 @@ mod tests {
 
         assert!(lines.iter().any(|line| line.contains("Projects")));
         assert!(lines.iter().any(|line| line.contains("Backlog")));
+    }
+
+    #[test]
+    fn project_panel_keeps_space_for_rows_when_tasks_are_visible() {
+        assert_eq!(super::project_panel_height(40, 1, 20), 10);
+        assert_eq!(super::project_panel_height(40, 2, 1), 10);
+        assert_eq!(super::project_panel_height(8, 1, 20), 8);
     }
 }

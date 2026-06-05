@@ -25,7 +25,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = HttpAsanaClient::from_config(auth)?;
     let mut app = App::with_config_path("tuisana.toml", config, client);
     app.load_projects()?;
-    app.load_tasks()?;
 
     let mut source = CrosstermKeySource;
     let mut stdout = std::io::stdout();

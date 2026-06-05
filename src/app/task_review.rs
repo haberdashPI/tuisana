@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    time::Instant,
+};
 
 use crate::{
     app::debug_log,
@@ -10,6 +13,8 @@ use crate::{
     error::Result,
     input::Action,
 };
+
+const HORIZONTAL_SCROLL_STEP: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TaskFocusMode {
@@ -23,6 +28,7 @@ pub enum TaskReviewStatus {
     Idle,
     Loading,
     Ready,
+    OutOfDate(String),
     Empty,
     Error(String),
 }
@@ -40,6 +46,11 @@ pub struct TaskReviewState {
     status: TaskReviewStatus,
     selected: Option<usize>,
     table: TaskTableModel,
+    horizontal_scroll: usize,
+    loading_started_at: Option<Instant>,
+    loading_targets: Vec<String>,
+    loading_target_ids: Vec<String>,
+    loaded_target_ids: Vec<String>,
 }
 
 impl TaskReviewState {
@@ -53,8 +64,8 @@ impl TaskReviewState {
 
     pub fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
-        if self.visible && self.selected.is_none() && !self.table.rows.is_empty() {
-            self.selected = Some(0);
+        if self.visible && self.selected.is_none() {
+            self.selected = self.table.first_selectable_row_index();
         }
     }
 
@@ -76,6 +87,76 @@ impl TaskReviewState {
         }
     }
 
+    pub fn begin_loading(&mut self, projects: &[Project]) {
+        self.status = TaskReviewStatus::Loading;
+        self.selected = None;
+        self.table = TaskTableModel::empty();
+        self.horizontal_scroll = 0;
+        self.loading_started_at = Some(Instant::now());
+        self.loading_targets = projects.iter().map(|project| project.name.clone()).collect();
+        self.loading_target_ids = projects.iter().map(|project| project.id.clone()).collect();
+        self.loaded_target_ids.clear();
+    }
+
+    pub fn finish_loading(&mut self, table: TaskTableModel) {
+        self.table = table;
+        self.horizontal_scroll = 0;
+        self.selected = self.table.first_selectable_row_index();
+        self.loaded_target_ids = self.loading_target_ids.clone();
+        self.status = if self.table.task_count() == 0 {
+            TaskReviewStatus::Empty
+        } else {
+            TaskReviewStatus::Ready
+        };
+        self.loading_started_at = None;
+        self.loading_targets.clear();
+        self.loading_target_ids.clear();
+    }
+
+    pub fn mark_out_of_date(&mut self, message: impl Into<String>) {
+        if matches!(self.status, TaskReviewStatus::Idle) {
+            return;
+        }
+
+        self.status = TaskReviewStatus::OutOfDate(message.into());
+        self.loading_started_at = None;
+        self.loading_targets.clear();
+        self.loading_target_ids.clear();
+    }
+
+    pub fn set_error(&mut self, message: impl Into<String>) {
+        self.status = TaskReviewStatus::Error(message.into());
+        self.selected = None;
+        self.table = TaskTableModel::empty();
+        self.horizontal_scroll = 0;
+        self.loading_started_at = None;
+        self.loading_targets.clear();
+        self.loading_target_ids.clear();
+        self.loaded_target_ids.clear();
+    }
+
+    pub fn loading_started_at(&self) -> Option<Instant> {
+        self.loading_started_at
+    }
+
+    pub fn loading_targets(&self) -> &[String] {
+        &self.loading_targets
+    }
+
+    pub fn loaded_target_ids(&self) -> &[String] {
+        &self.loaded_target_ids
+    }
+
+    pub fn loading_spinner(&self) -> &'static str {
+        const FRAMES: [&str; 4] = ["|", "/", "-", "\\"];
+        let elapsed = self
+            .loading_started_at
+            .map(|started| started.elapsed().as_millis())
+            .unwrap_or_default();
+        let index = ((elapsed / 120) as usize) % FRAMES.len();
+        FRAMES[index]
+    }
+
     pub fn status(&self) -> &TaskReviewStatus {
         &self.status
     }
@@ -88,22 +169,45 @@ impl TaskReviewState {
         self.selected
     }
 
+    pub fn selected_task_position(&self) -> Option<usize> {
+        self.selected
+            .and_then(|index| self.table.selectable_position(index))
+    }
+
+    pub fn horizontal_scroll(&self) -> usize {
+        self.horizontal_scroll
+    }
+
+    pub fn scroll_left(&mut self) {
+        self.horizontal_scroll = self.horizontal_scroll.saturating_sub(HORIZONTAL_SCROLL_STEP);
+    }
+
+    pub fn scroll_right(&mut self) {
+        self.horizontal_scroll = self.horizontal_scroll.saturating_add(HORIZONTAL_SCROLL_STEP);
+    }
+
     pub fn load_for_projects<C: AsanaClient>(
         &mut self,
         client: &C,
         projects: &[Project],
     ) -> Result<()> {
+        debug_log(&format!("task load start: project_count={}", projects.len()));
+        let table = Self::build_table_for_projects(client, projects)?;
+        self.finish_loading(table);
         debug_log(&format!(
-            "task load start: project_count={}",
-            projects.len()
+            "task load complete: tasks={} columns={}",
+            self.table.task_count(),
+            self.table.columns.len()
         ));
-        self.status = TaskReviewStatus::Loading;
+        Ok(())
+    }
 
+    pub fn build_table_for_projects<C: AsanaClient>(
+        client: &C,
+        projects: &[Project],
+    ) -> Result<TaskTableModel> {
         if projects.is_empty() {
-            self.table = TaskTableModel::empty();
-            self.selected = None;
-            self.status = TaskReviewStatus::Empty;
-            return Ok(());
+            return Ok(TaskTableModel::empty());
         }
 
         let mut records = Vec::new();
@@ -138,92 +242,63 @@ impl TaskReviewState {
                 tasks.len()
             ));
             for task in tasks {
-                add_task_record(
-                    &mut records,
-                    &project.name,
-                    &section_map,
-                    task,
-                );
+                add_task_record(&mut records, &project.name, &section_map, task);
             }
         }
 
-        let definitions = definitions_by_gid
+        let mut definitions = definitions_by_gid
             .into_iter()
             .map(|(gid, name)| CustomFieldDefinition::new(gid, name))
             .collect::<Vec<_>>();
-
-        let mut definitions = definitions;
         definitions.sort_by(|left, right| left.name.cmp(&right.name).then_with(|| left.gid.cmp(&right.gid)));
 
-        self.table = TaskTableModel::from_records(records, definitions);
-        self.selected = if self.table.rows.is_empty() {
-            None
-        } else {
-            Some(0)
-        };
-        self.status = if self.table.rows.is_empty() {
-            TaskReviewStatus::Empty
-        } else {
-            TaskReviewStatus::Ready
-        };
-        debug_log(&format!(
-            "task load complete: rows={} columns={}",
-            self.table.rows.len(),
-            self.table.columns.len()
-        ));
-        Ok(())
+        Ok(TaskTableModel::from_records(records, definitions))
     }
 
     pub fn move_up(&mut self) {
-        match self.selected {
-            Some(0) | None => {}
-            Some(index) => self.selected = Some(index - 1),
+        if let Some(index) = self.selected {
+            if let Some(previous) = self.table.previous_selectable_row_index(index, 1) {
+                self.selected = Some(previous);
+            }
         }
     }
 
     pub fn move_down(&mut self) {
         if let Some(index) = self.selected {
-            if index + 1 < self.table.rows.len() {
-                self.selected = Some(index + 1);
+            if let Some(next) = self.table.next_selectable_row_index(index, 1) {
+                self.selected = Some(next);
             }
-        } else if !self.table.rows.is_empty() {
-            self.selected = Some(0);
+        } else {
+            self.selected = self.table.first_selectable_row_index();
         }
     }
 
     pub fn page_up(&mut self, page_size: usize) {
         let step = page_size.max(1);
-        match self.selected {
-            Some(0) | None => {}
-            Some(index) => self.selected = Some(index.saturating_sub(step)),
+        if let Some(index) = self.selected {
+            if let Some(previous) = self.table.previous_selectable_row_index(index, step) {
+                self.selected = Some(previous);
+            }
         }
     }
 
     pub fn page_down(&mut self, page_size: usize) {
         let step = page_size.max(1);
         if let Some(index) = self.selected {
-            if index + 1 < self.table.rows.len() {
-                self.selected = Some((index + step).min(self.table.rows.len() - 1));
+            if let Some(next) = self.table.next_selectable_row_index(index, step) {
+                self.selected = Some(next);
             }
-        } else if !self.table.rows.is_empty() {
-            self.selected = Some(0);
+        } else {
+            self.selected = self.table.first_selectable_row_index();
         }
     }
 
     pub fn jump_top(&mut self) {
-        self.selected = if self.table.rows.is_empty() {
-            None
-        } else {
-            Some(0)
-        };
+        self.selected = self.table.first_selectable_row_index();
     }
 
     pub fn jump_bottom(&mut self) {
-        self.selected = if self.table.rows.is_empty() {
-            None
-        } else {
-            Some(self.table.rows.len() - 1)
-        };
+        self.selected = self.table.last_selectable_row_index();
     }
 
     pub fn apply_action(&mut self, action: &Action, page_size: usize) -> Option<crate::input::AppCommand> {
@@ -250,6 +325,14 @@ impl TaskReviewState {
             }
             Action::JumpBottom => {
                 self.jump_bottom();
+                None
+            }
+            Action::ScrollLeft => {
+                self.scroll_left();
+                None
+            }
+            Action::ScrollRight => {
+                self.scroll_right();
                 None
             }
             _ => None,
@@ -427,14 +510,22 @@ mod tests {
         assert_eq!(state.table().columns[0], "Task");
         assert!(state.table().columns.iter().any(|column| column == "Priority"));
         assert!(state.table().columns.iter().any(|column| column == "Effort"));
-        assert_eq!(state.table().rows.len(), 2);
-        assert_eq!(state.table().rows[0].cells[0], "Ship release");
-        assert_eq!(state.table().rows[0].cells[1], "Today | Later");
-        assert_eq!(state.table().rows[0].cells[2], "Alex");
-        assert_eq!(state.table().rows[0].cells[3], "2026-06-01");
-        assert_eq!(state.table().rows[0].cells[4], "2026-05-28");
-        assert_eq!(state.table().rows[0].cells[5], "open");
-        assert_eq!(state.table().rows[0].cells[6], "Inbox | Backlog");
+        assert_eq!(state.table().task_count(), 2);
+        assert_eq!(state.table().rows.len(), 4);
+        assert_eq!(state.table().rows[0].kind, crate::domain::TaskRowKind::ProjectHeader);
+        assert_eq!(state.table().rows[0].cells[0], "Backlog");
+        assert_eq!(state.table().rows[1].kind, crate::domain::TaskRowKind::Task);
+        assert_eq!(state.table().rows[1].cells[0], "Ship release");
+        assert_eq!(state.table().rows[1].cells[1], "Later | Today");
+        assert_eq!(state.table().rows[1].cells[2], "Alex");
+        assert_eq!(state.table().rows[1].cells[3], "2026-06-01");
+        assert_eq!(state.table().rows[1].cells[4], "2026-05-28");
+        assert_eq!(state.table().rows[1].cells[5], "open");
+        assert_eq!(state.table().rows[1].cells[6], "Backlog | Inbox");
+        assert_eq!(state.table().rows[2].kind, crate::domain::TaskRowKind::ProjectHeader);
+        assert_eq!(state.table().rows[2].cells[0], "Inbox");
+        assert_eq!(state.table().rows[3].kind, crate::domain::TaskRowKind::Task);
+        assert_eq!(state.table().rows[3].cells[0], "Write docs");
     }
 
     #[test]

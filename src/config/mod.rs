@@ -300,6 +300,14 @@ fn default_bindings() -> Vec<Bind> {
             key: "ctrl-d".to_string(),
             command: "page_down".to_string(),
         },
+        Bind {
+            key: "left".to_string(),
+            command: "scroll_left".to_string(),
+        },
+        Bind {
+            key: "right".to_string(),
+            command: "scroll_right".to_string(),
+        },
     ]
 }
 

@@ -14,6 +14,8 @@ pub enum KeyBinding {
     Backspace,
     Home,
     End,
+    Left,
+    Right,
     Up,
     Down,
     PageUp,
@@ -31,6 +33,8 @@ impl FromStr for KeyBinding {
             "backspace" => Ok(Self::Backspace),
             "home" => Ok(Self::Home),
             "end" => Ok(Self::End),
+            "left" => Ok(Self::Left),
+            "right" => Ok(Self::Right),
             "up" => Ok(Self::Up),
             "down" => Ok(Self::Down),
             "pageup" | "page-up" => Ok(Self::PageUp),
@@ -59,6 +63,8 @@ impl KeyBinding {
             KeyCode::Backspace => Some(Self::Backspace),
             KeyCode::Home => Some(Self::Home),
             KeyCode::End => Some(Self::End),
+            KeyCode::Left => Some(Self::Left),
+            KeyCode::Right => Some(Self::Right),
             KeyCode::Up => Some(Self::Up),
             KeyCode::Down => Some(Self::Down),
             KeyCode::PageUp => Some(Self::PageUp),
@@ -97,6 +103,8 @@ pub enum Action {
     JumpBottom,
     PageUp,
     PageDown,
+    ScrollLeft,
+    ScrollRight,
 }
 
 impl Action {
@@ -129,6 +137,8 @@ impl Action {
             "jump_bottom" => Ok(Self::JumpBottom),
             "page_up" => Ok(Self::PageUp),
             "page_down" => Ok(Self::PageDown),
+            "scroll_left" => Ok(Self::ScrollLeft),
+            "scroll_right" => Ok(Self::ScrollRight),
             other => Err(Error::Backend(format!("unsupported command: {other}"))),
         }
     }
@@ -180,6 +190,8 @@ impl Display for Action {
             Action::JumpBottom => "jump_bottom",
             Action::PageUp => "page_up",
             Action::PageDown => "page_down",
+            Action::ScrollLeft => "scroll_left",
+            Action::ScrollRight => "scroll_right",
         };
         f.write_str(name)
     }
@@ -260,6 +272,11 @@ mod tests {
         );
         assert_eq!("home".parse::<KeyBinding>().expect("home parses"), KeyBinding::Home);
         assert_eq!("end".parse::<KeyBinding>().expect("end parses"), KeyBinding::End);
+        assert_eq!("left".parse::<KeyBinding>().expect("left parses"), KeyBinding::Left);
+        assert_eq!(
+            "right".parse::<KeyBinding>().expect("right parses"),
+            KeyBinding::Right
+        );
         assert_eq!("space".parse::<KeyBinding>().expect("space parses"), KeyBinding::Char(' '));
         assert_eq!("page-up".parse::<KeyBinding>().expect("page-up parses"), KeyBinding::PageUp);
         assert_eq!(Action::from_command("open").expect("open parses"), Action::Open);
@@ -289,6 +306,14 @@ mod tests {
             Action::SearchRegex
         );
         assert_eq!(Action::from_command("jump_top").expect("jump_top parses"), Action::JumpTop);
+        assert_eq!(
+            Action::from_command("scroll_left").expect("scroll_left parses"),
+            Action::ScrollLeft
+        );
+        assert_eq!(
+            Action::from_command("scroll_right").expect("scroll_right parses"),
+            Action::ScrollRight
+        );
     }
 
     #[test]

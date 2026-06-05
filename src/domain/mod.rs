@@ -3,5 +3,6 @@ mod task;
 
 pub use project::Project;
 pub use task::{
-    CustomFieldColumn, CustomFieldDefinition, Section, TaskRecord, TaskRow, TaskTableModel,
+    CustomFieldColumn, CustomFieldDefinition, Section, TaskRecord, TaskRow, TaskRowKind,
+    TaskTableModel,
 };

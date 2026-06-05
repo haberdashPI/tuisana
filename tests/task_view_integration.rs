@@ -1,5 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{backend::TestBackend, Terminal};
+use std::{thread, time::Duration};
 use tuisana::{
     app::App,
     asana::{
@@ -11,19 +12,24 @@ use tuisana::{
     },
     config::Config,
     domain::Project,
-    ui::runtime::{run_project_list_session, KeySource},
+    ui::runtime::{run_project_list_session, InputEvent, KeySource},
 };
 
 struct ScriptedSource {
     keys: Vec<KeyEvent>,
+    wait_before_next: bool,
 }
 
 impl KeySource for ScriptedSource {
-    fn next_key(&mut self) -> std::io::Result<Option<KeyEvent>> {
+    fn next_event(&mut self, _timeout: Duration) -> std::io::Result<InputEvent> {
         if self.keys.is_empty() {
-            Ok(None)
+            Ok(InputEvent::Closed)
         } else {
-            Ok(Some(self.keys.remove(0)))
+            if self.wait_before_next {
+                thread::sleep(Duration::from_millis(200));
+            }
+            self.wait_before_next = true;
+            Ok(InputEvent::Key(self.keys.remove(0)))
         }
     }
 }
@@ -87,8 +93,10 @@ fn pressing_m_displays_the_task_view() {
     let mut source = ScriptedSource {
         keys: vec![
             KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
         ],
+        wait_before_next: false,
     };
     let backend = TestBackend::new(80, 20);
     let mut terminal = Terminal::new(backend).expect("terminal");
@@ -97,7 +105,9 @@ fn pressing_m_displays_the_task_view() {
 
     assert!(app.tasks.visible());
     assert_eq!(app.tasks.focus_mode(), tuisana::app::task_review::TaskFocusMode::Tasks);
-    assert_eq!(app.tasks.table().rows.len(), 1);
+    assert_eq!(app.tasks.table().task_count(), 1);
+    assert_eq!(app.tasks.status(), &tuisana::app::task_review::TaskReviewStatus::Ready);
+    assert!(app.tasks.horizontal_scroll() > 0);
 
     let buffer = terminal.backend_mut().buffer().clone();
     let text = buffer
@@ -109,7 +119,5 @@ fn pressing_m_displays_the_task_view() {
 
     assert!(text.contains("Task review"));
     assert!(text.contains("Tasks"));
-    assert!(text.contains("Ship rele"));
     assert!(text.contains("Today"));
-    assert!(text.contains("Priority"));
 }
