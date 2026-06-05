@@ -2,18 +2,18 @@ use tuisana::{
     app::App,
     asana::fake::FakeAsanaClient,
     config::Config,
-    input::KeyBinding,
     ui::runtime::{run_project_list_session, KeySource},
     domain::Project,
 };
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{backend::TestBackend, Terminal};
 
 struct ScriptedSource {
-    keys: Vec<KeyBinding>,
+    keys: Vec<KeyEvent>,
 }
 
 impl KeySource for ScriptedSource {
-    fn next_key(&mut self) -> std::io::Result<Option<KeyBinding>> {
+    fn next_key(&mut self) -> std::io::Result<Option<KeyEvent>> {
         if self.keys.is_empty() {
             Ok(None)
         } else {
@@ -32,7 +32,10 @@ fn keyboard_input_moves_project_selection() {
     app.load_projects().expect("projects load");
 
     let mut source = ScriptedSource {
-        keys: vec![KeyBinding::Char('j'), KeyBinding::Char('q')],
+        keys: vec![
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        ],
     };
     let backend = TestBackend::new(60, 10);
     let mut terminal = Terminal::new(backend).expect("terminal");

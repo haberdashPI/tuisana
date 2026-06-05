@@ -1,6 +1,6 @@
 use std::{io, io::Stdout};
 
-use crossterm::event::{self, Event};
+use crossterm::event::{self, Event, KeyEvent};
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     prelude::*,
@@ -11,24 +11,21 @@ use ratatui::{
 use crate::{
     app::App,
     asana::AsanaClient,
-    input::{AppCommand, KeyBinding},
     ui::project_list::render_project_list,
 };
 
 pub trait KeySource {
-    fn next_key(&mut self) -> io::Result<Option<KeyBinding>>;
+    fn next_key(&mut self) -> io::Result<Option<KeyEvent>>;
 }
 
 pub struct CrosstermKeySource;
 
 impl KeySource for CrosstermKeySource {
-    fn next_key(&mut self) -> io::Result<Option<KeyBinding>> {
+    fn next_key(&mut self) -> io::Result<Option<KeyEvent>> {
         loop {
             match event::read()? {
                 Event::Key(key_event) => {
-                    if let Some(binding) = KeyBinding::from_crossterm_event(key_event) {
-                        return Ok(Some(binding));
-                    }
+                    return Ok(Some(key_event));
                 }
                 _ => {}
             }
@@ -95,22 +92,21 @@ where
     B: Backend,
 {
     draw(terminal, app)?;
-    let keymap = app
-        .keymap()
-        .map_err(|err| io::Error::other(err.to_string()))?;
+    let keymap = app.keymap().map_err(|err| io::Error::other(err.to_string()))?;
 
-    while let Some(key) = source.next_key()? {
-        if let Some(action) = keymap.action_for(&key).cloned() {
-            match app.handle_action(&action) {
-                Some(AppCommand::Quit) => break,
-                Some(AppCommand::Refresh) => {
-                    app.load_projects()
-                        .map_err(|err| io::Error::other(err.to_string()))?;
-                    draw(terminal, app)?;
-                }
-                None => {
-                    draw(terminal, app)?;
-                }
+    while let Some(key_event) = source.next_key()? {
+        match app.handle_key_event(&keymap, key_event) {
+            Ok(Some(crate::input::AppCommand::Quit)) => break,
+            Ok(Some(crate::input::AppCommand::Refresh)) => {
+                app.load_projects()
+                    .map_err(|err| io::Error::other(err.to_string()))?;
+                draw(terminal, app)?;
+            }
+            Ok(None) => {
+                draw(terminal, app)?;
+            }
+            Err(err) => {
+                return Err(io::Error::other(err.to_string()));
             }
         }
     }
@@ -141,14 +137,15 @@ mod tests {
     use crate::{asana::fake::FakeAsanaClient, config::Config, domain::Project};
 
     use super::{run_project_list_session, KeySource};
-    use crate::{app::App, input::KeyBinding};
+    use crate::app::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     struct ScriptedSource {
-        keys: Vec<KeyBinding>,
+        keys: Vec<KeyEvent>,
     }
 
     impl KeySource for ScriptedSource {
-        fn next_key(&mut self) -> io::Result<Option<KeyBinding>> {
+        fn next_key(&mut self) -> io::Result<Option<KeyEvent>> {
             if self.keys.is_empty() {
                 Ok(None)
             } else {
@@ -167,7 +164,10 @@ mod tests {
         app.load_projects().expect("projects load");
 
         let mut source = ScriptedSource {
-            keys: vec![KeyBinding::Char('j'), KeyBinding::Char('q')],
+            keys: vec![
+                KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+            ],
         };
         let backend = TestBackend::new(60, 10);
         let mut terminal = Terminal::new(backend).expect("terminal");

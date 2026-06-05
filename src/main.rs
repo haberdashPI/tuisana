@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_ref()
         .ok_or_else(|| std::io::Error::other("missing [auth] config in tuisana.toml"))?;
     let client = HttpAsanaClient::from_config(auth)?;
-    let mut app = App::new(config, client);
+    let mut app = App::with_config_path("tuisana.toml", config, client);
     app.load_projects()?;
 
     let mut source = CrosstermKeySource;

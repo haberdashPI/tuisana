@@ -183,8 +183,6 @@ Deliverables:
 - key binding config schema
 - key-to-action resolution
 - basic navigation commands such as up, down, page up/down, open, refresh, quit
-- starred projects are shown at the top
-- projects can be filtered by user configurable "show" list (other items only show up with a toggle)
 
 Implementation notes:
 
@@ -198,7 +196,100 @@ Acceptance criteria:
 - key bindings are configurable from TOML
 - tests cover config parsing and action mapping
 
-## Milestone 4: Review tasks for one or many projects
+## Milestone 4: Project visibility management
+
+Goal:
+
+- let users mark projects as starred or hidden and persist those preferences in `tuisana.toml`
+- keep hidden projects available behind a toggle, with a visible marker and hint between
+the unhidden projects and the (visible or invisible) hidden projects
+- sort starred projects before unstarred projects, and place hidden projects after the visible group when hidden items are shown
+
+Deliverables:
+
+- config schema for per-project visibility metadata
+- project list state for applying star and hidden preferences
+- ordering logic that groups starred projects first, then unstarred visible projects, then hidden projects when visible
+- UI markers and hints that make hidden projects obvious in the list
+- toggle handling for showing and hiding the hidden group
+
+Implementation notes:
+
+- keep visibility preferences explicit and stored in the existing TOML config
+- make the hidden-project toggle affect presentation only, not the underlying project data
+- preserve deterministic ordering within each visibility group
+- keep the marker and hint unobtrusive but easy to notice
+
+Acceptance criteria:
+
+- starred projects appear before non-starred projects
+- hidden projects can be toggled visible and hidden
+- when visible, hidden projects appear after the remaining projects
+- hidden projects have an obvious marker and a hint explaining how to toggle their visibility
+- tests cover the ordering and visibility toggling behavior
+
+## Milestone 5: Multi-select project management
+
+goal:
+
+- let users manage the project view directly from the list
+- support selecting multiple projects for bulk actions
+- support filtering the project list with fuzzy, substring, and regex search modes
+- let users focus the view down to only selected projects when needed
+
+Deliverables:
+
+- multi-select project state in the project view
+- bulk actions for toggling starred and hidden state on the selected projects
+- search/filter state with toggles for fuzzy, substring, and regex matching
+- selected-project count in the status area
+- a toggle to show only the selected projects
+- selection behavior that remains stable even when filtering hides rows
+
+Implementation notes:
+
+- keep selection state separate from filter state so hidden rows can remain selected
+- treat filter mode as presentation only, not as a destructive data change
+- make bulk actions apply to the current selected set, not just the cursor row
+- preserve deterministic ordering for filtered and selected subsets
+- keep the search mode shortcuts small and explicit
+
+Acceptance criteria:
+
+- multiple projects can be selected in the project view
+- bulk toggles can mark selected projects starred or hidden
+- the status line shows how many projects are selected
+- filter mode can be switched between fuzzy, substring, and regex matching
+- filtered-out rows do not lose their selection state
+- a toggle exists to show only selected projects
+- tests cover selection, bulk actions, and filter-mode behavior
+
+### Milestone 5.5: improve selection commands
+
+Improve the usability of project search and selection
+
+- add commands to:
+    - clear the search string (revealing all items)
+    - select all visible items
+    - invert the selection (for visible items)
+    - jump to the top or bottom
+    - undo/redo selection actions
+- fix page up and down: should jump by page size, right now just jumps one item
+- only show certain commands within a given context:
+  - only showing when search is non-empty:
+    - search toggles (for regex, fuzzy and substring)
+    - command to clear search
+  - only show the various selection modifiers when there is at least one item selected
+    - clear selection
+    - invert selection
+    - select all
+- add a more visually promenant label of the current search state:
+    - currently awaiting search input
+    - not searching
+    - search text is entered
+    - search mode (fuzzy, regex, substring)
+
+## Milestone 6: Review tasks for one or many projects
 
 Goal:
 
@@ -236,7 +327,7 @@ Acceptance criteria:
 - table columns include key fields and project-specific fields
 - tests cover field mapping and multi-project merging
 
-## Milestone 5: Navigate, filter, and sort tasks
+## Milestone 7: Navigate, filter, and sort tasks
 
 Goal:
 
@@ -267,7 +358,7 @@ Acceptance criteria:
 - sorting is deterministic
 - tests cover filter and sort combinations
 
-## Milestone 6: Edit tasks
+## Milestone 8: Edit tasks
 
 Goal:
 
@@ -297,7 +388,7 @@ Acceptance criteria:
 - date updates work
 - tests cover parsing, validation, and mutation application
 
-## Milestone 7: Hardening and polish
+## Milestone 9: Hardening and polish
 
 Goal:
 
@@ -380,10 +471,12 @@ Implement in this order:
 2. project list
 3. Asana API setup
 4. navigation and key bindings
-5. task review table
-6. filtering and sorting
-7. editing
-8. hardening and polish, including browser-based Asana login
+5. project visibility management
+6. multi-select project management
+7. task review table
+8. filtering and sorting
+9. editing
+10. hardening and polish, including browser-based Asana login
 
 ## Definition of Done
 

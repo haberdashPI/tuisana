@@ -9,54 +9,14 @@ pub struct ProjectListView {
 }
 
 pub fn render_project_list(state: &ProjectListState) -> ProjectListView {
-    let status_line = match state.status() {
-        ProjectListStatus::Idle => "Project list idle".to_string(),
-        ProjectListStatus::Loading => "Loading projects...".to_string(),
-        ProjectListStatus::Ready => {
-            let visible_count = state.items().len();
-            let hidden_count = state.hidden_count();
-
-            if hidden_count == 0 {
-                format!("{visible_count} project(s)")
-            } else if state.hidden_visible() {
-                format!("{visible_count} project(s) including {hidden_count} hidden")
-            } else {
-                format!(
-                    "{visible_count} project(s), {hidden_count} hidden (press h to show)"
-                )
-            }
-        }
-        ProjectListStatus::Empty => {
-            let hidden_count = state.hidden_count();
-            if hidden_count == 0 {
-                "No projects".to_string()
-            } else if state.hidden_visible() {
-                format!("No visible projects, {hidden_count} hidden shown")
-            } else {
-                format!("No visible projects, {hidden_count} hidden (press h to show)")
-            }
-        }
-        ProjectListStatus::Error(message) => format!("Error: {message}"),
-    };
-
-    let hint_line = if state.hidden_count() > 0 {
-        if state.hidden_visible() {
-            "h: hide hidden projects, j/down: move down, k/up: move up, r: refresh, q/ctrl-c: quit"
-                .to_string()
-        } else {
-            "h: show hidden projects, j/down: move down, k/up: move up, r: refresh, q/ctrl-c: quit"
-                .to_string()
-        }
-    } else {
-        "j/down: move down, k/up: move up, r: refresh, q/ctrl-c: quit".to_string()
-    };
+    let status_line = build_status_line(state);
+    let hint_line = build_hint_line(state);
 
     let rows = state
         .items()
         .iter()
-        .enumerate()
-        .map(|(index, project)| {
-            let selected = if state.selected_index() == Some(index) { ">" } else { " " };
+        .map(|project| {
+            let selected = if state.is_selected(&project.id) { "[x]" } else { "[ ]" };
             let starred = if project.starred { "[*] " } else { "[ ] " };
             let hidden = if project.hidden { "[hidden] " } else { "" };
             format!("{selected} {starred}{hidden}{}", project.name)
@@ -91,12 +51,12 @@ mod tests {
         let view = render_project_list(&state);
 
         assert_eq!(view.title, "Projects");
-        assert_eq!(view.status_line, "2 project(s)");
+        assert_eq!(view.status_line, "2 visible, 0 selected");
         assert_eq!(
             view.hint_line,
-            "j/down: move down, k/up: move up, r: refresh, q/ctrl-c: quit"
+            "space: select, *: star selected, h: hide selected, v: toggle hidden projects, o: only selected, /: search, ctrl-f: fuzzy, ctrl-s: substring, ctrl-r: regex, r: refresh, q/ctrl-c: quit"
         );
-        assert_eq!(view.rows, vec!["> [*] Inbox", "  [ ] Backlog"]);
+        assert_eq!(view.rows, vec!["[ ] [*] Inbox", "[ ] [ ] Backlog"]);
     }
 
     #[test]
@@ -108,7 +68,7 @@ mod tests {
         assert_eq!(view.status_line, "No projects");
         assert_eq!(
             view.hint_line,
-            "j/down: move down, k/up: move up, r: refresh, q/ctrl-c: quit"
+            "space: select, *: star selected, h: hide selected, v: toggle hidden projects, o: only selected, /: search, ctrl-f: fuzzy, ctrl-s: substring, ctrl-r: regex, r: refresh, q/ctrl-c: quit"
         );
         assert!(view.rows.is_empty());
     }
@@ -129,14 +89,75 @@ mod tests {
 
         let view = render_project_list(&state);
 
-        assert_eq!(
-            view.status_line,
-            "1 project(s), 1 hidden (press h to show)"
-        );
+        assert_eq!(view.status_line, "1 visible, 0 selected, 1 hidden");
         assert_eq!(
             view.hint_line,
-            "h: show hidden projects, j/down: move down, k/up: move up, r: refresh, q/ctrl-c: quit"
+            "space: select, *: star selected, h: hide selected, v: toggle hidden projects, o: only selected, /: search, ctrl-f: fuzzy, ctrl-s: substring, ctrl-r: regex, r: refresh, q/ctrl-c: quit"
         );
-        assert_eq!(view.rows, vec!["> [ ] Visible"]);
+        assert_eq!(view.rows, vec!["[ ] [ ] Visible"]);
+    }
+}
+
+fn build_status_line(state: &ProjectListState) -> String {
+    if let Some(error) = state.search_error() {
+        return format!("Search error: {error}");
+    }
+
+    match state.status() {
+        ProjectListStatus::Idle => "Project list idle".to_string(),
+        ProjectListStatus::Loading => "Loading projects...".to_string(),
+        ProjectListStatus::Error(message) => format!("Error: {message}"),
+        ProjectListStatus::Empty => "No projects".to_string(),
+        ProjectListStatus::Ready => {
+            if state.items().is_empty() {
+                if !state.search_query().is_empty() {
+                    return format!("No projects match '{}'", state.search_query());
+                }
+
+                return "No projects match current filter".to_string();
+            }
+
+            let mut parts = vec![
+                format!("{} visible", state.items().len()),
+                format!("{} selected", state.selected_count()),
+            ];
+
+            if state.hidden_count() > 0 {
+                parts.push(format!("{} hidden", state.hidden_count()));
+            }
+
+            if !state.search_query().is_empty() {
+                parts.push(format!(
+                    "query {}: {}",
+                    match state.search_mode() {
+                        crate::app::project_list::SearchMode::Fuzzy => "fuzzy",
+                        crate::app::project_list::SearchMode::Substring => "substring",
+                        crate::app::project_list::SearchMode::Regex => "regex",
+                    },
+                    state.search_query()
+                ));
+            }
+
+            if state.show_selected_only() {
+                parts.push("selected only".to_string());
+            }
+
+            parts.join(", ")
+        }
+    }
+}
+
+fn build_hint_line(state: &ProjectListState) -> String {
+    let search_mode_hint = if state.search_active() {
+        format!("search: {} (enter/esc/backspace)", state.search_query())
+    } else {
+        String::new()
+    };
+
+    let base = "space: select, *: star selected, h: hide selected, v: toggle hidden projects, o: only selected, /: search, ctrl-f: fuzzy, ctrl-s: substring, ctrl-r: regex, r: refresh, q/ctrl-c: quit";
+    if search_mode_hint.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base} | {search_mode_hint}")
     }
 }

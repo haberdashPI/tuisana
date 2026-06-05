@@ -11,6 +11,7 @@ pub enum KeyBinding {
     Ctrl(char),
     Enter,
     Esc,
+    Backspace,
     Up,
     Down,
     PageUp,
@@ -25,10 +26,12 @@ impl FromStr for KeyBinding {
         match normalized.as_str() {
             "enter" => Ok(Self::Enter),
             "esc" | "escape" => Ok(Self::Esc),
+            "backspace" => Ok(Self::Backspace),
             "up" => Ok(Self::Up),
             "down" => Ok(Self::Down),
             "pageup" | "page-up" => Ok(Self::PageUp),
             "pagedown" | "page-down" => Ok(Self::PageDown),
+            "space" => Ok(Self::Char(' ')),
             _ if normalized.len() == 1 => Ok(Self::Char(normalized.chars().next().expect("len checked"))),
             _ if normalized.starts_with("ctrl-") && normalized.len() == 6 => {
                 Ok(Self::Ctrl(normalized.chars().last().expect("len checked")))
@@ -49,6 +52,7 @@ impl KeyBinding {
             KeyCode::Char(c) => Some(Self::Char(c.to_ascii_lowercase())),
             KeyCode::Enter => Some(Self::Enter),
             KeyCode::Esc => Some(Self::Esc),
+            KeyCode::Backspace => Some(Self::Backspace),
             KeyCode::Up => Some(Self::Up),
             KeyCode::Down => Some(Self::Down),
             KeyCode::PageUp => Some(Self::PageUp),
@@ -65,7 +69,15 @@ pub enum Action {
     MoveDown,
     Open,
     Refresh,
-    ToggleHidden,
+    StartSearch,
+    ToggleSelection,
+    ToggleOnlySelected,
+    ToggleStarredSelected,
+    ToggleHiddenSelected,
+    ToggleHiddenGroup,
+    SearchFuzzy,
+    SearchSubstring,
+    SearchRegex,
     PageUp,
     PageDown,
 }
@@ -78,7 +90,15 @@ impl Action {
             "move_down" => Ok(Self::MoveDown),
             "open" => Ok(Self::Open),
             "refresh" => Ok(Self::Refresh),
-            "toggle_hidden" => Ok(Self::ToggleHidden),
+            "start_search" => Ok(Self::StartSearch),
+            "toggle_selection" => Ok(Self::ToggleSelection),
+            "toggle_only_selected" => Ok(Self::ToggleOnlySelected),
+            "toggle_starred_selected" => Ok(Self::ToggleStarredSelected),
+            "toggle_hidden_selected" => Ok(Self::ToggleHiddenSelected),
+            "toggle_hidden_group" => Ok(Self::ToggleHiddenGroup),
+            "search_fuzzy" => Ok(Self::SearchFuzzy),
+            "search_substring" => Ok(Self::SearchSubstring),
+            "search_regex" => Ok(Self::SearchRegex),
             "page_up" => Ok(Self::PageUp),
             "page_down" => Ok(Self::PageDown),
             other => Err(Error::Backend(format!("unsupported command: {other}"))),
@@ -110,7 +130,15 @@ impl Display for Action {
             Action::MoveDown => "move_down",
             Action::Open => "open",
             Action::Refresh => "refresh",
-            Action::ToggleHidden => "toggle_hidden",
+            Action::StartSearch => "start_search",
+            Action::ToggleSelection => "toggle_selection",
+            Action::ToggleOnlySelected => "toggle_only_selected",
+            Action::ToggleStarredSelected => "toggle_starred_selected",
+            Action::ToggleHiddenSelected => "toggle_hidden_selected",
+            Action::ToggleHiddenGroup => "toggle_hidden_group",
+            Action::SearchFuzzy => "search_fuzzy",
+            Action::SearchSubstring => "search_substring",
+            Action::SearchRegex => "search_regex",
             Action::PageUp => "page_up",
             Action::PageDown => "page_down",
         };
@@ -159,6 +187,10 @@ mod tests {
                 key: "ctrl-u".to_string(),
                 command: "page_up".to_string(),
             },
+            Bind {
+                key: "space".to_string(),
+                command: "toggle_selection".to_string(),
+            },
         ])
         .expect("keymap parses");
 
@@ -171,12 +203,25 @@ mod tests {
     fn parses_key_aliases_and_commands() {
         assert_eq!("enter".parse::<KeyBinding>().expect("enter parses"), KeyBinding::Enter);
         assert_eq!("esc".parse::<KeyBinding>().expect("esc parses"), KeyBinding::Esc);
+        assert_eq!(
+            "backspace".parse::<KeyBinding>().expect("backspace parses"),
+            KeyBinding::Backspace
+        );
+        assert_eq!("space".parse::<KeyBinding>().expect("space parses"), KeyBinding::Char(' '));
         assert_eq!("page-up".parse::<KeyBinding>().expect("page-up parses"), KeyBinding::PageUp);
         assert_eq!(Action::from_command("open").expect("open parses"), Action::Open);
         assert_eq!(Action::from_command("refresh").expect("refresh parses"), Action::Refresh);
         assert_eq!(
-            Action::from_command("toggle_hidden").expect("toggle_hidden parses"),
-            Action::ToggleHidden
+            Action::from_command("toggle_selection").expect("toggle_selection parses"),
+            Action::ToggleSelection
+        );
+        assert_eq!(
+            Action::from_command("toggle_hidden_group").expect("toggle_hidden_group parses"),
+            Action::ToggleHiddenGroup
+        );
+        assert_eq!(
+            Action::from_command("search_regex").expect("search_regex parses"),
+            Action::SearchRegex
         );
     }
 
@@ -196,6 +241,7 @@ mod tests {
         assert_eq!(Action::Quit.as_app_command(), Some(AppCommand::Quit));
         assert_eq!(Action::Refresh.as_app_command(), Some(AppCommand::Refresh));
         assert_eq!(Action::MoveDown.as_app_command(), None);
-        assert_eq!(Action::ToggleHidden.as_app_command(), None);
+        assert_eq!(Action::ToggleSelection.as_app_command(), None);
+        assert_eq!(Action::ToggleHiddenSelected.as_app_command(), None);
     }
 }

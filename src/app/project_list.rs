@@ -1,3 +1,7 @@
+use std::collections::HashSet;
+
+use regex::RegexBuilder;
+
 use crate::{
     asana::AsanaClient,
     config::ProjectVisibilityConfig,
@@ -6,13 +10,27 @@ use crate::{
     input::{Action, AppCommand},
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SearchMode {
+    Fuzzy,
+    #[default]
+    Substring,
+    Regex,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectListState {
     all_projects: Vec<Project>,
-    projects: Vec<Project>,
+    visible_projects: Vec<Project>,
+    selected_ids: HashSet<String>,
     selected: Option<usize>,
     status: ProjectListStatus,
     show_hidden: bool,
+    show_selected_only: bool,
+    search_mode: SearchMode,
+    search_query: String,
+    search_active: bool,
+    search_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,7 +67,8 @@ impl ProjectListState {
             Ok(projects) => projects,
             Err(err) => {
                 self.all_projects.clear();
-                self.projects.clear();
+                self.visible_projects.clear();
+                self.selected_ids.clear();
                 self.selected = None;
                 self.status = ProjectListStatus::Error(err.to_string());
                 return Err(err);
@@ -58,8 +77,8 @@ impl ProjectListState {
         apply_visibility_preferences(&mut projects, visibility);
         sort_projects(&mut projects);
         self.all_projects = projects;
-        self.refresh_visible_projects(None);
-        self.status = if self.projects.is_empty() {
+        self.rebuild_visible_projects(None);
+        self.status = if self.all_projects.is_empty() {
             ProjectListStatus::Empty
         } else {
             ProjectListStatus::Ready
@@ -79,13 +98,19 @@ impl ProjectListState {
         sort_projects(&mut projects);
         let mut state = Self {
             all_projects: projects,
-            projects: Vec::new(),
+            visible_projects: Vec::new(),
+            selected_ids: HashSet::new(),
             selected: None,
             status: ProjectListStatus::Idle,
             show_hidden: false,
+            show_selected_only: false,
+            search_mode: SearchMode::default(),
+            search_query: String::new(),
+            search_active: false,
+            search_error: None,
         };
-        state.refresh_visible_projects(None);
-        state.status = if state.projects.is_empty() {
+        state.rebuild_visible_projects(None);
+        state.status = if state.all_projects.is_empty() {
             ProjectListStatus::Empty
         } else {
             ProjectListStatus::Ready
@@ -94,7 +119,7 @@ impl ProjectListState {
     }
 
     pub fn items(&self) -> &[Project] {
-        &self.projects
+        &self.visible_projects
     }
 
     pub fn selected_index(&self) -> Option<usize> {
@@ -102,7 +127,16 @@ impl ProjectListState {
     }
 
     pub fn selected_project(&self) -> Option<&Project> {
-        self.selected.and_then(|index| self.projects.get(index))
+        self.selected
+            .and_then(|index| self.visible_projects.get(index))
+    }
+
+    pub fn selected_count(&self) -> usize {
+        self.selected_ids.len()
+    }
+
+    pub fn is_selected(&self, project_id: &str) -> bool {
+        self.selected_ids.contains(project_id)
     }
 
     pub fn status(&self) -> &ProjectListStatus {
@@ -111,6 +145,26 @@ impl ProjectListState {
 
     pub fn hidden_visible(&self) -> bool {
         self.show_hidden
+    }
+
+    pub fn show_selected_only(&self) -> bool {
+        self.show_selected_only
+    }
+
+    pub fn search_mode(&self) -> SearchMode {
+        self.search_mode
+    }
+
+    pub fn search_query(&self) -> &str {
+        &self.search_query
+    }
+
+    pub fn search_active(&self) -> bool {
+        self.search_active
+    }
+
+    pub fn search_error(&self) -> Option<&str> {
+        self.search_error.as_deref()
     }
 
     pub fn hidden_count(&self) -> usize {
@@ -126,9 +180,11 @@ impl ProjectListState {
 
     pub fn move_down(&mut self) {
         if let Some(index) = self.selected {
-            if index + 1 < self.projects.len() {
+            if index + 1 < self.visible_projects.len() {
                 self.selected = Some(index + 1);
             }
+        } else if !self.visible_projects.is_empty() {
+            self.selected = Some(0);
         }
     }
 
@@ -140,20 +196,57 @@ impl ProjectListState {
         self.move_down();
     }
 
-    pub fn toggle_hidden(&mut self) {
-        let previous_selected_index = self.selected;
-        let previous_selected_id = self.selected_project().map(|project| project.id.clone());
+    pub fn toggle_hidden_group(&mut self) {
+        let cursor_id = self.selected_project().map(|project| project.id.clone());
         self.show_hidden = !self.show_hidden;
-        self.refresh_visible_projects(previous_selected_index.or(Some(0)));
-        if let Some(previous_selected_id) = previous_selected_id {
-            if let Some(index) = self
-                .projects
-                .iter()
-                .position(|project| project.id == previous_selected_id)
-            {
-                self.selected = Some(index);
-            }
+        self.rebuild_visible_projects(cursor_id);
+    }
+
+    pub fn toggle_selected_only(&mut self) {
+        let cursor_id = self.selected_project().map(|project| project.id.clone());
+        self.show_selected_only = !self.show_selected_only;
+        self.rebuild_visible_projects(cursor_id);
+    }
+
+    pub fn set_search_mode(&mut self, mode: SearchMode) {
+        let cursor_id = self.selected_project().map(|project| project.id.clone());
+        self.search_mode = mode;
+        self.search_error = None;
+        self.rebuild_visible_projects(cursor_id);
+    }
+
+    pub fn start_search(&mut self) {
+        self.search_active = true;
+    }
+
+    pub fn end_search(&mut self) {
+        self.search_active = false;
+    }
+
+    pub fn push_search_char(&mut self, ch: char) {
+        self.search_query.push(ch);
+        let cursor_id = self.selected_project().map(|project| project.id.clone());
+        self.rebuild_visible_projects(cursor_id);
+    }
+
+    pub fn pop_search_char(&mut self) {
+        self.search_query.pop();
+        let cursor_id = self.selected_project().map(|project| project.id.clone());
+        self.rebuild_visible_projects(cursor_id);
+    }
+
+    pub fn toggle_current_selection(&mut self) {
+        if let Some(project) = self.selected_project().cloned() {
+            self.toggle_selection_for_project_id(&project.id);
         }
+    }
+
+    pub fn toggle_starred_selected(&mut self) {
+        self.toggle_project_flags(ProjectFlag::Starred);
+    }
+
+    pub fn toggle_hidden_selected(&mut self) {
+        self.toggle_project_flags(ProjectFlag::Hidden);
     }
 
     pub fn apply_action(&mut self, action: &Action) -> Option<AppCommand> {
@@ -174,45 +267,178 @@ impl ProjectListState {
                 self.page_down();
                 None
             }
-            Action::ToggleHidden => {
-                self.toggle_hidden();
+            Action::ToggleHiddenGroup => {
+                self.toggle_hidden_group();
+                None
+            }
+            Action::ToggleSelection => {
+                self.toggle_current_selection();
+                None
+            }
+            Action::ToggleOnlySelected => {
+                self.toggle_selected_only();
+                None
+            }
+            Action::ToggleStarredSelected => {
+                self.toggle_starred_selected();
+                None
+            }
+            Action::ToggleHiddenSelected => {
+                self.toggle_hidden_selected();
+                None
+            }
+            Action::StartSearch => {
+                self.start_search();
+                None
+            }
+            Action::SearchFuzzy => {
+                self.set_search_mode(SearchMode::Fuzzy);
+                None
+            }
+            Action::SearchSubstring => {
+                self.set_search_mode(SearchMode::Substring);
+                None
+            }
+            Action::SearchRegex => {
+                self.set_search_mode(SearchMode::Regex);
                 None
             }
             other => other.as_app_command(),
         }
     }
 
-    fn refresh_visible_projects(&mut self, previous_selected: Option<usize>) {
-        let previous_selected_id = previous_selected
-            .and_then(|index| self.projects.get(index))
-            .map(|project| project.id.clone());
-
-        self.projects = self
+    pub fn visibility_preferences(&self) -> Vec<ProjectVisibilityConfig> {
+        let mut preferences: Vec<ProjectVisibilityConfig> = self
             .all_projects
             .iter()
-            .filter(|project| self.show_hidden || !project.hidden)
+            .filter(|project| project.starred || project.hidden)
+            .map(|project| ProjectVisibilityConfig {
+                gid: project.id.clone(),
+                starred: project.starred,
+                hidden: project.hidden,
+            })
+            .collect();
+        preferences.sort_by(|left, right| left.gid.cmp(&right.gid));
+        preferences
+    }
+
+    fn toggle_selection_for_project_id(&mut self, project_id: &str) {
+        if !self.selected_ids.insert(project_id.to_string()) {
+            self.selected_ids.remove(project_id);
+        }
+        let cursor_id = self.selected_project().map(|project| project.id.clone());
+        self.rebuild_visible_projects(cursor_id);
+    }
+
+    fn toggle_project_flags(&mut self, flag: ProjectFlag) {
+        let target_ids = self.action_target_ids();
+        if target_ids.is_empty() {
+            return;
+        }
+
+        let cursor_id = self.selected_project().map(|project| project.id.clone());
+        for target_id in target_ids {
+            if let Some(project) = self.all_projects.iter_mut().find(|project| project.id == target_id)
+            {
+                match flag {
+                    ProjectFlag::Starred => project.starred = !project.starred,
+                    ProjectFlag::Hidden => project.hidden = !project.hidden,
+                }
+            }
+        }
+
+        sort_projects(&mut self.all_projects);
+        self.rebuild_visible_projects(cursor_id);
+    }
+
+    fn action_target_ids(&self) -> Vec<String> {
+        if !self.selected_ids.is_empty() {
+            let mut ids: Vec<String> = self.selected_ids.iter().cloned().collect();
+            ids.sort();
+            ids
+        } else {
+            self.selected_project()
+                .map(|project| vec![project.id.clone()])
+                .unwrap_or_default()
+        }
+    }
+
+    fn rebuild_visible_projects(&mut self, previous_cursor_id: Option<String>) {
+        let previous_cursor_index = self.selected;
+        self.search_error = None;
+
+        let regex = if self.search_mode == SearchMode::Regex && !self.search_query.is_empty() {
+            match RegexBuilder::new(&self.search_query)
+                .case_insensitive(true)
+                .build()
+            {
+                Ok(regex) => Some(regex),
+                Err(err) => {
+                    self.search_error = Some(err.to_string());
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        self.visible_projects = self
+            .all_projects
+            .iter()
+            .filter(|project| self.project_matches(project, regex.as_ref()))
             .cloned()
             .collect();
 
-        if self.projects.is_empty() {
+        if self.visible_projects.is_empty() {
             self.selected = None;
             return;
         }
 
-        if let Some(previous_selected_id) = previous_selected_id {
+        if let Some(previous_cursor_id) = previous_cursor_id {
             if let Some(index) = self
-                .projects
+                .visible_projects
                 .iter()
-                .position(|project| project.id == previous_selected_id)
+                .position(|project| project.id == previous_cursor_id)
             {
                 self.selected = Some(index);
                 return;
             }
         }
 
-        let index = previous_selected.unwrap_or(0).min(self.projects.len() - 1);
+        let index = previous_cursor_index
+            .unwrap_or(0)
+            .min(self.visible_projects.len() - 1);
         self.selected = Some(index);
     }
+
+    fn project_matches(&self, project: &Project, regex: Option<&regex::Regex>) -> bool {
+        if !self.show_hidden && project.hidden {
+            return false;
+        }
+
+        if self.show_selected_only && !self.selected_ids.contains(&project.id) {
+            return false;
+        }
+
+        if self.search_query.is_empty() {
+            return true;
+        }
+
+        let haystack = format!("{} {}", project.name, project.id).to_ascii_lowercase();
+        let query = self.search_query.to_ascii_lowercase();
+
+        match self.search_mode {
+            SearchMode::Fuzzy => fuzzy_match(&haystack, &query),
+            SearchMode::Substring => haystack.contains(&query),
+            SearchMode::Regex => regex.is_some_and(|regex| regex.is_match(&haystack)),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ProjectFlag {
+    Starred,
+    Hidden,
 }
 
 fn sort_projects(projects: &mut [Project]) {
@@ -237,6 +463,30 @@ fn apply_visibility_preferences(
     }
 }
 
+fn fuzzy_match(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+
+    let mut needle_chars = needle.chars();
+    let mut current = needle_chars.next();
+
+    if current.is_none() {
+        return true;
+    }
+
+    for candidate in haystack.chars() {
+        if Some(candidate) == current {
+            current = needle_chars.next();
+            if current.is_none() {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -247,7 +497,7 @@ mod tests {
         input::{Action, AppCommand},
     };
 
-    use super::{ProjectListState, ProjectListStatus};
+    use super::{ProjectListState, ProjectListStatus, SearchMode};
 
     struct FailingAsanaClient;
 
@@ -340,7 +590,7 @@ mod tests {
         assert_eq!(state.selected_index(), Some(0));
         assert_eq!(state.apply_action(&Action::Quit), Some(AppCommand::Quit));
         assert_eq!(state.apply_action(&Action::Refresh), Some(AppCommand::Refresh));
-        assert_eq!(state.apply_action(&Action::ToggleHidden), None);
+        assert_eq!(state.apply_action(&Action::ToggleSelection), None);
     }
 
     #[test]
@@ -358,26 +608,87 @@ mod tests {
     }
 
     #[test]
-    fn toggles_hidden_projects_into_view() {
-        let mut state = ProjectListState::from_projects_with_visibility(
-            vec![
-                Project::new("1", "Visible", false),
-                Project::new("2", "Hidden", false),
-            ],
-            &[ProjectVisibilityConfig {
-                gid: "2".to_string(),
-                starred: false,
-                hidden: true,
-            }],
-        );
+    fn toggles_selection_and_selection_only_filter() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1", "Inbox", true),
+            Project::new("2", "Backlog", false),
+            Project::new("3", "Roadmap", false),
+        ]);
 
-        assert_eq!(state.items().len(), 1);
-        assert!(!state.hidden_visible());
+        state.toggle_current_selection();
+        assert_eq!(state.selected_count(), 1);
+        state.move_down();
+        state.toggle_current_selection();
+        assert_eq!(state.selected_count(), 2);
 
-        state.toggle_hidden();
+        state.toggle_selected_only();
 
         let names: Vec<_> = state.items().iter().map(|project| project.name.as_str()).collect();
-        assert_eq!(names, vec!["Visible", "Hidden"]);
-        assert!(state.hidden_visible());
+        assert_eq!(names, vec!["Inbox", "Backlog"]);
+        assert_eq!(state.selected_index(), Some(1));
+    }
+
+    #[test]
+    fn filters_projects_by_search_mode() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1", "Inbox", true),
+            Project::new("2", "Backlog", false),
+            Project::new("3", "Roadmap", false),
+        ]);
+
+        state.set_search_mode(SearchMode::Substring);
+        state.push_search_char('b');
+        state.push_search_char('a');
+        state.push_search_char('c');
+        state.push_search_char('k');
+        let names: Vec<_> = state.items().iter().map(|project| project.name.as_str()).collect();
+        assert_eq!(names, vec!["Backlog"]);
+
+        state.pop_search_char();
+        state.pop_search_char();
+        state.pop_search_char();
+        state.pop_search_char();
+        state.set_search_mode(SearchMode::Fuzzy);
+        state.push_search_char('r');
+        state.push_search_char('d');
+        let names: Vec<_> = state.items().iter().map(|project| project.name.as_str()).collect();
+        assert_eq!(names, vec!["Roadmap"]);
+    }
+
+    #[test]
+    fn rejects_invalid_regex_queries_without_losing_state() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1", "Inbox", true),
+            Project::new("2", "Backlog", false),
+        ]);
+
+        state.set_search_mode(SearchMode::Regex);
+        state.push_search_char('[');
+
+        assert!(state.items().is_empty());
+        assert!(state.search_error().is_some());
+        assert_eq!(state.selected_index(), None);
+    }
+
+    #[test]
+    fn toggles_starred_and_hidden_selected_projects() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1", "Inbox", false),
+            Project::new("2", "Backlog", false),
+        ]);
+
+        state.move_down();
+        state.toggle_current_selection();
+        state.toggle_starred_selected();
+        assert!(state
+            .visibility_preferences()
+            .iter()
+            .any(|project| project.gid == "1" && project.starred));
+
+        state.toggle_hidden_selected();
+        assert!(state
+            .visibility_preferences()
+            .iter()
+            .any(|project| project.gid == "1" && project.hidden));
     }
 }

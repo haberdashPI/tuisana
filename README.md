@@ -68,7 +68,7 @@ How it works:
 - Hidden projects stay available in the list, but they are shown after the visible projects only when you toggle them on.
 - Hidden projects are marked explicitly in the UI so they are easy to spot.
 
-The default toggle for hidden projects is `h`.
+The default toggle for hidden projects is `v`.
 
 Example:
 
@@ -95,9 +95,29 @@ Current commands include:
 - `move_down`
 - `open`
 - `refresh`
+- `toggle_selection`
+- `toggle_starred_selected`
+- `toggle_hidden_selected`
+- `toggle_hidden_group`
+- `toggle_only_selected`
+- `start_search`
+- `search_fuzzy`
+- `search_substring`
+- `search_regex`
 - `page_up`
 - `page_down`
-- `toggle_hidden` (bound to `h`)
+
+Project view shortcuts include:
+
+- `space` to toggle selection for the current project
+- `*` to toggle starred state for the current selection
+- `h` to toggle hidden state for the current selection
+- `v` to show or hide hidden projects
+- `o` to filter to selected projects only
+- `/` to start search entry
+- `ctrl-f`, `ctrl-s`, `ctrl-r` to switch search mode
+
+Search entry accepts ordinary typing, `backspace`, `enter`, and `esc`.
 
 Example:
 

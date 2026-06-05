@@ -1,18 +1,20 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::{fs, path::Path};
 
 use crate::error::{Error, Result};
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Config {
     #[serde(default)]
     pub header: Header,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
     #[serde(default)]
     pub bind: Vec<Bind>,
     #[serde(default, rename = "project")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub project_visibility: Vec<ProjectVisibilityConfig>,
 }
 
@@ -42,6 +44,13 @@ impl Config {
 
         let contents = fs::read_to_string(path)?;
         Self::from_toml_str(&contents)
+    }
+
+    pub fn save_to_path(&self, path: impl AsRef<Path>) -> Result<()> {
+        let contents = toml::to_string_pretty(self)
+            .map_err(|err| Error::ConfigValidation(format!("failed to serialize config: {err}")))?;
+        fs::write(path, contents)?;
+        Ok(())
     }
 
     fn validate(&self) -> Result<()> {
@@ -78,7 +87,7 @@ impl Config {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AuthConfig {
     pub personal_access_token: String,
     #[serde(default)]
@@ -107,7 +116,7 @@ impl AuthConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProjectVisibilityConfig {
     pub gid: String,
     #[serde(default)]
@@ -128,7 +137,7 @@ impl ProjectVisibilityConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Header {
     #[serde(rename = "type", default = "default_header_type")]
     pub kind: String,
@@ -149,7 +158,7 @@ impl Default for Header {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Bind {
     pub key: String,
     pub command: String,
@@ -198,16 +207,48 @@ fn default_bindings() -> Vec<Bind> {
             command: "refresh".to_string(),
         },
         Bind {
+            key: "space".to_string(),
+            command: "toggle_selection".to_string(),
+        },
+        Bind {
+            key: "*".to_string(),
+            command: "toggle_starred_selected".to_string(),
+        },
+        Bind {
+            key: "h".to_string(),
+            command: "toggle_hidden_selected".to_string(),
+        },
+        Bind {
+            key: "v".to_string(),
+            command: "toggle_hidden_group".to_string(),
+        },
+        Bind {
+            key: "o".to_string(),
+            command: "toggle_only_selected".to_string(),
+        },
+        Bind {
+            key: "/".to_string(),
+            command: "start_search".to_string(),
+        },
+        Bind {
+            key: "ctrl-f".to_string(),
+            command: "search_fuzzy".to_string(),
+        },
+        Bind {
+            key: "ctrl-s".to_string(),
+            command: "search_substring".to_string(),
+        },
+        Bind {
+            key: "ctrl-r".to_string(),
+            command: "search_regex".to_string(),
+        },
+        Bind {
             key: "ctrl-u".to_string(),
             command: "page_up".to_string(),
         },
         Bind {
             key: "ctrl-d".to_string(),
             command: "page_down".to_string(),
-        },
-        Bind {
-            key: "h".to_string(),
-            command: "toggle_hidden".to_string(),
         },
     ]
 }

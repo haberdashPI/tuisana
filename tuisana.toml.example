@@ -33,16 +33,48 @@ key = "r"
 command = "refresh"
 
 [[bind]]
+key = "space"
+command = "toggle_selection"
+
+[[bind]]
+key = "*"
+command = "toggle_starred_selected"
+
+[[bind]]
+key = "h"
+command = "toggle_hidden_selected"
+
+[[bind]]
+key = "v"
+command = "toggle_hidden_group"
+
+[[bind]]
+key = "o"
+command = "toggle_only_selected"
+
+[[bind]]
+key = "/"
+command = "start_search"
+
+[[bind]]
+key = "ctrl-f"
+command = "search_fuzzy"
+
+[[bind]]
+key = "ctrl-s"
+command = "search_substring"
+
+[[bind]]
+key = "ctrl-r"
+command = "search_regex"
+
+[[bind]]
 key = "ctrl-u"
 command = "page_up"
 
 [[bind]]
 key = "ctrl-d"
 command = "page_down"
-
-[[bind]]
-key = "h"
-command = "toggle_hidden"
 
 [[project]]
 gid = "project-gid-here"
