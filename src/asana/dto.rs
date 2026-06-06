@@ -75,6 +75,8 @@ pub struct TaskDto {
     #[serde(default)]
     pub completed: bool,
     #[serde(default)]
+    pub modified_at: Option<String>,
+    #[serde(default)]
     pub due_on: Option<String>,
     #[serde(default)]
     pub start_on: Option<String>,

@@ -1,5 +1,5 @@
 use crate::{
-    asana::AsanaClient,
+    asana::{AsanaClient, TaskLoadScope},
     config::Config,
     error::Result,
     input::{Action, AppCommand, KeyBinding, KeyMap},
@@ -30,7 +30,10 @@ pub struct App<C> {
 
 struct TaskLoadMessage {
     generation: u64,
+    project_id: Option<String>,
+    scope: TaskLoadScope,
     result: Result<crate::app::task_review::TaskDataset>,
+    done: bool,
 }
 
 impl<C: AsanaClient + Clone + Send + 'static> App<C> {
@@ -100,6 +103,22 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 self.tasks.scroll_right();
                 return Ok(None);
             }
+            Action::ToggleCompletedFilter if self.tasks.visible() => {
+                self.tasks.cycle_completed_filter_without_refresh();
+                if self.tasks.can_serve_scope_for_targets(
+                    &self.task_target_project_ids(),
+                    self.tasks.desired_load_scope(),
+                ) {
+                    if self.task_load_receiver.is_some() {
+                        self.task_load_generation = self.task_load_generation.wrapping_add(1);
+                        self.task_load_receiver = None;
+                    }
+                    self.tasks.refresh_from_cache();
+                } else {
+                    self.start_task_load();
+                }
+                return Ok(None);
+            }
             _ => {}
         }
 
@@ -141,7 +160,13 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 if self.task_load_receiver.is_some() {
                     self.task_load_generation = self.task_load_generation.wrapping_add(1);
                 }
-                self.tasks.mark_out_of_date("selected projects changed; switch to task view to refresh");
+                if self.tasks.visible() {
+                    self.start_task_load();
+                } else {
+                    self.tasks.mark_out_of_date(
+                        "selected projects changed; switch to task view to refresh",
+                    );
+                }
             }
         }
 
@@ -169,6 +194,15 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 }
             }
             _ => {}
+        }
+
+        if self.task_load_receiver.is_none()
+            && self.tasks.visible()
+            && !self
+                .tasks
+                .can_serve_scope_for_targets(&self.task_target_project_ids(), self.tasks.desired_load_scope())
+        {
+            self.start_task_load();
         }
 
         Ok(result)
@@ -229,29 +263,42 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     }
 
     pub fn poll_task_load(&mut self) {
-        let result = {
-            let Some(receiver) = self.task_load_receiver.as_ref() else {
-                return;
+        loop {
+            let result = {
+                let Some(receiver) = self.task_load_receiver.as_ref() else {
+                    return;
+                };
+                receiver.try_recv()
             };
-            receiver.try_recv()
-        };
 
-        match result {
-            Ok(message) => {
-                if message.generation == self.task_load_generation {
-                    match message.result {
-                        Ok(dataset) => self.tasks.finish_loading_dataset(dataset),
-                        Err(err) => {
-                            debug_log(&format!("task load error: {err}"));
-                            self.tasks.set_error(err.to_string());
+            match result {
+                Ok(message) => {
+                    if message.generation == self.task_load_generation {
+                        if message.done {
+                            self.tasks.finish_loading_targets();
+                            self.task_load_receiver = None;
+                            break;
+                        }
+
+                        let Some(project_id) = message.project_id.as_deref() else {
+                            continue;
+                        };
+                        match message.result {
+                            Ok(dataset) => self.tasks.ingest_loaded_project(project_id, message.scope, dataset),
+                            Err(err) => {
+                                debug_log(&format!("task load error: {err}"));
+                                self.tasks.set_error(err.to_string());
+                                self.task_load_receiver = None;
+                                break;
+                            }
                         }
                     }
                 }
-                self.task_load_receiver = None;
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.task_load_receiver = None;
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.task_load_receiver = None;
+                    break;
+                }
             }
         }
     }
@@ -287,11 +334,19 @@ fn task_target_projects(&self) -> Vec<crate::domain::Project> {
 
     fn start_task_load(&mut self) {
         let targets = self.task_target_projects();
+        let scope = self.tasks.desired_load_scope();
+        let projects_to_load = self.tasks.projects_requiring_load(&targets, scope);
         debug_log(&format!(
-            "start_task_load: visible={} focus={:?} targets={}",
+            "start_task_load: visible={} focus={:?} scope={:?} targets={} load={}",
             self.tasks.visible(),
             self.tasks.focus_mode(),
+            scope,
             targets
+                .iter()
+                .map(|project| project.id.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            projects_to_load
                 .iter()
                 .map(|project| project.id.as_str())
                 .collect::<Vec<_>>()
@@ -304,6 +359,12 @@ fn task_target_projects(&self) -> Vec<crate::domain::Project> {
             return;
         }
 
+        if projects_to_load.is_empty() {
+            self.tasks.begin_loading(&targets);
+            self.tasks.finish_loading_targets();
+            return;
+        }
+
         self.task_load_generation = self.task_load_generation.wrapping_add(1);
         let generation = self.task_load_generation;
         self.tasks.begin_loading(&targets);
@@ -313,11 +374,28 @@ fn task_target_projects(&self) -> Vec<crate::domain::Project> {
         self.task_load_receiver = Some(receiver);
 
         thread::spawn(move || {
-            let result = crate::app::task_review::TaskReviewState::build_dataset_for_projects(
-                &client,
-                &targets,
-            );
-            let _ = sender.send(TaskLoadMessage { generation, result });
+            for project in projects_to_load {
+                let result = crate::app::task_review::TaskReviewState::build_dataset_for_projects(
+                    &client,
+                    &[project.clone()],
+                    scope,
+                );
+                let _ = sender.send(TaskLoadMessage {
+                    generation,
+                    project_id: Some(project.id.clone()),
+                    scope,
+                    result,
+                    done: false,
+                });
+            }
+
+            let _ = sender.send(TaskLoadMessage {
+                generation,
+                project_id: None,
+                scope,
+                result: Ok(crate::app::task_review::TaskDataset::default()),
+                done: true,
+            });
         });
     }
 }
@@ -500,6 +578,7 @@ mod tests {
                         gid: "t1".to_string(),
                         name: "Task 1".to_string(),
                         completed: false,
+                        modified_at: None,
                         due_on: Some("2026-06-01".to_string()),
                         start_on: Some("2026-05-28".to_string()),
                         assignee: Some(UserDto {
@@ -529,6 +608,7 @@ mod tests {
                         gid: "t2".to_string(),
                         name: "Task 2".to_string(),
                         completed: false,
+                        modified_at: None,
                         due_on: Some("2026-06-01".to_string()),
                         start_on: Some("2026-05-28".to_string()),
                         assignee: Some(UserDto {
@@ -558,6 +638,7 @@ mod tests {
                         gid: "t3".to_string(),
                         name: "Task 3".to_string(),
                         completed: false,
+                        modified_at: None,
                         due_on: Some("2026-06-01".to_string()),
                         start_on: Some("2026-05-28".to_string()),
                         assignee: Some(UserDto {
@@ -587,6 +668,7 @@ mod tests {
                         gid: "t4".to_string(),
                         name: "Task 4".to_string(),
                         completed: false,
+                        modified_at: None,
                         due_on: Some("2026-06-01".to_string()),
                         start_on: Some("2026-05-28".to_string()),
                         assignee: Some(UserDto {
@@ -662,6 +744,7 @@ mod tests {
                         gid: "t1".to_string(),
                         name: "Open task".to_string(),
                         completed: false,
+                        modified_at: None,
                         due_on: Some("2026-06-01".to_string()),
                         start_on: Some("2026-05-28".to_string()),
                         assignee: None,
@@ -682,6 +765,7 @@ mod tests {
                         gid: "t2".to_string(),
                         name: "Closed task".to_string(),
                         completed: true,
+                        modified_at: None,
                         due_on: Some("2026-06-01".to_string()),
                         start_on: Some("2026-05-28".to_string()),
                         assignee: None,
@@ -703,6 +787,7 @@ mod tests {
 
         let mut app = App::new(config, client);
         app.load_projects().expect("projects load");
+        app.tasks.set_completed_filter(None);
         app.tasks
             .load_for_projects(&app.client, &[Project::new("1", "Inbox", true)])
             .expect("tasks load");

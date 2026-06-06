@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     time::Instant,
 };
 
@@ -7,10 +7,11 @@ use crate::{
     app::debug_log,
     asana::{
         dto::{CustomFieldValueDto, TaskDto},
-        AsanaClient,
+        AsanaClient, TaskLoadScope,
     },
     domain::{
-        CustomFieldDefinition, Project, TaskRecord, TaskTableModel, TaskTableSettings,
+        merge_task_record, CustomFieldDefinition, Project, TaskRecord, TaskTableModel,
+        TaskTableSettings,
     },
     error::Result,
     input::Action,
@@ -50,11 +51,13 @@ pub struct TaskReviewState {
     table: TaskTableModel,
     settings: TaskTableSettings,
     dataset: Option<TaskDataset>,
+    cache: TaskCache,
     horizontal_scroll: usize,
     loading_started_at: Option<Instant>,
     loading_targets: Vec<String>,
     loading_target_ids: Vec<String>,
     loaded_target_ids: Vec<String>,
+    loaded_project_scopes: HashMap<String, TaskLoadScope>,
     task_vertical_scroll: usize,
     help_details_visible: bool,
 }
@@ -63,6 +66,92 @@ pub struct TaskReviewState {
 pub(crate) struct TaskDataset {
     records: Vec<TaskRecord>,
     custom_field_definitions: Vec<CustomFieldDefinition>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TaskCache {
+    records: HashMap<String, TaskRecord>,
+    custom_field_definitions: HashMap<String, String>,
+    lru: VecDeque<String>,
+}
+
+impl TaskCache {
+    const CAPACITY: usize = 2_000;
+
+    fn merge_dataset(&mut self, dataset: TaskDataset) {
+        for record in dataset.records {
+            self.upsert_record(record);
+        }
+
+        for definition in dataset.custom_field_definitions {
+            self.custom_field_definitions
+                .entry(definition.gid)
+                .or_insert(definition.name);
+        }
+    }
+
+    fn upsert_record(&mut self, record: TaskRecord) {
+        let gid = record.gid.clone();
+        if let Some(existing) = self.records.get_mut(&gid) {
+            merge_task_record(existing, record);
+        } else {
+            self.records.insert(gid.clone(), record);
+        }
+
+        self.touch(&gid);
+        self.evict_if_needed();
+    }
+
+    fn touch(&mut self, gid: &str) {
+        if let Some(position) = self.lru.iter().position(|existing| existing == gid) {
+            self.lru.remove(position);
+        }
+        self.lru.push_back(gid.to_string());
+    }
+
+    fn evict_if_needed(&mut self) {
+        while self.records.len() > Self::CAPACITY {
+            let Some(oldest) = self.lru.pop_front() else {
+                break;
+            };
+            self.records.remove(&oldest);
+        }
+    }
+
+    fn records_for_targets(&mut self, target_ids: &[String]) -> Vec<TaskRecord> {
+        let target_ids = target_ids.iter().collect::<std::collections::HashSet<_>>();
+        let records = self
+            .records
+            .values()
+            .filter(|record| {
+                record
+                    .project_gids
+                    .iter()
+                    .any(|project_gid| target_ids.contains(project_gid))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for record in &records {
+            self.touch(&record.gid);
+        }
+
+        records
+    }
+
+    fn custom_field_definitions(&self) -> Vec<CustomFieldDefinition> {
+        let mut definitions = self
+            .custom_field_definitions
+            .iter()
+            .map(|(gid, name)| CustomFieldDefinition::new(gid.clone(), name.clone()))
+            .collect::<Vec<_>>();
+        definitions.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.gid.cmp(&right.gid))
+        });
+        definitions
+    }
 }
 
 impl TaskReviewState {
@@ -109,15 +198,9 @@ impl TaskReviewState {
 
     pub fn begin_loading(&mut self, projects: &[Project]) {
         self.status = TaskReviewStatus::Loading;
-        self.selected = None;
-        self.table = TaskTableModel::empty();
-        self.dataset = None;
-        self.horizontal_scroll = 0;
         self.loading_started_at = Some(Instant::now());
         self.loading_targets = projects.iter().map(|project| project.name.clone()).collect();
         self.loading_target_ids = projects.iter().map(|project| project.id.clone()).collect();
-        self.loaded_target_ids.clear();
-        self.task_vertical_scroll = 0;
     }
 
     pub fn finish_loading(&mut self, table: TaskTableModel) {
@@ -138,15 +221,44 @@ impl TaskReviewState {
     }
 
     pub(crate) fn finish_loading_dataset(&mut self, dataset: TaskDataset) {
-        self.dataset = Some(dataset);
-        self.refresh_table();
+        self.cache.merge_dataset(dataset.clone());
+        self.rebuild_visible_dataset();
+        let scope = self.desired_load_scope();
+        for project_id in &self.loading_target_ids {
+            self.loaded_project_scopes
+                .insert(project_id.clone(), scope);
+        }
+        self.finish_loading_targets();
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn ingest_loaded_dataset(&mut self, dataset: TaskDataset) {
+        self.cache.merge_dataset(dataset);
+        self.rebuild_visible_dataset();
+    }
+
+    pub(crate) fn ingest_loaded_project(
+        &mut self,
+        project_id: &str,
+        scope: TaskLoadScope,
+        dataset: TaskDataset,
+    ) {
+        self.cache.merge_dataset(dataset);
+        self.loaded_project_scopes.insert(project_id.to_string(), scope);
+        self.rebuild_visible_dataset();
+    }
+
+    pub(crate) fn finish_loading_targets(&mut self) {
+        let loaded_target_ids = self.loading_target_ids.clone();
         self.horizontal_scroll = 0;
         self.selected = self.table.first_selectable_row_index();
-        self.loaded_target_ids = self.loading_target_ids.clone();
         self.loading_started_at = None;
         self.loading_targets.clear();
         self.loading_target_ids.clear();
         self.task_vertical_scroll = 0;
+        self.loaded_target_ids = loaded_target_ids;
+        self.status = TaskReviewStatus::Idle;
+        self.rebuild_visible_dataset();
     }
 
     pub fn task_settings(&self) -> &TaskTableSettings {
@@ -155,6 +267,37 @@ impl TaskReviewState {
 
     pub fn filter_summary(&self) -> String {
         self.settings.summary()
+    }
+
+    pub fn desired_load_scope(&self) -> TaskLoadScope {
+        match self.settings.filter.completed {
+            Some(false) => TaskLoadScope::OpenOnly,
+            Some(true) | None => TaskLoadScope::All,
+        }
+    }
+
+    pub fn can_serve_scope_for_targets(&self, target_ids: &[String], scope: TaskLoadScope) -> bool {
+        target_ids.iter().all(|project_id| match self.loaded_project_scopes.get(project_id) {
+            Some(TaskLoadScope::All) => true,
+            Some(TaskLoadScope::OpenOnly) => matches!(scope, TaskLoadScope::OpenOnly),
+            None => false,
+        })
+    }
+
+    pub fn projects_requiring_load(
+        &self,
+        projects: &[Project],
+        scope: TaskLoadScope,
+    ) -> Vec<Project> {
+        projects
+            .iter()
+            .filter(|project| match self.loaded_project_scopes.get(&project.id) {
+                Some(TaskLoadScope::All) => false,
+                Some(TaskLoadScope::OpenOnly) => matches!(scope, TaskLoadScope::All),
+                None => true,
+            })
+            .cloned()
+            .collect()
     }
 
     pub fn mark_out_of_date(&mut self, message: impl Into<String>) {
@@ -271,9 +414,16 @@ impl TaskReviewState {
         projects: &[Project],
     ) -> Result<()> {
         debug_log(&format!("task load start: project_count={}", projects.len()));
-        let dataset = Self::build_dataset_for_projects(client, projects)?;
-        self.dataset = Some(dataset);
-        self.refresh_table();
+        let scope = self.desired_load_scope();
+        let dataset = Self::build_dataset_for_projects(client, projects, scope)?;
+        self.cache.merge_dataset(dataset);
+        self.loading_target_ids = projects.iter().map(|project| project.id.clone()).collect();
+        self.loaded_target_ids = self.loading_target_ids.clone();
+        for project in projects {
+            self.loaded_project_scopes
+                .insert(project.id.clone(), scope);
+        }
+        self.rebuild_visible_dataset();
         debug_log(&format!(
             "task load complete: tasks={} columns={}",
             self.table.task_count(),
@@ -287,7 +437,7 @@ impl TaskReviewState {
         client: &C,
         projects: &[Project],
     ) -> Result<TaskTableModel> {
-        let dataset = Self::build_dataset_for_projects(client, projects)?;
+        let dataset = Self::build_dataset_for_projects(client, projects, TaskLoadScope::All)?;
         Ok(TaskTableModel::from_records_with_settings(
             dataset.records,
             dataset.custom_field_definitions,
@@ -298,6 +448,7 @@ impl TaskReviewState {
     pub(crate) fn build_dataset_for_projects<C: AsanaClient>(
         client: &C,
         projects: &[Project],
+        scope: TaskLoadScope,
     ) -> Result<TaskDataset> {
         if projects.is_empty() {
             return Ok(TaskDataset::default());
@@ -334,7 +485,7 @@ impl TaskReviewState {
                     .or_insert(setting.custom_field.name.clone());
             }
 
-            let tasks = client.list_tasks(&project.id)?;
+            let tasks = client.list_tasks(&project.id, scope)?;
             debug_log(&format!(
                 "task load project={} tasks={}",
                 project.id,
@@ -343,7 +494,9 @@ impl TaskReviewState {
             for task in tasks {
                 add_task_tree(
                     client,
+                    &project.id,
                     &project.name,
+                    scope,
                     &section_map,
                     &section_order_map,
                     None,
@@ -367,6 +520,17 @@ impl TaskReviewState {
             records,
             custom_field_definitions: definitions,
         })
+    }
+
+    fn rebuild_visible_dataset(&mut self) {
+        let target_ids = self.active_target_ids().to_vec();
+        let records = self.cache.records_for_targets(&target_ids);
+        let custom_field_definitions = self.cache.custom_field_definitions();
+        self.dataset = Some(TaskDataset {
+            records,
+            custom_field_definitions,
+        });
+        self.refresh_table();
     }
 
     pub fn move_up(&mut self) {
@@ -466,6 +630,15 @@ impl TaskReviewState {
         self.refresh_table();
     }
 
+    pub fn set_completed_filter(&mut self, completed: Option<bool>) {
+        self.settings.filter.completed = completed;
+        self.refresh_table();
+    }
+
+    pub fn cycle_completed_filter_without_refresh(&mut self) {
+        self.settings.filter.toggle_completed_filter();
+    }
+
     pub fn toggle_subtask_visibility(&mut self) {
         self.settings.filter.toggle_subtask_visibility();
         self.refresh_table();
@@ -484,6 +657,10 @@ impl TaskReviewState {
     pub fn toggle_section_grouping(&mut self) {
         self.settings.sort.toggle_section_grouping();
         self.refresh_table();
+    }
+
+    pub fn refresh_from_cache(&mut self) {
+        self.rebuild_visible_dataset();
     }
 
     pub fn apply_action(&mut self, action: &Action, page_size: usize) -> Option<crate::input::AppCommand> {
@@ -615,13 +792,21 @@ impl TaskReviewState {
 
         if !matches!(
             self.status,
-            TaskReviewStatus::OutOfDate(_) | TaskReviewStatus::Error(_)
+            TaskReviewStatus::OutOfDate(_) | TaskReviewStatus::Error(_) | TaskReviewStatus::Loading
         ) {
             self.status = if self.table.task_count() == 0 {
                 TaskReviewStatus::Empty
             } else {
                 TaskReviewStatus::Ready
             };
+        }
+    }
+
+    fn active_target_ids(&self) -> &[String] {
+        if !self.loading_target_ids.is_empty() {
+            &self.loading_target_ids
+        } else {
+            &self.loaded_target_ids
         }
     }
 
@@ -646,7 +831,9 @@ impl TaskReviewState {
 
 fn add_task_tree<C: AsanaClient>(
     client: &C,
+    project_gid: &str,
     project_name: &str,
+    scope: TaskLoadScope,
     section_map: &HashMap<String, String>,
     section_order_map: &HashMap<String, usize>,
     inherited_section: Option<String>,
@@ -660,6 +847,7 @@ fn add_task_tree<C: AsanaClient>(
     let current_gid = task.gid.clone();
     let mut record = TaskRecord::new(task.gid, task.name);
     record.completed = task.completed;
+    record.modified_at = task.modified_at;
     record.parent_gid = parent_gid;
     record.subtask_depth = depth;
     if let Some(assignee) = task.assignee {
@@ -669,6 +857,7 @@ fn add_task_tree<C: AsanaClient>(
     record.start_date = task.start_on;
     record.natural_order = *natural_order;
     *natural_order = (*natural_order).saturating_add(1);
+    record.project_gids.push(project_gid.to_string());
     record.projects.push(project_name.to_string());
 
     let mut section_name = inherited_section;
@@ -712,11 +901,13 @@ fn add_task_tree<C: AsanaClient>(
     records.push(record);
 
     if task.num_subtasks > 0 {
-        let subtasks = client.list_subtasks(&current_gid)?;
+        let subtasks = client.list_subtasks(&current_gid, scope)?;
         for subtask in subtasks {
             add_task_tree(
                 client,
+                project_gid,
                 project_name,
+                scope,
                 section_map,
                 section_order_map,
                 section_name.clone(),
@@ -751,6 +942,7 @@ mod tests {
                 TaskMembershipSectionDto, UserDto,
             },
             fake::FakeAsanaClient,
+            TaskLoadScope,
         },
         domain::Project,
     };
@@ -772,6 +964,7 @@ mod tests {
             gid: gid.to_string(),
             name: name.to_string(),
             completed: false,
+            modified_at: Some("2026-06-01T00:00:00Z".to_string()),
             due_on: Some("2026-06-01".to_string()),
             start_on: Some("2026-05-28".to_string()),
             assignee: Some(UserDto {
@@ -1022,9 +1215,11 @@ mod tests {
             );
 
         let mut state = TaskReviewState::new();
+        state.settings.filter.completed = None;
         let dataset = TaskReviewState::build_dataset_for_projects(
             &client,
             &[Project::new("p1", "Inbox", true)],
+            TaskLoadScope::All,
         )
         .expect("dataset builds");
         state.begin_loading(&[Project::new("p1", "Inbox", true)]);
@@ -1076,6 +1271,7 @@ mod tests {
                     gid: "t2".to_string(),
                     name: "Child task".to_string(),
                     completed: false,
+                    modified_at: None,
                     due_on: Some("2026-06-01".to_string()),
                     start_on: Some("2026-05-28".to_string()),
                     assignee: Some(UserDto {
@@ -1369,16 +1565,19 @@ mod tests {
                     TaskDto {
                         num_subtasks: 0,
                         completed: true,
+                        modified_at: None,
                         ..task("t2", "Closed task", "p1", "Inbox", "s1", "Today", "cf1", "Priority", "High")
                     },
                 ],
             );
 
         let mut state = TaskReviewState::new();
+        state.settings.filter.completed = None;
         state.begin_loading(&[Project::new("p1", "Inbox", true)]);
         let dataset = TaskReviewState::build_dataset_for_projects(
             &client,
             &[Project::new("p1", "Inbox", true)],
+            TaskLoadScope::All,
         )
         .expect("dataset builds");
         state.finish_loading_dataset(dataset);

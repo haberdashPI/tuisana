@@ -9,6 +9,7 @@ use tuisana::{
             TaskMembershipDto, TaskMembershipProjectDto, TaskMembershipSectionDto, UserDto,
         },
         fake::FakeAsanaClient,
+        AsanaClient,
     },
     config::Config,
     domain::Project,
@@ -39,6 +40,7 @@ fn make_task() -> TaskDto {
         gid: "task-1".to_string(),
         name: "Ship release".to_string(),
         completed: false,
+        modified_at: Some("2026-06-01T00:00:00Z".to_string()),
         due_on: Some("2026-06-10".to_string()),
         start_on: Some("2026-06-01".to_string()),
         assignee: Some(UserDto {
@@ -64,6 +66,20 @@ fn make_task() -> TaskDto {
             enum_value: None,
         }],
     }
+}
+
+fn wait_for_task_load<C: AsanaClient + Clone + Send + 'static>(app: &mut App<C>) {
+    for _ in 0..50 {
+        app.poll_task_load();
+        if !matches!(
+            app.tasks.status(),
+            tuisana::app::task_review::TaskReviewStatus::Loading
+        ) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    app.poll_task_load();
 }
 
 #[test]
@@ -103,6 +119,7 @@ fn pressing_m_displays_the_task_view() {
     let mut terminal = Terminal::new(backend).expect("terminal");
 
     run_project_list_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    wait_for_task_load(&mut app);
 
     assert!(app.tasks.visible());
     assert_eq!(app.tasks.focus_mode(), tuisana::app::task_review::TaskFocusMode::Tasks);
@@ -129,6 +146,7 @@ fn task_view_scrolls_to_keep_the_selected_row_visible() {
             gid: format!("task-{index}"),
             name: format!("Task {index}"),
             completed: false,
+            modified_at: Some("2026-06-01T00:00:00Z".to_string()),
             due_on: Some("2026-06-10".to_string()),
             start_on: Some("2026-06-01".to_string()),
             assignee: Some(UserDto {
@@ -202,6 +220,7 @@ fn changing_the_completed_filter_updates_the_visible_task_rows() {
                     gid: "task-2".to_string(),
                     name: "Closed task".to_string(),
                     completed: true,
+                    modified_at: Some("2026-06-01T00:00:00Z".to_string()),
                     due_on: Some("2026-06-11".to_string()),
                     start_on: Some("2026-06-02".to_string()),
                     assignee: Some(UserDto {
@@ -245,9 +264,10 @@ fn changing_the_completed_filter_updates_the_visible_task_rows() {
     let mut terminal = Terminal::new(backend).expect("terminal");
 
     run_project_list_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    wait_for_task_load(&mut app);
 
     assert_eq!(app.tasks.table().task_count(), 1);
-    assert!(app.tasks.filter_summary().contains("comp open"));
+    assert!(app.tasks.filter_summary().contains("comp done"));
     assert!(app.tasks.filter_summary().contains("grp p:"));
 
     let buffer = terminal.backend_mut().buffer().clone();

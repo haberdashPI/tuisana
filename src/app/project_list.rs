@@ -675,7 +675,7 @@ fn fuzzy_match(haystack: &str, needle: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::{
-        asana::{fake::FakeAsanaClient, AsanaClient},
+        asana::{fake::FakeAsanaClient, AsanaClient, TaskLoadScope},
         config::ProjectVisibilityConfig,
         domain::Project,
         error::{Error, Result},
@@ -691,11 +691,19 @@ mod tests {
             Err(Error::Backend("backend unavailable".to_string()))
         }
 
-        fn list_tasks(&self, _project_gid: &str) -> Result<Vec<crate::asana::dto::TaskDto>> {
+        fn list_tasks(
+            &self,
+            _project_gid: &str,
+            _scope: TaskLoadScope,
+        ) -> Result<Vec<crate::asana::dto::TaskDto>> {
             Err(Error::Backend("backend unavailable".to_string()))
         }
 
-        fn list_subtasks(&self, _task_gid: &str) -> Result<Vec<crate::asana::dto::TaskDto>> {
+        fn list_subtasks(
+            &self,
+            _task_gid: &str,
+            _scope: TaskLoadScope,
+        ) -> Result<Vec<crate::asana::dto::TaskDto>> {
             Err(Error::Backend("backend unavailable".to_string()))
         }
 

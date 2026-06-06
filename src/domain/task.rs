@@ -47,6 +47,7 @@ pub struct TaskRecord {
     pub gid: String,
     pub name: String,
     pub completed: bool,
+    pub modified_at: Option<String>,
     pub assignee: Option<String>,
     pub due_date: Option<String>,
     pub start_date: Option<String>,
@@ -54,6 +55,7 @@ pub struct TaskRecord {
     pub subtask_depth: usize,
     pub natural_order: usize,
     pub section_order: Option<usize>,
+    pub project_gids: Vec<String>,
     pub sections: Vec<String>,
     pub projects: Vec<String>,
     pub custom_fields: HashMap<String, Vec<String>>,
@@ -65,6 +67,7 @@ impl TaskRecord {
             gid: gid.into(),
             name: name.into(),
             completed: false,
+            modified_at: None,
             assignee: None,
             due_date: None,
             start_date: None,
@@ -72,6 +75,7 @@ impl TaskRecord {
             subtask_depth: 0,
             natural_order: usize::MAX,
             section_order: None,
+            project_gids: Vec::new(),
             sections: Vec::new(),
             projects: Vec::new(),
             custom_fields: HashMap::new(),
@@ -209,7 +213,7 @@ impl Default for TaskFilter {
             text: None,
             field: None,
             assignee: None,
-            completed: None,
+            completed: Some(false),
             date_range: None,
             subtasks: SubtaskVisibility::Show,
         }
@@ -219,9 +223,9 @@ impl Default for TaskFilter {
 impl TaskFilter {
     pub fn toggle_completed_filter(&mut self) {
         self.completed = match self.completed {
-            None => Some(false),
             Some(false) => Some(true),
             Some(true) => None,
+            None => Some(false),
         };
     }
 
@@ -360,9 +364,9 @@ impl TaskTableSettings {
             if self.sort.group_by_section { "on" } else { "off" }
         );
         let completed = match self.filter.completed {
-            None => "all",
             Some(false) => "open",
             Some(true) => "done",
+            None => "all",
         };
         let subtasks = match self.filter.subtasks {
             SubtaskVisibility::Show => "show",
@@ -609,39 +613,64 @@ fn merge_records(records: Vec<TaskRecord>) -> Vec<TaskRecord> {
         by_gid
             .entry(record.gid.clone())
             .and_modify(|existing| {
-                existing.completed |= record.completed;
-                if existing.assignee.is_none() {
-                    existing.assignee = record.assignee.clone();
-                }
-                if existing.due_date.is_none() {
-                    existing.due_date = record.due_date.clone();
-                }
-                if existing.start_date.is_none() {
-                    existing.start_date = record.start_date.clone();
-                }
-                existing.parent_gid = existing.parent_gid.clone().or(record.parent_gid.clone());
-                existing.subtask_depth = existing.subtask_depth.max(record.subtask_depth);
-                existing.section_order = match (existing.section_order, record.section_order) {
-                    (Some(left), Some(right)) => Some(left.min(right)),
-                    (None, Some(right)) => Some(right),
-                    (Some(left), None) => Some(left),
-                    (None, None) => None,
-                };
-                merge_text_lists(&mut existing.sections, &record.sections);
-                merge_text_lists(&mut existing.projects, &record.projects);
-                existing.natural_order = existing.natural_order.min(record.natural_order);
-                for (field_gid, values) in &record.custom_fields {
-                    existing
-                        .custom_fields
-                        .entry(field_gid.clone())
-                        .and_modify(|existing_values| merge_text_lists(existing_values, values))
-                        .or_insert_with(|| values.clone());
-                }
+                merge_task_record(existing, record.clone());
             })
             .or_insert(record);
     }
 
     by_gid.into_values().collect()
+}
+
+pub fn merge_task_record(existing: &mut TaskRecord, record: TaskRecord) {
+    let incoming_is_newer = match (&existing.modified_at, &record.modified_at) {
+        (None, Some(_)) => true,
+        (Some(left), Some(right)) => right >= left,
+        _ => false,
+    };
+
+    existing.completed |= record.completed;
+    if incoming_is_newer || existing.assignee.is_none() {
+        if record.assignee.is_some() {
+            existing.assignee = record.assignee.clone();
+        }
+    }
+    if incoming_is_newer || existing.due_date.is_none() {
+        if record.due_date.is_some() {
+            existing.due_date = record.due_date.clone();
+        }
+    }
+    if incoming_is_newer || existing.start_date.is_none() {
+        if record.start_date.is_some() {
+            existing.start_date = record.start_date.clone();
+        }
+    }
+    if incoming_is_newer || existing.name != record.name {
+        existing.name = record.name.clone();
+    }
+    if incoming_is_newer {
+        existing.modified_at = record.modified_at.clone().or(existing.modified_at.clone());
+    } else if existing.modified_at.is_none() {
+        existing.modified_at = record.modified_at.clone();
+    }
+    existing.parent_gid = existing.parent_gid.clone().or(record.parent_gid.clone());
+    existing.subtask_depth = existing.subtask_depth.max(record.subtask_depth);
+    existing.section_order = match (existing.section_order, record.section_order) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (None, Some(right)) => Some(right),
+        (Some(left), None) => Some(left),
+        (None, None) => None,
+    };
+    merge_text_lists(&mut existing.sections, &record.sections);
+    merge_text_lists(&mut existing.projects, &record.projects);
+    merge_text_lists(&mut existing.project_gids, &record.project_gids);
+    existing.natural_order = existing.natural_order.min(record.natural_order);
+    for (field_gid, values) in &record.custom_fields {
+        existing
+            .custom_fields
+            .entry(field_gid.clone())
+            .and_modify(|existing_values| merge_text_lists(existing_values, values))
+            .or_insert_with(|| values.clone());
+    }
 }
 
 fn merge_text_lists(target: &mut Vec<String>, source: &[String]) {
@@ -977,9 +1006,12 @@ mod tests {
             .custom_fields
             .insert("cf-1".to_string(), vec!["High".to_string(), "Urgent".to_string()]);
 
-        let model = TaskTableModel::from_records(
+        let mut settings = TaskTableSettings::default();
+        settings.filter.completed = None;
+        let model = TaskTableModel::from_records_with_settings(
             vec![first, second],
             vec![CustomFieldDefinition::new("cf-1", "Priority")],
+            &settings,
         );
 
         assert_eq!(model.columns[0], "Task");
@@ -1160,7 +1192,10 @@ mod tests {
         beta.sections = vec!["Today".to_string()];
 
         let settings = TaskTableSettings {
-            filter: TaskFilter::default(),
+            filter: TaskFilter {
+                completed: None,
+                ..TaskFilter::default()
+            },
             sort: TaskSort {
                 group_by_project: true,
                 group_by_section: true,

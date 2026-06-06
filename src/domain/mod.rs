@@ -5,5 +5,5 @@ pub use project::Project;
 pub use task::{
     CustomFieldColumn, CustomFieldDefinition, Section, SortDirection, SubtaskVisibility,
     TaskDateRange, TaskFieldFilter, TaskFilter, TaskRecord, TaskRow, TaskRowKind, TaskSort,
-    TaskSortField, TaskSortRule, TaskTableModel, TaskTableSettings,
+    TaskSortField, TaskSortRule, TaskTableModel, TaskTableSettings, merge_task_record,
 };

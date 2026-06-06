@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     asana::{
         dto::{ProjectCustomFieldSettingDto, SectionDto, TaskDto},
-        AsanaClient,
+        AsanaClient, TaskLoadScope,
     },
     domain::Project,
     error::Result,
@@ -61,12 +61,14 @@ impl AsanaClient for FakeAsanaClient {
         Ok(self.projects.clone())
     }
 
-    fn list_tasks(&self, project_gid: &str) -> Result<Vec<TaskDto>> {
+    fn list_tasks(&self, project_gid: &str, scope: TaskLoadScope) -> Result<Vec<TaskDto>> {
         Ok(self
             .tasks_by_project
             .get(project_gid)
             .cloned()
             .unwrap_or_default()
+            .into_iter()
+            .filter(|task| matches!(scope, TaskLoadScope::All) || !task.completed)
             .into_iter()
             .map(|mut task| {
                 if let Some(subtasks) = self.subtasks_by_task.get(&task.gid) {
@@ -77,12 +79,14 @@ impl AsanaClient for FakeAsanaClient {
             .collect())
     }
 
-    fn list_subtasks(&self, task_gid: &str) -> Result<Vec<TaskDto>> {
+    fn list_subtasks(&self, task_gid: &str, scope: TaskLoadScope) -> Result<Vec<TaskDto>> {
         Ok(self
             .subtasks_by_task
             .get(task_gid)
             .cloned()
             .unwrap_or_default()
+            .into_iter()
+            .filter(|task| matches!(scope, TaskLoadScope::All) || !task.completed)
             .into_iter()
             .map(|mut task| {
                 if let Some(subtasks) = self.subtasks_by_task.get(&task.gid) {

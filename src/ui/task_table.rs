@@ -449,6 +449,7 @@ mod tests {
                     gid: "t1".to_string(),
                     name: "Ship".to_string(),
                     completed: false,
+                    modified_at: None,
                     due_on: Some("2026-06-10".to_string()),
                     start_on: Some("2026-06-01".to_string()),
                     assignee: None,
@@ -520,6 +521,7 @@ mod tests {
                     gid: "t1".to_string(),
                     name: "Ship".to_string(),
                     completed: false,
+                    modified_at: None,
                     due_on: Some("2026-06-10".to_string()),
                     start_on: Some("2026-06-01".to_string()),
                     assignee: None,
@@ -588,29 +590,54 @@ mod tests {
             )
             .with_tasks(
                 "p1",
-                vec![crate::asana::dto::TaskDto {
-                    gid: "t1".to_string(),
-                    name: "Ship".to_string(),
-                    completed: false,
-                    due_on: Some("2026-06-10".to_string()),
-                    start_on: Some("2026-06-01".to_string()),
-                    assignee: None,
-                    num_subtasks: 0,
-                    memberships: vec![crate::asana::dto::TaskMembershipDto {
-                        project: crate::asana::dto::TaskMembershipProjectDto {
-                            gid: "p1".to_string(),
-                            name: "Inbox".to_string(),
-                        },
-                        section: Some(crate::asana::dto::TaskMembershipSectionDto {
-                            gid: "s1".to_string(),
-                            name: "Today".to_string(),
-                        }),
-                    }],
-                    custom_fields: vec![],
-                }],
+                vec![
+                    crate::asana::dto::TaskDto {
+                        gid: "t1".to_string(),
+                        name: "Ship".to_string(),
+                        completed: false,
+                        modified_at: None,
+                        due_on: Some("2026-06-10".to_string()),
+                        start_on: Some("2026-06-01".to_string()),
+                        assignee: None,
+                        num_subtasks: 0,
+                        memberships: vec![crate::asana::dto::TaskMembershipDto {
+                            project: crate::asana::dto::TaskMembershipProjectDto {
+                                gid: "p1".to_string(),
+                                name: "Inbox".to_string(),
+                            },
+                            section: Some(crate::asana::dto::TaskMembershipSectionDto {
+                                gid: "s1".to_string(),
+                                name: "Today".to_string(),
+                            }),
+                        }],
+                        custom_fields: vec![],
+                    },
+                    crate::asana::dto::TaskDto {
+                        gid: "t2".to_string(),
+                        name: "Done".to_string(),
+                        completed: true,
+                        modified_at: None,
+                        due_on: Some("2026-06-11".to_string()),
+                        start_on: Some("2026-06-02".to_string()),
+                        assignee: None,
+                        num_subtasks: 0,
+                        memberships: vec![crate::asana::dto::TaskMembershipDto {
+                            project: crate::asana::dto::TaskMembershipProjectDto {
+                                gid: "p1".to_string(),
+                                name: "Inbox".to_string(),
+                            },
+                            section: Some(crate::asana::dto::TaskMembershipSectionDto {
+                                gid: "s1".to_string(),
+                                name: "Today".to_string(),
+                            }),
+                        }],
+                        custom_fields: vec![],
+                    },
+                ],
             );
 
         let mut state = TaskReviewState::new();
+        state.set_completed_filter(None);
         state
             .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
@@ -655,6 +682,7 @@ mod tests {
                     gid: "t1".to_string(),
                     name: "Ship".to_string(),
                     completed: false,
+                    modified_at: None,
                     due_on: Some("2026-06-10".to_string()),
                     start_on: Some("2026-06-01".to_string()),
                     assignee: None,
@@ -731,6 +759,7 @@ mod tests {
                         gid: "t1".to_string(),
                         name: "Short".to_string(),
                         completed: false,
+                        modified_at: None,
                         due_on: Some("2026-06-10".to_string()),
                         start_on: Some("2026-06-01".to_string()),
                         assignee: Some(crate::asana::dto::UserDto {
@@ -760,6 +789,7 @@ mod tests {
                         gid: "t2".to_string(),
                         name: "A title that is intentionally far longer than the others to force width allocation".to_string(),
                         completed: false,
+                        modified_at: None,
                         due_on: Some("2026-06-11".to_string()),
                         start_on: Some("2026-06-02".to_string()),
                         assignee: Some(crate::asana::dto::UserDto {
@@ -829,6 +859,7 @@ mod tests {
                         gid: "t1".to_string(),
                         name: "First".to_string(),
                         completed: false,
+                        modified_at: None,
                         due_on: Some("2026-06-01".to_string()),
                         start_on: None,
                         assignee: None,
@@ -849,6 +880,7 @@ mod tests {
                         gid: "t2".to_string(),
                         name: "Second".to_string(),
                         completed: false,
+                        modified_at: None,
                         due_on: Some("2026-06-02".to_string()),
                         start_on: None,
                         assignee: None,
@@ -911,6 +943,7 @@ mod tests {
                         gid: "t1".to_string(),
                         name: "Short".to_string(),
                         completed: false,
+                        modified_at: None,
                         due_on: Some("2026-06-10".to_string()),
                         start_on: Some("2026-06-01".to_string()),
                         assignee: Some(crate::asana::dto::UserDto {
@@ -940,6 +973,7 @@ mod tests {
                         gid: "t2".to_string(),
                         name: "A title that is intentionally far longer than the others to force width allocation".to_string(),
                         completed: false,
+                        modified_at: None,
                         due_on: Some("2026-06-11".to_string()),
                         start_on: Some("2026-06-02".to_string()),
                         assignee: Some(crate::asana::dto::UserDto {
@@ -1015,6 +1049,7 @@ mod tests {
                     gid: "t1".to_string(),
                     name: "Ship release with a very long title that should force scrolling".to_string(),
                     completed: false,
+                    modified_at: None,
                     due_on: Some("2026-06-10".to_string()),
                     start_on: Some("2026-06-01".to_string()),
                     assignee: Some(crate::asana::dto::UserDto {
@@ -1060,6 +1095,7 @@ mod tests {
                     gid: "t1".to_string(),
                     name: "A task title that is intentionally far longer than sixty percent of the viewport width".to_string(),
                     completed: false,
+                    modified_at: None,
                     due_on: Some("2026-06-10".to_string()),
                     start_on: Some("2026-06-01".to_string()),
                     assignee: Some(crate::asana::dto::UserDto {

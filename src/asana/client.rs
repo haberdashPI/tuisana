@@ -6,7 +6,7 @@ use crate::{
         dto::{
             CollectionResponse, ProjectCustomFieldSettingDto, ProjectDto, SectionDto, TaskDto,
         },
-        AsanaClient,
+        AsanaClient, TaskLoadScope,
     },
     config::AuthConfig,
     domain::Project,
@@ -111,16 +111,20 @@ impl<T: Transport> HttpAsanaClient<T> {
     fn list_tasks_page(
         &self,
         project_gid: &str,
+        scope: TaskLoadScope,
         offset: Option<&str>,
     ) -> Result<CollectionResponse<TaskDto>> {
         let mut query = vec![
             (
                 "opt_fields",
-                "gid,name,completed,due_on,start_on,assignee.gid,assignee.name,num_subtasks,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.enum_value.gid,custom_fields.enum_value.name"
+                "gid,name,completed,modified_at,due_on,start_on,assignee.gid,assignee.name,num_subtasks,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.enum_value.gid,custom_fields.enum_value.name"
                     .to_string(),
             ),
             ("limit", "100".to_string()),
         ];
+        if matches!(scope, TaskLoadScope::OpenOnly) {
+            query.push(("completed_since", "now".to_string()));
+        }
         if let Some(offset) = offset {
             query.push(("offset", offset.to_string()));
         }
@@ -138,16 +142,20 @@ impl<T: Transport> HttpAsanaClient<T> {
     fn list_subtasks_page(
         &self,
         task_gid: &str,
+        scope: TaskLoadScope,
         offset: Option<&str>,
     ) -> Result<CollectionResponse<TaskDto>> {
         let mut query = vec![
             (
                 "opt_fields",
-                "gid,name,completed,due_on,start_on,assignee.gid,assignee.name,num_subtasks,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.enum_value.gid,custom_fields.enum_value.name"
+                "gid,name,completed,modified_at,due_on,start_on,assignee.gid,assignee.name,num_subtasks,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.enum_value.gid,custom_fields.enum_value.name"
                     .to_string(),
             ),
             ("limit", "100".to_string()),
         ];
+        if matches!(scope, TaskLoadScope::OpenOnly) {
+            query.push(("completed_since", "now".to_string()));
+        }
         if let Some(offset) = offset {
             query.push(("offset", offset.to_string()));
         }
@@ -232,12 +240,12 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
         Ok(projects)
     }
 
-    fn list_tasks(&self, project_gid: &str) -> Result<Vec<TaskDto>> {
+    fn list_tasks(&self, project_gid: &str, scope: TaskLoadScope) -> Result<Vec<TaskDto>> {
         let mut tasks = Vec::new();
         let mut offset: Option<String> = None;
 
         loop {
-            let page = self.list_tasks_page(project_gid, offset.as_deref())?;
+            let page = self.list_tasks_page(project_gid, scope, offset.as_deref())?;
             tasks.extend(page.data);
 
             match page.next_page {
@@ -249,12 +257,12 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
         Ok(tasks)
     }
 
-    fn list_subtasks(&self, task_gid: &str) -> Result<Vec<TaskDto>> {
+    fn list_subtasks(&self, task_gid: &str, scope: TaskLoadScope) -> Result<Vec<TaskDto>> {
         let mut tasks = Vec::new();
         let mut offset: Option<String> = None;
 
         loop {
-            let page = self.list_subtasks_page(task_gid, offset.as_deref())?;
+            let page = self.list_subtasks_page(task_gid, scope, offset.as_deref())?;
             tasks.extend(page.data);
 
             match page.next_page {
