@@ -120,6 +120,26 @@ command = "page_up"
 key = "ctrl-d"
 command = "page_down"
 
+[[bind]]
+key = "c"
+command = "toggle_completed_filter"
+
+[[bind]]
+key = "z"
+command = "toggle_subtask_visibility"
+
+[[bind]]
+key = "p"
+command = "toggle_project_grouping"
+
+[[bind]]
+key = "g"
+command = "toggle_section_grouping"
+
+[[bind]]
+key = "s"
+command = "cycle_task_sort"
+
 [[project]]
 gid = "project-gid-here"
 starred = true

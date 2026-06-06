@@ -333,6 +333,14 @@ fn default_bindings() -> Vec<Bind> {
             command: "toggle_subtask_visibility".to_string(),
         },
         Bind {
+            key: "p".to_string(),
+            command: "toggle_project_grouping".to_string(),
+        },
+        Bind {
+            key: "g".to_string(),
+            command: "toggle_section_grouping".to_string(),
+        },
+        Bind {
             key: "s".to_string(),
             command: "cycle_task_sort".to_string(),
         },

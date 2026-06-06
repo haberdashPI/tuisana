@@ -249,21 +249,17 @@ pub struct TaskSortRule {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskSort {
+    pub group_by_project: bool,
+    pub group_by_section: bool,
     pub rules: Vec<TaskSortRule>,
 }
 
 impl Default for TaskSort {
     fn default() -> Self {
         Self {
+            group_by_project: true,
+            group_by_section: true,
             rules: vec![
-                TaskSortRule {
-                    field: TaskSortField::Project,
-                    direction: SortDirection::Asc,
-                },
-                TaskSortRule {
-                    field: TaskSortField::Section,
-                    direction: SortDirection::Asc,
-                },
                 TaskSortRule {
                     field: TaskSortField::Date,
                     direction: SortDirection::Asc,
@@ -282,15 +278,22 @@ impl Default for TaskSort {
 }
 
 impl TaskSort {
+    pub fn toggle_project_grouping(&mut self) {
+        self.group_by_project = !self.group_by_project;
+    }
+
+    pub fn toggle_section_grouping(&mut self) {
+        self.group_by_section = !self.group_by_section;
+    }
+
     pub fn cycle_primary_field(&mut self) {
         let next_field = match self.rules.first().map(|rule| rule.field) {
-            Some(TaskSortField::Project) | None => TaskSortField::Section,
-            Some(TaskSortField::Section) => TaskSortField::Date,
-            Some(TaskSortField::Date) => TaskSortField::Title,
+            Some(TaskSortField::Date) | None => TaskSortField::Title,
             Some(TaskSortField::Title) => TaskSortField::Assignee,
             Some(TaskSortField::Assignee) => TaskSortField::Completed,
             Some(TaskSortField::Completed) => TaskSortField::Natural,
-            Some(TaskSortField::Natural) => TaskSortField::Project,
+            Some(TaskSortField::Natural) => TaskSortField::Date,
+            Some(TaskSortField::Project) | Some(TaskSortField::Section) => TaskSortField::Date,
         };
 
         if let Some(rule) = self.rules.first_mut() {
@@ -305,13 +308,13 @@ impl TaskSort {
 
     pub fn primary_field_label(&self) -> &'static str {
         match self.rules.first().map(|rule| rule.field) {
-            Some(TaskSortField::Project) | None => "project",
-            Some(TaskSortField::Section) => "section",
-            Some(TaskSortField::Date) => "date",
+            Some(TaskSortField::Date) | None => "date",
             Some(TaskSortField::Title) => "title",
             Some(TaskSortField::Assignee) => "assignee",
             Some(TaskSortField::Completed) => "completed",
             Some(TaskSortField::Natural) => "natural",
+            Some(TaskSortField::Project) => "project",
+            Some(TaskSortField::Section) => "section",
         }
     }
 }
@@ -324,18 +327,24 @@ impl Default for TaskTableModel {
 
 impl TaskTableSettings {
     pub fn summary(&self) -> String {
+        let grouping = format!(
+            "grp p:{} s:{}",
+            if self.sort.group_by_project { "on" } else { "off" },
+            if self.sort.group_by_section { "on" } else { "off" }
+        );
         let completed = match self.filter.completed {
-            None => "completed: all".to_string(),
-            Some(false) => "completed: open".to_string(),
-            Some(true) => "completed: done".to_string(),
+            None => "all",
+            Some(false) => "open",
+            Some(true) => "done",
         };
         let subtasks = match self.filter.subtasks {
-            SubtaskVisibility::Show => "subtasks: show",
-            SubtaskVisibility::Hide => "subtasks: hide",
+            SubtaskVisibility::Show => "show",
+            SubtaskVisibility::Hide => "hide",
         };
 
         format!(
-            "filters: {}, {}; sort: {}",
+            "{}; comp {}; sub {}; sort {}",
+            grouping,
             completed,
             subtasks,
             self.sort.primary_field_label()
@@ -385,7 +394,7 @@ impl TaskTableModel {
             })
             .collect::<Vec<_>>();
 
-        let rows = build_rows(&merged, &custom_field_columns);
+        let rows = build_rows(&merged, &custom_field_columns, settings);
 
         Self {
             columns: default_columns()
@@ -640,24 +649,8 @@ fn sanitize_display_text(value: &str) -> String {
         .to_string()
 }
 
-fn record_sort_key(record: &TaskRecord) -> (String, usize, String, String, usize, usize, String, String) {
-    let project = record.projects.first().cloned().unwrap_or_default();
-    let section = record.sections.first().cloned().unwrap_or_default();
-    let date = record
-        .due_date
-        .clone()
-        .or_else(|| record.start_date.clone())
-        .unwrap_or_default();
-    (
-        project,
-        record.section_order.unwrap_or(usize::MAX),
-        date,
-        section,
-        record.subtask_depth,
-        record.natural_order,
-        sanitize_display_text(&record.name),
-        record.gid.clone(),
-    )
+fn record_sort_key(record: &TaskRecord) -> (usize, String) {
+    (record.natural_order, record.gid.clone())
 }
 
 impl TaskSort {
@@ -666,6 +659,25 @@ impl TaskSort {
             (false, true) => return std::cmp::Ordering::Less,
             (true, false) => return std::cmp::Ordering::Greater,
             _ => {}
+        }
+
+        if self.group_by_project {
+            let ordering = left
+                .projects
+                .first()
+                .cloned()
+                .unwrap_or_default()
+                .cmp(&right.projects.first().cloned().unwrap_or_default());
+            if ordering != std::cmp::Ordering::Equal {
+                return ordering;
+            }
+        }
+
+        if self.group_by_section {
+            let ordering = compare_section_key(left, right);
+            if ordering != std::cmp::Ordering::Equal {
+                return ordering;
+            }
         }
 
         for rule in &self.rules {
@@ -679,6 +691,20 @@ impl TaskSort {
     }
 }
 
+fn compare_section_key(left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
+    left
+        .section_order
+        .unwrap_or(usize::MAX)
+        .cmp(&right.section_order.unwrap_or(usize::MAX))
+        .then_with(|| {
+            left.sections
+                .first()
+                .cloned()
+                .unwrap_or_default()
+                .cmp(&right.sections.first().cloned().unwrap_or_default())
+        })
+}
+
 fn compare_rule(rule: &TaskSortRule, left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
     let ordering = match rule.field {
         TaskSortField::Project => left
@@ -687,17 +713,7 @@ fn compare_rule(rule: &TaskSortRule, left: &TaskRecord, right: &TaskRecord) -> s
             .cloned()
             .unwrap_or_default()
             .cmp(&right.projects.first().cloned().unwrap_or_default()),
-        TaskSortField::Section => left
-            .section_order
-            .unwrap_or(usize::MAX)
-            .cmp(&right.section_order.unwrap_or(usize::MAX))
-            .then_with(|| {
-                left.sections
-                    .first()
-                    .cloned()
-                    .unwrap_or_default()
-                    .cmp(&right.sections.first().cloned().unwrap_or_default())
-            }),
+        TaskSortField::Section => compare_section_key(left, right),
         TaskSortField::Date => left
             .due_date
             .clone()
@@ -837,7 +853,11 @@ fn record_matches(record: &TaskRecord, filter: &TaskFilter) -> bool {
     true
 }
 
-fn build_rows(merged: &[TaskRecord], custom_field_columns: &[CustomFieldColumn]) -> Vec<TaskRow> {
+fn build_rows(
+    merged: &[TaskRecord],
+    custom_field_columns: &[CustomFieldColumn],
+    settings: &TaskTableSettings,
+) -> Vec<TaskRow> {
     let column_count = default_columns().len() + custom_field_columns.len();
     let mut rows = Vec::new();
     let mut current_project: Option<String> = None;
@@ -847,14 +867,14 @@ fn build_rows(merged: &[TaskRecord], custom_field_columns: &[CustomFieldColumn])
         let project = record.projects.first().cloned().unwrap_or_default();
         let section = record.sections.first().cloned().unwrap_or_default();
 
-        if current_project.as_deref() != Some(project.as_str()) {
+        if settings.sort.group_by_project && current_project.as_deref() != Some(project.as_str()) {
             let project_label = sanitize_display_text(&project);
             current_project = Some(project.clone());
             current_section = None;
             rows.push(TaskRow::project_header(project_label, column_count));
         }
 
-        if current_section.as_deref() != Some(section.as_str()) {
+        if settings.sort.group_by_section && current_section.as_deref() != Some(section.as_str()) {
             if current_section.is_some() {
                 rows.push(TaskRow::section_spacer(column_count));
             }
@@ -1098,6 +1118,8 @@ mod tests {
         let settings = TaskTableSettings {
             filter: TaskFilter::default(),
             sort: TaskSort {
+                group_by_project: true,
+                group_by_section: true,
                 rules: vec![
                     TaskSortRule {
                         field: TaskSortField::Completed,
@@ -1215,6 +1237,8 @@ mod tests {
         let settings = TaskTableSettings {
             filter: TaskFilter::default(),
             sort: TaskSort {
+                group_by_project: true,
+                group_by_section: true,
                 rules: vec![TaskSortRule {
                     field: TaskSortField::Natural,
                     direction: SortDirection::Asc,
@@ -1236,5 +1260,78 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(task_rows, vec!["a", "z"]);
+    }
+
+    #[test]
+    fn omits_section_spacers_when_section_grouping_is_disabled() {
+        let mut first = TaskRecord::new("a", "First");
+        first.projects = vec!["Inbox".to_string()];
+        first.sections = vec!["Today".to_string()];
+        first.section_order = Some(0);
+
+        let mut second = TaskRecord::new("b", "Second");
+        second.projects = vec!["Inbox".to_string()];
+        second.sections = vec!["Later".to_string()];
+        second.section_order = Some(1);
+
+        let settings = TaskTableSettings {
+            filter: TaskFilter::default(),
+            sort: TaskSort {
+                group_by_project: true,
+                group_by_section: false,
+                rules: vec![TaskSortRule {
+                    field: TaskSortField::Date,
+                    direction: SortDirection::Asc,
+                }],
+            },
+        };
+
+        let model = TaskTableModel::from_records_with_settings(vec![first, second], vec![], &settings);
+        let row_kinds = model.rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>();
+
+        assert_eq!(row_kinds, vec![TaskRowKind::ProjectHeader, TaskRowKind::Task, TaskRowKind::Task]);
+    }
+
+    #[test]
+    fn sorts_across_projects_when_project_grouping_is_disabled() {
+        let mut later_project = TaskRecord::new("a", "Later project task");
+        later_project.projects = vec!["Zeta".to_string()];
+        later_project.sections = vec!["Today".to_string()];
+        later_project.due_date = Some("2026-06-20".to_string());
+        later_project.natural_order = 1;
+
+        let mut earlier_project = TaskRecord::new("b", "Earlier project task");
+        earlier_project.projects = vec!["Alpha".to_string()];
+        earlier_project.sections = vec!["Today".to_string()];
+        earlier_project.due_date = Some("2026-06-10".to_string());
+        earlier_project.natural_order = 0;
+
+        let settings = TaskTableSettings {
+            filter: TaskFilter::default(),
+            sort: TaskSort {
+                group_by_project: false,
+                group_by_section: false,
+                rules: vec![TaskSortRule {
+                    field: TaskSortField::Date,
+                    direction: SortDirection::Asc,
+                }],
+            },
+        };
+
+        let model = TaskTableModel::from_records_with_settings(
+            vec![later_project, earlier_project],
+            vec![],
+            &settings,
+        );
+
+        let task_rows = model
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(task_rows, vec!["b", "a"]);
+        assert!(model.rows.iter().all(|row| !matches!(row.kind, TaskRowKind::ProjectHeader | TaskRowKind::SectionSpacer)));
     }
 }

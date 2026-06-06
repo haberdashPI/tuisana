@@ -95,29 +95,30 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
             frame.render_stateful_widget(list, chunks[4], &mut state);
 
             if task_visible {
+                let task_view = render_task_table(&app.tasks, size.width.saturating_sub(2) as usize);
                 let task_area = Rect::new(
                     size.x,
                     size.y + project_height,
                     size.width,
                     size.height.saturating_sub(project_height),
                 );
+                let task_hint_height = task_view.hint_lines.len().max(1) as u16;
                 let task_chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
                         Constraint::Length(1),
                         Constraint::Length(1),
-                        Constraint::Length(1),
+                        Constraint::Length(task_hint_height),
                         Constraint::Min(1),
                     ])
                     .split(task_area);
                 let task_body_height = task_chunks[3].height.saturating_sub(2) as usize;
                 app.tasks.ensure_selected_visible(task_body_height);
-                let task_view = render_task_table(&app.tasks, task_chunks[3].width.saturating_sub(2) as usize);
                 page_size = task_body_height.max(1);
 
                 frame.render_widget(Paragraph::new(task_view.title.as_str()), task_chunks[0]);
                 frame.render_widget(Paragraph::new(task_view.status_line.as_str()), task_chunks[1]);
-                frame.render_widget(Paragraph::new(task_view.scroll_hint_line.as_str()), task_chunks[2]);
+                frame.render_widget(Paragraph::new(task_view.hint_lines.join("\n")), task_chunks[2]);
 
                 let body = Paragraph::new(crate::ui::task_table::build_task_lines(
                     &task_view,

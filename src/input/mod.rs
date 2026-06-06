@@ -111,6 +111,8 @@ pub enum Action {
     MoveProjectDown,
     ToggleCompletedFilter,
     ToggleSubtaskVisibility,
+    ToggleProjectGrouping,
+    ToggleSectionGrouping,
     CycleTaskSort,
 }
 
@@ -152,6 +154,8 @@ impl Action {
             "move_project_down" => Ok(Self::MoveProjectDown),
             "toggle_completed_filter" => Ok(Self::ToggleCompletedFilter),
             "toggle_subtask_visibility" => Ok(Self::ToggleSubtaskVisibility),
+            "toggle_project_grouping" => Ok(Self::ToggleProjectGrouping),
+            "toggle_section_grouping" => Ok(Self::ToggleSectionGrouping),
             "cycle_task_sort" => Ok(Self::CycleTaskSort),
             other => Err(Error::Backend(format!("unsupported command: {other}"))),
         }
@@ -212,6 +216,8 @@ impl Display for Action {
             Action::MoveProjectDown => "move_project_down",
             Action::ToggleCompletedFilter => "toggle_completed_filter",
             Action::ToggleSubtaskVisibility => "toggle_subtask_visibility",
+            Action::ToggleProjectGrouping => "toggle_project_grouping",
+            Action::ToggleSectionGrouping => "toggle_section_grouping",
             Action::CycleTaskSort => "cycle_task_sort",
         };
         f.write_str(name)

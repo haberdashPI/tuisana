@@ -56,6 +56,7 @@ pub struct TaskReviewState {
     loading_target_ids: Vec<String>,
     loaded_target_ids: Vec<String>,
     task_vertical_scroll: usize,
+    help_details_visible: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -82,6 +83,14 @@ impl TaskReviewState {
 
     pub fn toggle_visible(&mut self) {
         self.set_visible(!self.visible);
+    }
+
+    pub fn help_details_visible(&self) -> bool {
+        self.help_details_visible
+    }
+
+    pub fn toggle_help_details(&mut self) {
+        self.help_details_visible = !self.help_details_visible;
     }
 
     pub fn focus_mode(&self) -> TaskFocusMode {
@@ -467,6 +476,16 @@ impl TaskReviewState {
         self.refresh_table();
     }
 
+    pub fn toggle_project_grouping(&mut self) {
+        self.settings.sort.toggle_project_grouping();
+        self.refresh_table();
+    }
+
+    pub fn toggle_section_grouping(&mut self) {
+        self.settings.sort.toggle_section_grouping();
+        self.refresh_table();
+    }
+
     pub fn apply_action(&mut self, action: &Action, page_size: usize) -> Option<crate::input::AppCommand> {
         match action {
             Action::MoveUp => {
@@ -521,12 +540,24 @@ impl TaskReviewState {
                 self.toggle_completed_filter();
                 None
             }
+            Action::ToggleHelpDetails => {
+                self.toggle_help_details();
+                None
+            }
             Action::ToggleSubtaskVisibility => {
                 self.toggle_subtask_visibility();
                 None
             }
             Action::CycleTaskSort => {
                 self.cycle_sort_field();
+                None
+            }
+            Action::ToggleProjectGrouping => {
+                self.toggle_project_grouping();
+                None
+            }
+            Action::ToggleSectionGrouping => {
+                self.toggle_section_grouping();
                 None
             }
             _ => None,
@@ -1001,16 +1032,21 @@ mod tests {
 
         state.toggle_completed_filter();
         assert_eq!(state.table().task_count(), 1);
-        assert!(state.filter_summary().contains("completed"));
+        assert!(state.filter_summary().contains("comp done"));
 
         state.toggle_completed_filter();
         assert_eq!(state.table().task_count(), 2);
 
         state.toggle_subtask_visibility();
-        assert!(state.filter_summary().contains("subtasks: hide"));
+        assert!(state.filter_summary().contains("sub hide"));
+
+        state.toggle_project_grouping();
+        state.toggle_section_grouping();
+        assert!(state.filter_summary().contains("grp p:off"));
+        assert!(state.filter_summary().contains("grp p:off s:off"));
 
         state.cycle_sort_field();
-        assert!(state.filter_summary().contains("sort: section"));
+        assert!(state.filter_summary().contains("sort title"));
     }
 
     #[test]

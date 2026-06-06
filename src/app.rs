@@ -115,6 +115,8 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 | Action::PageDown
                 | Action::ToggleCompletedFilter
                 | Action::ToggleSubtaskVisibility
+                | Action::ToggleProjectGrouping
+                | Action::ToggleSectionGrouping
                 | Action::CycleTaskSort
         ) && self.tasks.visible();
 
@@ -710,6 +712,6 @@ mod tests {
         app.handle_action(&Action::ToggleCompletedFilter, 10)
             .expect("task filter action");
         assert_eq!(app.tasks.table().task_count(), 1);
-        assert!(app.tasks.filter_summary().contains("completed: open"));
+        assert!(app.tasks.filter_summary().contains("comp open"));
     }
 }

@@ -14,7 +14,7 @@ const DEFAULT_OTHER_COLUMN_CAP: usize = 18;
 pub struct TaskTableView {
     pub title: String,
     pub status_line: String,
-    pub scroll_hint_line: String,
+    pub hint_lines: Vec<String>,
     pub columns: Vec<String>,
     pub rows: Vec<TaskRow>,
     pub column_widths: Vec<usize>,
@@ -36,7 +36,7 @@ pub fn render_task_table(state: &TaskReviewState, viewport_width: usize) -> Task
         TaskReviewStatus::Ready => task_status(state, &format!("ready, {}", state.filter_summary())),
         TaskReviewStatus::OutOfDate(message) => task_status(
             state,
-            &format!("out of date - {message}, {}", state.filter_summary()),
+            &format!("stale: {message}, {}", state.filter_summary()),
         ),
         TaskReviewStatus::Empty => "No tasks available".to_string(),
         TaskReviewStatus::Error(message) => format!("Error: {message}"),
@@ -76,15 +76,7 @@ pub fn render_task_table(state: &TaskReviewState, viewport_width: usize) -> Task
     let total_width = title_width + other_width_total;
     let max_scroll = total_width.saturating_sub(viewport_width);
     let scroll = state.horizontal_scroll().min(max_scroll);
-    let scroll_hint_line = if max_scroll > 0 {
-        format!(
-            "left/right: scroll columns ({}/{}), []: section, {{}}: project, c: completed, z: subtasks, s: sort",
-            scroll, max_scroll
-        )
-    } else {
-        "left/right: scroll columns, []: section, {}: project, c: completed, z: subtasks, s: sort"
-            .to_string()
-    };
+    let hint_lines = task_hint_lines(state, scroll, max_scroll);
 
     TaskTableView {
         title: match state.focus_mode() {
@@ -92,7 +84,7 @@ pub fn render_task_table(state: &TaskReviewState, viewport_width: usize) -> Task
             TaskFocusMode::Tasks => "Task review (task focus)".to_string(),
         },
         status_line,
-        scroll_hint_line,
+        hint_lines,
         columns,
         rows,
         column_widths,
@@ -150,17 +142,55 @@ pub fn build_task_lines(
 }
 
 fn task_status(state: &TaskReviewState, suffix: &str) -> String {
-    let visible = if state.visible() { "visible" } else { "hidden" };
     match state.selected_index() {
         Some(index) => format!(
-            "{} tasks, row {}, {}, {}",
+            "{} tasks, row {}, {}",
             state.table().task_count(),
             state.selected_task_position().unwrap_or(index + 1),
-            visible,
             suffix
         ),
-        None => format!("{} tasks, {}, {}", state.table().task_count(), visible, suffix),
+        None => format!("{} tasks, {}", state.table().task_count(), suffix),
     }
+}
+
+fn task_hint_lines(state: &TaskReviewState, scroll: usize, max_scroll: usize) -> Vec<String> {
+    let compact_scroll_line = if max_scroll > 0 {
+        format!(
+            "left/right: scroll columns ({}/{}), t: tasks, m: focus, r: refresh, q: quit",
+            scroll, max_scroll
+        )
+    } else {
+        "left/right: scroll columns, t: tasks, m: focus, r: refresh, q: quit".to_string()
+    };
+    let expanded_scroll_line = if max_scroll > 0 {
+        format!("scroll: left/right columns ({}/{})", scroll, max_scroll)
+    } else {
+        "scroll: left/right columns".to_string()
+    };
+
+    if !state.help_details_visible() {
+        return vec![
+            "?: more hints".to_string(),
+            "j/down,k/up: move, ctrl-u/d: page, home/end: top/bottom".to_string(),
+            "[]: section jumps, {}: project jumps, s: sort, p: project group, g: section group"
+                .to_string(),
+            "c: completed, z: subtasks".to_string(),
+            compact_scroll_line,
+        ];
+    }
+
+    vec![
+        "?: fewer hints".to_string(),
+        "navigation: j/down,k/up move; ctrl-u/d page; home/end top/bottom".to_string(),
+        expanded_scroll_line,
+        String::new(),
+        "grouping/sort: [] section jumps; {} project jumps; p project group; g section group; s sort"
+            .to_string(),
+        String::new(),
+        "filters: c completed; z subtasks".to_string(),
+        String::new(),
+        "t: tasks, m: focus, r: refresh, q: quit".to_string(),
+    ]
 }
 
 fn natural_column_widths(columns: &[String], rows: &[Vec<String>]) -> Vec<usize> {
@@ -370,7 +400,7 @@ mod tests {
 
         assert!(view.status_line.contains("Loading tasks"));
         assert!(view.status_line.contains("Inbox"));
-        assert!(view.scroll_hint_line.contains("left/right"));
+        assert!(view.hint_lines.first().unwrap().contains("more hints"));
     }
 
     #[test]
@@ -382,7 +412,7 @@ mod tests {
 
         let view = render_task_table(&state, 80);
 
-        assert!(view.status_line.contains("out of date"));
+        assert!(view.status_line.contains("stale"));
         assert!(view.status_line.contains("switch to task view"));
     }
 
@@ -426,15 +456,86 @@ mod tests {
             .expect("tasks load");
         state.toggle_completed_filter();
         state.toggle_subtask_visibility();
+        state.toggle_project_grouping();
+        state.toggle_section_grouping();
         state.cycle_sort_field();
 
         let view = render_task_table(&state, 80);
 
-        assert!(view.scroll_hint_line.contains("c: completed"));
-        assert!(view.scroll_hint_line.contains("z: subtasks"));
-        assert!(view.scroll_hint_line.contains("s: sort"));
-        assert!(view.status_line.contains("filters:"));
-        assert!(view.status_line.contains("sort:"));
+        assert_eq!(
+            view.hint_lines,
+            vec![
+                "?: more hints".to_string(),
+                "j/down,k/up: move, ctrl-u/d: page, home/end: top/bottom".to_string(),
+                "[]: section jumps, {}: project jumps, s: sort, p: project group, g: section group"
+                    .to_string(),
+                "c: completed, z: subtasks".to_string(),
+                "left/right: scroll columns, t: tasks, m: focus, r: refresh, q: quit".to_string(),
+            ]
+        );
+        assert!(view.status_line.contains("grp p:off s:off"));
+        assert!(view.status_line.contains("comp open"));
+        assert!(view.status_line.contains("sub hide"));
+        assert!(view.status_line.contains("sort title"));
+    }
+
+    #[test]
+    fn renders_expanded_task_help_details() {
+        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
+            .with_sections(
+                "p1",
+                vec![crate::asana::dto::SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_tasks(
+                "p1",
+                vec![crate::asana::dto::TaskDto {
+                    gid: "t1".to_string(),
+                    name: "Ship".to_string(),
+                    completed: false,
+                    due_on: Some("2026-06-10".to_string()),
+                    start_on: Some("2026-06-01".to_string()),
+                    assignee: None,
+                    num_subtasks: 0,
+                    memberships: vec![crate::asana::dto::TaskMembershipDto {
+                        project: crate::asana::dto::TaskMembershipProjectDto {
+                            gid: "p1".to_string(),
+                            name: "Inbox".to_string(),
+                        },
+                        section: Some(crate::asana::dto::TaskMembershipSectionDto {
+                            gid: "s1".to_string(),
+                            name: "Today".to_string(),
+                        }),
+                    }],
+                    custom_fields: vec![],
+                }],
+            );
+
+        let mut state = TaskReviewState::new();
+        state
+            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .expect("tasks load");
+        state.toggle_help_details();
+
+        let view = render_task_table(&state, 80);
+
+        assert_eq!(
+            view.hint_lines,
+            vec![
+                "?: fewer hints".to_string(),
+                "navigation: j/down,k/up move; ctrl-u/d page; home/end top/bottom".to_string(),
+                "scroll: left/right columns".to_string(),
+                String::new(),
+                "grouping/sort: [] section jumps; {} project jumps; p project group; g section group; s sort"
+                    .to_string(),
+                String::new(),
+                "filters: c completed; z subtasks".to_string(),
+                String::new(),
+                "t: tasks, m: focus, r: refresh, q: quit".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -776,7 +877,7 @@ mod tests {
         let view = render_task_table(&state, 40);
 
         assert!(view.total_width > 40);
-        assert!(view.scroll_hint_line.contains("/"));
+        assert!(view.hint_lines.iter().any(|line| line.contains("t: tasks")));
     }
 
     #[test]
