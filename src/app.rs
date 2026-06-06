@@ -103,6 +103,10 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 self.tasks.scroll_right();
                 return Ok(None);
             }
+            Action::ToggleTaskFilters if self.tasks.visible() => {
+                self.tasks.toggle_filter_panel();
+                return Ok(None);
+            }
             Action::ToggleCompletedFilter if self.tasks.visible() => {
                 self.tasks.cycle_completed_filter_without_refresh();
                 if self.tasks.can_serve_scope_for_targets(
@@ -221,6 +225,188 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         self.poll_task_load();
 
         debug_log(&format!("key event: {:?} {:?}", event.code, event.modifiers));
+
+        if self.tasks.filter_panel_visible() {
+            use crossterm::event::{KeyCode, KeyModifiers};
+
+            let editing = self.tasks.filter_panel_editing();
+            let is_plain_char = !event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+            let selected_kind = self.tasks.filter_selected_kind();
+
+            if editing {
+                match event.code {
+                    KeyCode::Esc | KeyCode::Enter => {
+                        self.tasks.filter_edit_done();
+                        return Ok(None);
+                    }
+                    KeyCode::Backspace => {
+                        self.tasks.filter_pop_char();
+                        return Ok(None);
+                    }
+                    KeyCode::Char('h')
+                        if is_plain_char
+                            && matches!(
+                                selected_kind,
+                                Some(crate::app::task_review::TaskFieldFilterKind::Labels)
+                            ) =>
+                    {
+                        self.tasks.filter_move_label_left();
+                        return Ok(None);
+                    }
+                    KeyCode::Char('l')
+                        if is_plain_char
+                            && matches!(
+                                selected_kind,
+                                Some(crate::app::task_review::TaskFieldFilterKind::Labels)
+                            ) =>
+                    {
+                        self.tasks.filter_move_label_right();
+                        return Ok(None);
+                    }
+                    KeyCode::Char('j')
+                        if is_plain_char
+                            && matches!(
+                                selected_kind,
+                                Some(crate::app::task_review::TaskFieldFilterKind::Labels)
+                            ) =>
+                    {
+                        self.tasks.filter_cycle_label_value(1);
+                        return Ok(None);
+                    }
+                    KeyCode::Char('k')
+                        if is_plain_char
+                            && matches!(
+                                selected_kind,
+                                Some(crate::app::task_review::TaskFieldFilterKind::Labels)
+                            ) =>
+                    {
+                        self.tasks.filter_cycle_label_value(-1);
+                        return Ok(None);
+                    }
+                    KeyCode::Char('a')
+                        if is_plain_char
+                            && matches!(
+                                selected_kind,
+                                Some(crate::app::task_review::TaskFieldFilterKind::Labels)
+                            ) =>
+                    {
+                        self.tasks.filter_add_label();
+                        return Ok(None);
+                    }
+                    KeyCode::Char('d')
+                        if is_plain_char
+                            && matches!(
+                                selected_kind,
+                                Some(crate::app::task_review::TaskFieldFilterKind::Labels)
+                            ) =>
+                    {
+                        self.tasks.filter_delete_label();
+                        return Ok(None);
+                    }
+                    KeyCode::Char('l')
+                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        self.tasks.filter_clear_current();
+                        return Ok(None);
+                    }
+                    KeyCode::Char('f')
+                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        self.tasks
+                            .filter_set_mode(crate::app::task_review::TaskFieldStringMode::Fuzzy);
+                        return Ok(None);
+                    }
+                    KeyCode::Char('s')
+                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        self.tasks.filter_set_mode(
+                            crate::app::task_review::TaskFieldStringMode::Substring,
+                        );
+                        return Ok(None);
+                    }
+                    KeyCode::Char('r')
+                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        self.tasks
+                            .filter_set_mode(crate::app::task_review::TaskFieldStringMode::Regex);
+                        return Ok(None);
+                    }
+                    KeyCode::Char(c) if is_plain_char => {
+                        self.tasks.filter_push_char(c);
+                        return Ok(None);
+                    }
+                    _ => {}
+                }
+            } else {
+                match event.code {
+                    KeyCode::Esc => {
+                        self.tasks.toggle_filter_panel();
+                        return Ok(None);
+                    }
+                    KeyCode::Enter => {
+                        self.tasks.filter_edit_begin();
+                        return Ok(None);
+                    }
+                    KeyCode::Up | KeyCode::Char('k') if is_plain_char => {
+                        self.tasks.move_filter_up();
+                        return Ok(None);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') if is_plain_char => {
+                        self.tasks.move_filter_down();
+                        return Ok(None);
+                    }
+                    KeyCode::PageUp
+                    | KeyCode::Char('u')
+                        if event.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        self.tasks.filter_page_up(page_size);
+                        return Ok(None);
+                    }
+                    KeyCode::PageDown
+                    | KeyCode::Char('d')
+                        if event.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        self.tasks.filter_page_down(page_size);
+                        return Ok(None);
+                    }
+                    KeyCode::Char('f') if is_plain_char =>
+                    {
+                        self.tasks.toggle_filter_panel();
+                        return Ok(None);
+                    }
+                    KeyCode::Char('s') if is_plain_char => {
+                        self.tasks.filter_cycle_mode();
+                        return Ok(None);
+                    }
+                    KeyCode::Char('l')
+                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        self.tasks.filter_clear_current();
+                        return Ok(None);
+                    }
+                    KeyCode::Char('f')
+                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        self.tasks.filter_set_mode(crate::app::task_review::TaskFieldStringMode::Fuzzy);
+                        return Ok(None);
+                    }
+                    KeyCode::Char('s')
+                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        self.tasks
+                            .filter_set_mode(crate::app::task_review::TaskFieldStringMode::Substring);
+                        return Ok(None);
+                    }
+                    KeyCode::Char('r')
+                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        self.tasks.filter_set_mode(crate::app::task_review::TaskFieldStringMode::Regex);
+                        return Ok(None);
+                    }
+                    _ => {}
+                }
+            }
+        }
 
         if self.projects.search_active() {
             use crossterm::event::{KeyCode, KeyModifiers};
@@ -405,6 +591,7 @@ fn task_view_action_for(binding: &KeyBinding) -> Option<Action> {
         KeyBinding::Char('c') => Some(Action::ToggleCompletedFilter),
         KeyBinding::Char('z') => Some(Action::ToggleSubtaskVisibility),
         KeyBinding::Char('s') => Some(Action::CycleTaskSort),
+        KeyBinding::Char('f') => Some(Action::ToggleTaskFilters),
         KeyBinding::Char('[') => Some(Action::MoveSectionUp),
         KeyBinding::Char(']') => Some(Action::MoveSectionDown),
         KeyBinding::Char('{') => Some(Action::MoveProjectUp),
@@ -439,6 +626,7 @@ mod tests {
     };
 
     use super::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
     fn app_can_be_created_with_fake_backend_and_load_projects() {
@@ -798,5 +986,205 @@ mod tests {
             .expect("task filter action");
         assert_eq!(app.tasks.table().task_count(), 1);
         assert!(app.tasks.filter_summary().contains("comp open"));
+    }
+
+    #[test]
+    fn toggle_task_filters_closes_the_panel_when_it_is_already_visible() {
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]);
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+        app.tasks.set_visible(true);
+        app.tasks.toggle_filter_panel();
+        assert!(app.tasks.filter_panel_visible());
+
+        app.handle_action(&Action::ToggleTaskFilters, 10)
+            .expect("toggle filters");
+
+        assert!(!app.tasks.filter_panel_visible());
+    }
+
+    #[test]
+    fn task_filter_panel_separates_browsing_from_editing_and_hides_without_losing_filters() {
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)])
+            .with_sections(
+                "1",
+                vec![crate::asana::dto::SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_tasks(
+                "1",
+                vec![
+                    TaskDto {
+                        gid: "t1".to_string(),
+                        name: "Open task".to_string(),
+                        completed: false,
+                        modified_at: None,
+                        due_on: Some("2026-06-01".to_string()),
+                        start_on: Some("2026-05-28".to_string()),
+                        assignee: None,
+                        num_subtasks: 0,
+                        memberships: vec![TaskMembershipDto {
+                            project: TaskMembershipProjectDto {
+                                gid: "1".to_string(),
+                                name: "Inbox".to_string(),
+                            },
+                            section: Some(TaskMembershipSectionDto {
+                                gid: "s1".to_string(),
+                                name: "Today".to_string(),
+                            }),
+                        }],
+                        custom_fields: vec![],
+                    },
+                    TaskDto {
+                        gid: "t2".to_string(),
+                        name: "Another task".to_string(),
+                        completed: false,
+                        modified_at: None,
+                        due_on: Some("2026-06-02".to_string()),
+                        start_on: Some("2026-05-29".to_string()),
+                        assignee: None,
+                        num_subtasks: 0,
+                        memberships: vec![TaskMembershipDto {
+                            project: TaskMembershipProjectDto {
+                                gid: "1".to_string(),
+                                name: "Inbox".to_string(),
+                            },
+                            section: Some(TaskMembershipSectionDto {
+                                gid: "s1".to_string(),
+                                name: "Today".to_string(),
+                            }),
+                        }],
+                        custom_fields: vec![],
+                    },
+                ],
+            );
+
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+        app.tasks
+            .load_for_projects(&app.client, &[Project::new("1", "Inbox", true)])
+            .expect("tasks load");
+        app.tasks.set_visible(true);
+
+        let keymap = app.keymap().expect("keymap builds");
+
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+            10,
+        )
+        .expect("open filter panel");
+        assert!(app.tasks.filter_panel_visible());
+        assert!(!app.tasks.filter_panel_editing());
+
+        let original_kind = app
+            .tasks
+            .filter_panel_entries()
+            .into_iter()
+            .find(|row| row.selected)
+            .map(|row| row.kind)
+            .expect("selected filter exists");
+
+        app.handle_key_event(&keymap, KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE), 10)
+            .expect("cycle string mode");
+        let cycled_kind = app
+            .tasks
+            .filter_panel_entries()
+            .into_iter()
+            .find(|row| row.selected)
+            .map(|row| row.kind)
+            .expect("selected filter exists");
+        assert_ne!(original_kind, cycled_kind);
+
+        app.handle_key_event(&keymap, KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE), 10)
+            .expect("move filter selection down");
+        assert_eq!(
+            app.tasks.filter_panel_entries().iter().position(|row| row.selected),
+            Some(1)
+        );
+
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            2,
+        )
+        .expect("page filter selection down");
+        assert_eq!(
+            app.tasks.filter_panel_entries().iter().position(|row| row.selected),
+            Some(3)
+        );
+
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            2,
+        )
+        .expect("page filter selection up");
+        assert_eq!(
+            app.tasks.filter_panel_entries().iter().position(|row| row.selected),
+            Some(1)
+        );
+
+        app.handle_key_event(&keymap, KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE), 10)
+            .expect("move filter selection up");
+        assert_eq!(
+            app.tasks.filter_panel_entries().iter().position(|row| row.selected),
+            Some(0)
+        );
+
+        app.handle_key_event(&keymap, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10)
+            .expect("enter edit mode");
+        assert!(app.tasks.filter_panel_editing());
+
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('O'), KeyModifiers::NONE),
+            10,
+        )
+        .expect("type into the selected filter");
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+            10,
+        )
+        .expect("type into the selected filter");
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+            10,
+        )
+        .expect("type into the selected filter");
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+            10,
+        )
+        .expect("type into the selected filter");
+        assert_eq!(
+            app.tasks
+                .filter_panel_entries()
+                .into_iter()
+                .find(|row| row.selected)
+                .map(|row| row.query),
+            Some("Open".to_string())
+        );
+        assert_eq!(app.tasks.table().task_count(), 1);
+
+        app.handle_key_event(&keymap, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10)
+            .expect("leave edit mode");
+        assert!(!app.tasks.filter_panel_editing());
+
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+            10,
+        )
+        .expect("hide filter panel");
+
+        assert!(!app.tasks.filter_panel_visible());
+        assert!(app.tasks.filter_summary().contains("filters 1"));
+        assert_eq!(app.tasks.table().task_count(), 1);
     }
 }

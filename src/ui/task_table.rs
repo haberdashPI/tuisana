@@ -2,7 +2,7 @@ use ratatui::{style::{Modifier, Style}, text::{Line, Span}};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
-    app::task_review::{TaskFocusMode, TaskReviewState, TaskReviewStatus},
+    app::task_review::{TaskFocusMode, TaskFilterPanelEntry, TaskReviewState, TaskReviewStatus},
     domain::{TaskRow, TaskRowKind},
 };
 
@@ -20,6 +20,15 @@ pub struct TaskTableView {
     pub column_widths: Vec<usize>,
     pub total_width: usize,
     pub scroll_offset: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TaskFilterPanelView {
+    pub title: String,
+    pub(crate) rows: Vec<TaskFilterPanelEntry>,
+    pub has_active_filters: bool,
+    pub editing: bool,
+    pub help_lines: Vec<String>,
 }
 
 pub fn render_task_table(state: &TaskReviewState, viewport_width: usize) -> TaskTableView {
@@ -174,6 +183,55 @@ pub fn build_task_lines(
     lines
 }
 
+pub(crate) fn build_task_filter_lines(
+    view: &TaskFilterPanelView,
+    viewport_width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut title = view.title.clone();
+    if view.has_active_filters {
+        title.push_str(" (active)");
+    }
+    if view.editing {
+        title.push_str(" (editing)");
+    }
+    lines.push(Line::from(vec![Span::styled(
+        pad_cell(&title, viewport_width),
+        Style::default().add_modifier(Modifier::BOLD),
+    )]));
+    for help in &view.help_lines {
+        lines.push(Line::from(vec![Span::raw(help.clone())]));
+    }
+
+    for row in &view.rows {
+        let marker = if row.selected { ">" } else { " " };
+        let prefix = format!("{marker} {} [{}]: ", row.label, row.kind);
+        if row.kind == "labels" && !row.label_values.is_empty() {
+            let mut spans = vec![Span::raw(prefix)];
+            for (index, label) in row.label_values.iter().enumerate() {
+                if index > 0 {
+                    spans.push(Span::raw(" | "));
+                }
+                let style = if row.selected && row.label_cursor == Some(index) {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                spans.push(Span::styled(label.clone(), style));
+            }
+            lines.push(Line::from(spans));
+        } else if row.kind == "labels" {
+            lines.push(Line::from(vec![Span::raw(format!("{prefix}<none>"))]));
+        } else {
+            let mut content = prefix;
+            content.push_str(&row.query);
+            lines.push(Line::from(vec![Span::raw(truncate_to_width(&content, viewport_width))]));
+        }
+    }
+
+    lines
+}
+
 fn task_status(state: &TaskReviewState, suffix: &str) -> String {
     match state.selected_index() {
         Some(index) => format!(
@@ -207,7 +265,7 @@ fn task_hint_lines(state: &TaskReviewState, scroll: usize, max_scroll: usize) ->
             "j/down,k/up: move, ctrl-u/d: page, home/end: top/bottom".to_string(),
             "[]: section jumps, {}: project jumps, s: sort, p: project group, g: section group"
                 .to_string(),
-            "c: completed, z: subtasks".to_string(),
+            "f: filters, enter: edit, s: mode, c: completed, z: subtasks".to_string(),
             compact_scroll_line,
         ];
     }
@@ -220,10 +278,28 @@ fn task_hint_lines(state: &TaskReviewState, scroll: usize, max_scroll: usize) ->
         "grouping/sort: [] section jumps; {} project jumps; p project group; g section group; s sort"
             .to_string(),
         String::new(),
-        "filters: c completed; z subtasks".to_string(),
+        "filters: f panel; enter edit; s cycle mode; esc/enter done; c completed; z subtasks"
+            .to_string(),
         String::new(),
         "t: tasks, m: focus, r: refresh, q: quit".to_string(),
     ]
+}
+
+pub(crate) fn render_task_filter_panel(state: &TaskReviewState) -> Option<TaskFilterPanelView> {
+    if !state.filter_panel_visible() {
+        return None;
+    }
+
+    let rows = state.filter_panel_entries();
+    let has_active_filters = rows.iter().any(|row| !row.query.trim().is_empty());
+
+    Some(TaskFilterPanelView {
+        title: "Task filters".to_string(),
+        rows,
+        has_active_filters,
+        editing: state.filter_panel_editing(),
+        help_lines: state.filter_panel_help_lines(),
+    })
 }
 
 fn natural_column_widths(columns: &[String], rows: &[Vec<String>]) -> Vec<usize> {
@@ -656,7 +732,7 @@ mod tests {
                 "j/down,k/up: move, ctrl-u/d: page, home/end: top/bottom".to_string(),
                 "[]: section jumps, {}: project jumps, s: sort, p: project group, g: section group"
                     .to_string(),
-                "c: completed, z: subtasks".to_string(),
+                "f: filters, enter: edit, s: mode, c: completed, z: subtasks".to_string(),
                 "left/right: scroll columns, t: tasks, m: focus, r: refresh, q: quit".to_string(),
             ]
         );
@@ -719,7 +795,8 @@ mod tests {
                 "grouping/sort: [] section jumps; {} project jumps; p project group; g section group; s sort"
                     .to_string(),
                 String::new(),
-                "filters: c completed; z subtasks".to_string(),
+                "filters: f panel; enter edit; s cycle mode; esc/enter done; c completed; z subtasks"
+                    .to_string(),
                 String::new(),
                 "t: tasks, m: focus, r: refresh, q: quit".to_string(),
             ]

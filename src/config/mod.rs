@@ -277,6 +277,10 @@ fn default_bindings() -> Vec<Bind> {
             command: "toggle_task_mode".to_string(),
         },
         Bind {
+            key: "f".to_string(),
+            command: "toggle_task_filters".to_string(),
+        },
+        Bind {
             key: "o".to_string(),
             command: "toggle_only_selected".to_string(),
         },

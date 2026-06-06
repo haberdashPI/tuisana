@@ -12,7 +12,7 @@ use crate::{
     app::App,
     asana::AsanaClient,
     ui::project_list::render_project_list,
-    ui::task_table::render_task_table,
+    ui::task_table::{build_task_filter_lines, build_task_header_line, build_task_body_lines, render_task_filter_panel, render_task_table},
 };
 
 const PROJECT_VISIBLE_ROWS: usize = 4;
@@ -96,6 +96,7 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
 
             if task_visible {
                 let task_view = render_task_table(&app.tasks, size.width.saturating_sub(2) as usize);
+                let filter_view = render_task_filter_panel(&app.tasks);
                 let task_area = Rect::new(
                     size.x,
                     size.y + project_height,
@@ -103,6 +104,10 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                     size.height.saturating_sub(project_height),
                 );
                 let task_hint_height = task_view.hint_lines.len().max(1) as u16;
+                let filter_height = filter_view
+                    .as_ref()
+                    .map(|view| build_task_filter_lines(view, size.width.saturating_sub(2) as usize).len().max(1) as u16 + 2)
+                    .unwrap_or(0);
                 let task_chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
@@ -110,6 +115,7 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                         Constraint::Length(1),
                         Constraint::Length(task_hint_height),
                         Constraint::Min(1),
+                        Constraint::Length(filter_height),
                     ])
                     .split(task_area);
                 let task_block = Block::default().borders(Borders::ALL).title("Tasks");
@@ -128,14 +134,11 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                 frame.render_widget(Paragraph::new(task_view.hint_lines.join("\n")), task_chunks[2]);
 
                 frame.render_widget(
-                    Paragraph::new(crate::ui::task_table::build_task_header_line(
-                        &task_view,
-                        task_body_chunks[0].width as usize,
-                    )),
+                    Paragraph::new(build_task_header_line(&task_view, task_body_chunks[0].width as usize)),
                     task_body_chunks[0],
                 );
 
-                let body = Paragraph::new(crate::ui::task_table::build_task_body_lines(
+                let body = Paragraph::new(build_task_body_lines(
                     &task_view,
                     app.tasks.selected_index(),
                     task_body_chunks[1].width as usize,
@@ -143,6 +146,15 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                 .scroll((app.tasks.vertical_scroll() as u16, 0))
                 ;
                 frame.render_widget(body, task_body_chunks[1]);
+
+                if let Some(filter_view) = filter_view {
+                    let filter_lines = build_task_filter_lines(&filter_view, task_chunks[4].width as usize);
+                    let filter_block = Block::default().borders(Borders::ALL).title("Filters");
+                    frame.render_widget(filter_block.clone(), task_chunks[4]);
+                    let filter_inner = filter_block.inner(task_chunks[4]);
+                    let rendered = Paragraph::new(filter_lines);
+                    frame.render_widget(rendered, filter_inner);
+                }
             } else {
                 page_size = project_page_size;
             }
