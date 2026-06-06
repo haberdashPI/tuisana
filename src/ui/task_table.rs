@@ -62,12 +62,14 @@ pub fn render_task_table(state: &TaskReviewState, viewport_width: usize) -> Task
         .sum::<usize>()
         + COLUMN_SEPARATOR_WIDTH * column_widths.len().saturating_sub(1);
     let widest_other = column_widths.iter().skip(1).copied().max().unwrap_or(0);
+    let title_cap = ((viewport_width as f64) * 0.6).floor() as usize;
     let title_width = column_widths
         .first()
         .copied()
         .unwrap_or(0)
         .max(widest_other)
-        .max(viewport_width.saturating_sub(other_width_total));
+        .max(viewport_width.saturating_sub(other_width_total))
+        .min(title_cap.max(1));
 
     if let Some(title) = column_widths.first_mut() {
         *title = title_width;
@@ -93,32 +95,52 @@ pub fn render_task_table(state: &TaskReviewState, viewport_width: usize) -> Task
     }
 }
 
-pub fn build_task_lines(
+pub fn build_task_header_line(view: &TaskTableView, viewport_width: usize) -> Line<'static> {
+    let spans = row_spans(&view.columns, &view.column_widths, true);
+    Line::from(slice_spans(&spans, view.scroll_offset, viewport_width))
+}
+
+pub fn build_task_body_lines(
     view: &TaskTableView,
     selected_index: Option<usize>,
     viewport_width: usize,
 ) -> Vec<Line<'static>> {
-    let mut lines = Vec::with_capacity(view.rows.len().saturating_add(1));
-
-    lines.push(Line::from(Span::styled(
-        slice_row(
-            &format_row(&view.columns, &view.column_widths),
-            view.scroll_offset,
-            viewport_width,
-        ),
-        Style::default().add_modifier(Modifier::BOLD),
-    )));
+    let mut lines = Vec::with_capacity(view.rows.len());
 
     for (index, row) in view.rows.iter().enumerate() {
         match row.kind {
+            TaskRowKind::ProjectSeparator => {
+                lines.push(Line::from(separator_line(viewport_width)));
+            }
             TaskRowKind::ProjectHeader => {
-                lines.push(Line::from(Span::styled(
-                    slice_text(&row.cells.first().cloned().unwrap_or_default(), viewport_width),
-                    Style::default().add_modifier(Modifier::BOLD),
-                )));
+                lines.push(row_line(
+                    row.cells.as_slice(),
+                    &view.column_widths,
+                    view.scroll_offset,
+                    viewport_width,
+                    true,
+                    None,
+                ));
             }
             TaskRowKind::SectionSpacer => {
-                lines.push(Line::from(slice_text("", viewport_width)));
+                lines.push(row_line(
+                    row.cells.as_slice(),
+                    &view.column_widths,
+                    view.scroll_offset,
+                    viewport_width,
+                    false,
+                    None,
+                ));
+            }
+            TaskRowKind::SectionHeader => {
+                lines.push(row_line(
+                    row.cells.as_slice(),
+                    &view.column_widths,
+                    view.scroll_offset,
+                    viewport_width,
+                    true,
+                    None,
+                ));
             }
             TaskRowKind::Task => {
                 let style = if Some(index) == selected_index {
@@ -126,18 +148,29 @@ pub fn build_task_lines(
                 } else {
                     Style::default()
                 };
-                lines.push(Line::from(Span::styled(
-                    slice_row(
-                        &format_row(row.cells.as_slice(), &view.column_widths),
-                        view.scroll_offset,
-                        viewport_width,
-                    ),
-                    style,
-                )));
+                lines.push(row_line(
+                    row.cells.as_slice(),
+                    &view.column_widths,
+                    view.scroll_offset,
+                    viewport_width,
+                    false,
+                    Some(style),
+                ));
             }
         }
     }
 
+    lines
+}
+
+pub fn build_task_lines(
+    view: &TaskTableView,
+    selected_index: Option<usize>,
+    viewport_width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::with_capacity(view.rows.len().saturating_add(1));
+    lines.push(build_task_header_line(view, viewport_width));
+    lines.extend(build_task_body_lines(view, selected_index, viewport_width));
     lines
 }
 
@@ -211,27 +244,137 @@ fn natural_column_widths(columns: &[String], rows: &[Vec<String>]) -> Vec<usize>
 fn column_cap(index: usize) -> usize {
     match index {
         1 => 18,
-        2 => 16,
-        3 | 4 => 12,
-        5 => 8,
-        6 => 18,
+        2 | 3 => 16,
+        4 => 8,
+        5 => 18,
         _ => DEFAULT_OTHER_COLUMN_CAP,
     }
 }
 
-fn format_row(values: &[String], widths: &[usize]) -> String {
-    values
+fn row_line(
+    values: &[String],
+    widths: &[usize],
+    scroll_offset: usize,
+    viewport_width: usize,
+    bold_first_cell: bool,
+    style: Option<Style>,
+) -> Line<'static> {
+    let spans = row_spans(values, widths, bold_first_cell);
+    let mut line = Line::from(slice_spans(&spans, scroll_offset, viewport_width));
+    if let Some(style) = style {
+        line = line.style(style);
+    }
+    line
+}
+
+fn row_spans(values: &[String], widths: &[usize], bold_first_cell: bool) -> Vec<Span<'static>> {
+    let mut spans = Vec::with_capacity(widths.len().saturating_mul(2).saturating_sub(1));
+
+    for (index, (value, width)) in values.iter().zip(widths.iter()).enumerate() {
+        let cell = if index == 0 {
+            pad_title_cell(value, *width)
+        } else {
+            pad_cell(value, *width)
+        };
+        let cell_style = if index == 0 && bold_first_cell {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(cell, cell_style));
+        if index + 1 != widths.len() {
+            spans.push(Span::raw(COLUMN_SEPARATOR));
+        }
+    }
+
+    spans
+}
+
+fn slice_spans(spans: &[Span<'static>], offset: usize, width: usize) -> Vec<Span<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+
+    let mut cursor = 0usize;
+    let end = offset.saturating_add(width);
+    let mut out = Vec::new();
+
+    for span in spans {
+        let mut segment = String::new();
+        let style = span.style;
+
+        for ch in span.content.chars() {
+            let char_width = ch.width().unwrap_or(0);
+            let next_cursor = cursor + char_width;
+            if next_cursor > offset && cursor < end {
+                segment.push(ch);
+            }
+            cursor = next_cursor;
+            if cursor >= end {
+                break;
+            }
+        }
+
+        if !segment.is_empty() {
+            out.push(Span::styled(segment, style));
+        }
+
+        if cursor >= end {
+            break;
+        }
+    }
+
+    let current_width = out
         .iter()
-        .zip(widths.iter())
-        .map(|(value, width)| pad_cell(value, *width))
-        .collect::<Vec<_>>()
-        .join(COLUMN_SEPARATOR)
+        .map(|span| visible_width(span.content.as_ref()))
+        .sum::<usize>();
+    if current_width < width {
+        out.push(Span::raw(" ".repeat(width - current_width)));
+    }
+
+    out
+}
+
+fn pad_title_cell(value: &str, width: usize) -> String {
+    let truncated = truncate_title_to_width(value, width);
+    let padding = width.saturating_sub(visible_width(&truncated));
+    format!("{truncated}{}", " ".repeat(padding))
 }
 
 fn pad_cell(value: &str, width: usize) -> String {
     let truncated = truncate_to_width(value, width);
     let padding = width.saturating_sub(visible_width(&truncated));
     format!("{truncated}{}", " ".repeat(padding))
+}
+
+fn truncate_title_to_width(value: &str, width: usize) -> String {
+    if visible_width(value) <= width {
+        return value.to_string();
+    }
+
+    if width == 0 {
+        return String::new();
+    }
+
+    if width == 1 {
+        return "…".to_string();
+    }
+
+    let mut result = String::new();
+    let mut current_width = 0usize;
+    let target_width = width - 1;
+
+    for ch in value.chars() {
+        let char_width = ch.width().unwrap_or(0);
+        if current_width + char_width > target_width {
+            break;
+        }
+        result.push(ch);
+        current_width += char_width;
+    }
+
+    result.push('…');
+    result
 }
 
 fn truncate_to_width(value: &str, width: usize) -> String {
@@ -258,61 +401,14 @@ fn visible_width(value: &str) -> usize {
     value.width()
 }
 
-fn slice_row(row: &str, offset: usize, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-
-    let end = offset.saturating_add(width);
-    let mut cursor = 0usize;
-    let mut result = String::new();
-
-    for ch in row.chars() {
-        let char_width = ch.width().unwrap_or(0);
-        let next_cursor = cursor + char_width;
-        if next_cursor > offset && cursor < end {
-            result.push(ch);
-        }
-        cursor = next_cursor;
-        if cursor >= end {
-            break;
-        }
-    }
-
-    let current_width = visible_width(&result);
-    if current_width < width {
-        result.push_str(&" ".repeat(width - current_width));
-    }
-
-    result
-}
-
-fn slice_text(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-
-    let mut result = String::new();
-    let mut current_width = 0usize;
-
-    for ch in text.chars() {
-        let char_width = ch.width().unwrap_or(0);
-        if current_width + char_width > width {
-            break;
-        }
-        result.push(ch);
-        current_width += char_width;
-    }
-
-    if current_width < width {
-        result.push_str(&" ".repeat(width - current_width));
-    }
-
-    result
+fn separator_line(width: usize) -> String {
+    "─".repeat(width)
 }
 
 #[cfg(test)]
 mod tests {
+    use ratatui::style::Modifier;
+
     use crate::{
         app::task_review::TaskReviewState,
         asana::{
@@ -325,7 +421,7 @@ mod tests {
         domain::{Project, TaskRowKind},
     };
 
-    use super::{build_task_lines, render_task_table};
+    use super::{build_task_body_lines, build_task_header_line, build_task_lines, render_task_table};
 
     #[test]
     fn renders_task_table_columns_and_rows() {
@@ -357,7 +453,16 @@ mod tests {
                     start_on: Some("2026-06-01".to_string()),
                     assignee: None,
                     num_subtasks: 0,
-                    memberships: vec![],
+                    memberships: vec![crate::asana::dto::TaskMembershipDto {
+                        project: crate::asana::dto::TaskMembershipProjectDto {
+                            gid: "p1".to_string(),
+                            name: "Inbox".to_string(),
+                        },
+                        section: Some(crate::asana::dto::TaskMembershipSectionDto {
+                            gid: "s1".to_string(),
+                            name: "Today".to_string(),
+                        }),
+                    }],
                     custom_fields: vec![CustomFieldValueDto {
                         gid: "cf1".to_string(),
                         name: "Priority".to_string(),
@@ -379,16 +484,71 @@ mod tests {
         assert!(view.status_line.contains("1 tasks"));
         assert_eq!(view.columns[0], "Task");
         assert!(view.column_widths[0] >= view.column_widths[1]);
-        assert_eq!(view.rows[0].kind, TaskRowKind::ProjectHeader);
-        assert_eq!(view.rows[0].cells[0], "Inbox");
-        assert_eq!(view.rows[1].kind, TaskRowKind::Task);
-        assert_eq!(view.rows[1].cells[0], "Ship");
-        assert_eq!(view.rows[1].cells[3], "2026-06-10");
+        assert_eq!(view.rows[0].kind, TaskRowKind::ProjectSeparator);
+        assert_eq!(view.rows[1].kind, TaskRowKind::ProjectHeader);
+        assert_eq!(view.rows[1].cells[0], "Inbox");
+        assert_eq!(view.rows[2].kind, TaskRowKind::SectionSpacer);
+        assert_eq!(view.rows[3].kind, TaskRowKind::SectionHeader);
+        assert_eq!(view.rows[3].cells[0], "Today");
+        assert_eq!(view.rows[4].kind, TaskRowKind::Task);
+        assert_eq!(view.rows[4].cells[0], "Ship");
+        assert_eq!(view.rows[4].cells[2], "2026-06-10");
         assert!(view.total_width <= 120);
 
         let lines = build_task_lines(&view, state.selected_index(), 120);
         assert!(lines[0].to_string().contains("Task"));
-        assert!(lines[1].to_string().contains("Inbox"));
+        assert!(lines[2].to_string().contains("Inbox"));
+        assert!(build_task_header_line(&view, 120).to_string().contains("Assignee"));
+        let body_lines = build_task_body_lines(&view, state.selected_index(), 120);
+        assert!(body_lines[2].to_string().contains(" | "));
+        assert!(body_lines[3].to_string().contains(" | "));
+    }
+
+    #[test]
+    fn bolds_project_and_section_labels_without_bolding_separators() {
+        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
+            .with_sections(
+                "p1",
+                vec![SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_tasks(
+                "p1",
+                vec![TaskDto {
+                    gid: "t1".to_string(),
+                    name: "Ship".to_string(),
+                    completed: false,
+                    due_on: Some("2026-06-10".to_string()),
+                    start_on: Some("2026-06-01".to_string()),
+                    assignee: None,
+                    num_subtasks: 0,
+                    memberships: vec![crate::asana::dto::TaskMembershipDto {
+                        project: crate::asana::dto::TaskMembershipProjectDto {
+                            gid: "p1".to_string(),
+                            name: "Inbox".to_string(),
+                        },
+                        section: Some(crate::asana::dto::TaskMembershipSectionDto {
+                            gid: "s1".to_string(),
+                            name: "Today".to_string(),
+                        }),
+                    }],
+                    custom_fields: vec![],
+                }],
+            );
+
+        let mut state = TaskReviewState::new();
+        state
+            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .expect("tasks load");
+
+        let view = render_task_table(&state, 120);
+        let body_lines = build_task_body_lines(&view, state.selected_index(), 120);
+
+        assert!(body_lines[1].spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert!(body_lines[3].spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert!(!body_lines[0].spans[0].style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -714,10 +874,14 @@ mod tests {
             .expect("tasks load");
 
         let view = render_task_table(&state, 120);
-        assert_eq!(view.rows[0].kind, TaskRowKind::ProjectHeader);
-        assert_eq!(view.rows[1].kind, TaskRowKind::Task);
+        assert_eq!(view.rows[0].kind, TaskRowKind::ProjectSeparator);
+        assert_eq!(view.rows[1].kind, TaskRowKind::ProjectHeader);
         assert_eq!(view.rows[2].kind, TaskRowKind::SectionSpacer);
-        assert_eq!(view.rows[3].kind, TaskRowKind::Task);
+        assert_eq!(view.rows[3].kind, TaskRowKind::SectionHeader);
+        assert_eq!(view.rows[4].kind, TaskRowKind::Task);
+        assert_eq!(view.rows[5].kind, TaskRowKind::SectionSpacer);
+        assert_eq!(view.rows[6].kind, TaskRowKind::SectionHeader);
+        assert_eq!(view.rows[7].kind, TaskRowKind::Task);
     }
 
     #[test]
@@ -878,6 +1042,57 @@ mod tests {
 
         assert!(view.total_width > 40);
         assert!(view.hint_lines.iter().any(|line| line.contains("t: tasks")));
+    }
+
+    #[test]
+    fn truncates_the_title_column_with_an_ellipsis_when_it_exceeds_the_view() {
+        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
+            .with_sections(
+                "p1",
+                vec![SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_tasks(
+                "p1",
+                vec![TaskDto {
+                    gid: "t1".to_string(),
+                    name: "A task title that is intentionally far longer than sixty percent of the viewport width".to_string(),
+                    completed: false,
+                    due_on: Some("2026-06-10".to_string()),
+                    start_on: Some("2026-06-01".to_string()),
+                    assignee: Some(crate::asana::dto::UserDto {
+                        gid: "u1".to_string(),
+                        name: Some("Alex".to_string()),
+                        display_name: Some("Alex".to_string()),
+                    }),
+                    num_subtasks: 0,
+                    memberships: vec![crate::asana::dto::TaskMembershipDto {
+                        project: crate::asana::dto::TaskMembershipProjectDto {
+                            gid: "p1".to_string(),
+                            name: "Inbox".to_string(),
+                        },
+                        section: Some(crate::asana::dto::TaskMembershipSectionDto {
+                            gid: "s1".to_string(),
+                            name: "Today".to_string(),
+                        }),
+                    }],
+                    custom_fields: vec![],
+                }],
+            );
+
+        let mut state = TaskReviewState::new();
+        state
+            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .expect("tasks load");
+
+        let view = render_task_table(&state, 50);
+        let lines = build_task_lines(&view, state.selected_index(), 50);
+        let rendered = lines.iter().map(|line| line.to_string()).collect::<Vec<_>>();
+
+        assert!(view.column_widths[0] <= 30);
+        assert!(rendered.iter().any(|line| line.contains('…')));
     }
 
     #[test]

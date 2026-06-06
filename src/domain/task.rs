@@ -85,8 +85,10 @@ impl TaskRecord {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TaskRowKind {
+    ProjectSeparator,
     ProjectHeader,
     SectionSpacer,
+    SectionHeader,
     Task,
 }
 
@@ -118,6 +120,17 @@ impl TaskRow {
         }
     }
 
+    pub fn project_separator(column_count: usize) -> Self {
+        Self {
+            kind: TaskRowKind::ProjectSeparator,
+            gid: String::new(),
+            project: None,
+            section: None,
+            section_order: None,
+            cells: vec![String::new(); column_count],
+        }
+    }
+
     pub fn project_header(label: impl Into<String>, column_count: usize) -> Self {
         let label = label.into();
         let mut cells = vec![String::new(); column_count];
@@ -126,6 +139,20 @@ impl TaskRow {
             kind: TaskRowKind::ProjectHeader,
             gid: String::new(),
             project: Some(label),
+            section: None,
+            section_order: None,
+            cells,
+        }
+    }
+
+    pub fn section_header(label: impl Into<String>, column_count: usize) -> Self {
+        let label = label.into();
+        let mut cells = vec![String::new(); column_count];
+        cells[0] = label.clone();
+        Self {
+            kind: TaskRowKind::SectionHeader,
+            gid: String::new(),
+            project: None,
             section: None,
             section_order: None,
             cells,
@@ -567,7 +594,6 @@ fn group_key(row: &TaskRow, scope: GroupScope) -> Option<GroupKey> {
 fn default_columns() -> Vec<String> {
     vec![
         "Task".to_string(),
-        "Section".to_string(),
         "Assignee".to_string(),
         "Due".to_string(),
         "Start".to_string(),
@@ -866,24 +892,24 @@ fn build_rows(
     for (index, record) in merged.iter().enumerate() {
         let project = record.projects.first().cloned().unwrap_or_default();
         let section = record.sections.first().cloned().unwrap_or_default();
+        let has_section = !section.trim().is_empty();
 
         if settings.sort.group_by_project && current_project.as_deref() != Some(project.as_str()) {
             let project_label = sanitize_display_text(&project);
             current_project = Some(project.clone());
             current_section = None;
+            rows.push(TaskRow::project_separator(column_count));
             rows.push(TaskRow::project_header(project_label, column_count));
         }
 
-        if settings.sort.group_by_section && current_section.as_deref() != Some(section.as_str()) {
-            if current_section.is_some() {
-                rows.push(TaskRow::section_spacer(column_count));
-            }
+        if settings.sort.group_by_section && has_section && current_section.as_deref() != Some(section.as_str()) {
+            rows.push(TaskRow::section_spacer(column_count));
+            rows.push(TaskRow::section_header(sanitize_display_text(&section), column_count));
             current_section = Some(section.clone());
         }
 
         let mut cells = vec![
             sanitize_display_text(&record.name),
-            join_non_empty(&record.sections),
             record
                 .assignee
                 .as_deref()
@@ -959,16 +985,25 @@ mod tests {
         assert_eq!(model.columns[0], "Task");
         assert_eq!(model.columns.last().expect("custom field column"), "Priority");
         assert_eq!(model.task_count(), 1);
-        assert_eq!(model.rows.len(), 2);
-        assert_eq!(model.rows[0].kind, TaskRowKind::ProjectHeader);
-        assert_eq!(model.rows[0].cells[0], "Alpha");
-        assert_eq!(model.rows[1].kind, TaskRowKind::Task);
-        assert_eq!(model.rows[1].cells[0], "Draft release");
-        assert_eq!(model.rows[1].cells[1], "Backlog | Ready");
-        assert_eq!(model.rows[1].cells[2], "Alex");
-        assert_eq!(model.rows[1].cells[5], "done");
-        assert_eq!(model.rows[1].cells[6], "Alpha | Beta");
-        assert_eq!(model.rows[1].cells[7], "High | Urgent");
+        assert_eq!(
+            model.rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
+            vec![
+                TaskRowKind::ProjectSeparator,
+                TaskRowKind::ProjectHeader,
+                TaskRowKind::SectionSpacer,
+                TaskRowKind::SectionHeader,
+                TaskRowKind::Task,
+            ]
+        );
+        assert_eq!(model.rows[1].cells[0], "Alpha");
+        assert_eq!(model.rows[3].cells[0], "Backlog");
+        assert_eq!(model.rows[4].kind, TaskRowKind::Task);
+        assert_eq!(model.rows[4].cells[0], "Draft release");
+        assert_eq!(model.rows[4].cells[1], "Alex");
+        assert_eq!(model.rows[4].cells[2], ""); // due
+        assert_eq!(model.rows[4].cells[4], "done");
+        assert_eq!(model.rows[4].cells[5], "Alpha | Beta");
+        assert_eq!(model.rows[4].cells[6], "High | Urgent");
     }
 
     #[test]
@@ -987,14 +1022,23 @@ mod tests {
         );
 
         assert_eq!(model.task_count(), 1);
-        assert_eq!(model.rows[0].kind, TaskRowKind::ProjectHeader);
-        assert_eq!(model.rows[0].cells[0], "Northwind BTX 4412 Ph1 PSG");
-        assert_eq!(model.rows[1].kind, TaskRowKind::Task);
-        assert_eq!(model.rows[1].cells[0], "Northwind task");
-        assert_eq!(model.rows[1].cells[1], "Study Kit Design and Shipment requirements");
-        assert_eq!(model.rows[1].cells[2], "Morgan Ellis");
-        assert_eq!(model.rows[1].cells[6], "Northwind BTX 4412 Ph1 PSG");
-        assert_eq!(model.rows[1].cells[7], "High");
+        assert_eq!(
+            model.rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
+            vec![
+                TaskRowKind::ProjectSeparator,
+                TaskRowKind::ProjectHeader,
+                TaskRowKind::SectionSpacer,
+                TaskRowKind::SectionHeader,
+                TaskRowKind::Task,
+            ]
+        );
+        assert_eq!(model.rows[1].cells[0], "Northwind BTX 4412 Ph1 PSG");
+        assert_eq!(model.rows[3].cells[0], "Study Kit Design and Shipment requirements");
+        assert_eq!(model.rows[4].kind, TaskRowKind::Task);
+        assert_eq!(model.rows[4].cells[0], "Northwind task");
+        assert_eq!(model.rows[4].cells[1], "Morgan Ellis");
+        assert_eq!(model.rows[4].cells[5], "Northwind BTX 4412 Ph1 PSG");
+        assert_eq!(model.rows[4].cells[6], "High");
     }
 
     #[test]
@@ -1166,7 +1210,7 @@ mod tests {
             .rows
             .iter()
             .filter(|row| row.kind.is_task())
-            .map(|row| (row.cells[0].clone(), row.cells[1].clone()))
+            .map(|row| (row.cells[0].clone(), row.section.clone().unwrap_or_default()))
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -1289,7 +1333,15 @@ mod tests {
         let model = TaskTableModel::from_records_with_settings(vec![first, second], vec![], &settings);
         let row_kinds = model.rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>();
 
-        assert_eq!(row_kinds, vec![TaskRowKind::ProjectHeader, TaskRowKind::Task, TaskRowKind::Task]);
+        assert_eq!(
+            row_kinds,
+            vec![
+                TaskRowKind::ProjectSeparator,
+                TaskRowKind::ProjectHeader,
+                TaskRowKind::Task,
+                TaskRowKind::Task,
+            ]
+        );
     }
 
     #[test]
@@ -1332,6 +1384,6 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(task_rows, vec!["b", "a"]);
-        assert!(model.rows.iter().all(|row| !matches!(row.kind, TaskRowKind::ProjectHeader | TaskRowKind::SectionSpacer)));
+        assert!(model.rows.iter().all(|row| row.kind.is_task()));
     }
 }

@@ -869,21 +869,28 @@ mod tests {
         assert!(state.table().columns.iter().any(|column| column == "Priority"));
         assert!(state.table().columns.iter().any(|column| column == "Effort"));
         assert_eq!(state.table().task_count(), 2);
-        assert_eq!(state.table().rows.len(), 4);
-        assert_eq!(state.table().rows[0].kind, crate::domain::TaskRowKind::ProjectHeader);
-        assert_eq!(state.table().rows[0].cells[0], "Backlog");
-        assert_eq!(state.table().rows[1].kind, crate::domain::TaskRowKind::Task);
-        assert_eq!(state.table().rows[1].cells[0], "Ship release");
-        assert_eq!(state.table().rows[1].cells[1], "Later | Today");
-        assert_eq!(state.table().rows[1].cells[2], "Alex");
-        assert_eq!(state.table().rows[1].cells[3], "2026-06-01");
-        assert_eq!(state.table().rows[1].cells[4], "2026-05-28");
-        assert_eq!(state.table().rows[1].cells[5], "open");
-        assert_eq!(state.table().rows[1].cells[6], "Backlog | Inbox");
-        assert_eq!(state.table().rows[2].kind, crate::domain::TaskRowKind::ProjectHeader);
-        assert_eq!(state.table().rows[2].cells[0], "Inbox");
-        assert_eq!(state.table().rows[3].kind, crate::domain::TaskRowKind::Task);
-        assert_eq!(state.table().rows[3].cells[0], "Write docs");
+        assert_eq!(state.table().rows.len(), 10);
+        assert_eq!(state.table().rows[0].kind, crate::domain::TaskRowKind::ProjectSeparator);
+        assert_eq!(state.table().rows[1].kind, crate::domain::TaskRowKind::ProjectHeader);
+        assert_eq!(state.table().rows[1].cells[0], "Backlog");
+        assert_eq!(state.table().rows[2].kind, crate::domain::TaskRowKind::SectionSpacer);
+        assert_eq!(state.table().rows[3].kind, crate::domain::TaskRowKind::SectionHeader);
+        assert_eq!(state.table().rows[3].cells[0], "Later");
+        assert_eq!(state.table().rows[4].kind, crate::domain::TaskRowKind::Task);
+        assert_eq!(state.table().rows[4].cells[0], "Ship release");
+        assert_eq!(state.table().rows[4].cells[1], "Alex");
+        assert_eq!(state.table().rows[4].cells[2], "2026-06-01");
+        assert_eq!(state.table().rows[4].cells[3], "2026-05-28");
+        assert_eq!(state.table().rows[4].cells[4], "open");
+        assert_eq!(state.table().rows[4].cells[5], "Backlog | Inbox");
+        assert_eq!(state.table().rows[5].kind, crate::domain::TaskRowKind::ProjectSeparator);
+        assert_eq!(state.table().rows[6].kind, crate::domain::TaskRowKind::ProjectHeader);
+        assert_eq!(state.table().rows[6].cells[0], "Inbox");
+        assert_eq!(state.table().rows[7].kind, crate::domain::TaskRowKind::SectionSpacer);
+        assert_eq!(state.table().rows[8].kind, crate::domain::TaskRowKind::SectionHeader);
+        assert_eq!(state.table().rows[8].cells[0], "Today");
+        assert_eq!(state.table().rows[9].kind, crate::domain::TaskRowKind::Task);
+        assert_eq!(state.table().rows[9].cells[0], "Write docs");
     }
 
     #[test]
@@ -943,15 +950,15 @@ mod tests {
             )
             .expect("tasks load");
 
-        assert_eq!(state.selected_index(), Some(1));
-        state.move_section_down();
         assert_eq!(state.selected_index(), Some(4));
+        state.move_section_down();
+        assert_eq!(state.selected_index(), Some(8));
         state.move_section_up();
-        assert_eq!(state.selected_index(), Some(1));
+        assert_eq!(state.selected_index(), Some(4));
         state.move_project_down();
-        assert_eq!(state.selected_index(), Some(6));
+        assert_eq!(state.selected_index(), Some(13));
         state.move_project_up();
-        assert_eq!(state.selected_index(), Some(1));
+        assert_eq!(state.selected_index(), Some(4));
     }
 
     #[test]
@@ -986,7 +993,7 @@ mod tests {
 
         state.ensure_selected_visible(3);
 
-        assert_eq!(state.selected_index(), Some(4));
+        assert_eq!(state.selected_index(), Some(7));
         assert!(state.vertical_scroll() > 0);
         let selected_line = state.selected_index().unwrap() + 1;
         assert!(selected_line >= state.vertical_scroll());
@@ -1141,7 +1148,7 @@ mod tests {
             .rows
             .iter()
             .filter(|row| row.kind.is_task())
-            .map(|row| (row.cells[0].clone(), row.cells[1].clone()))
+            .map(|row| (row.cells[0].clone(), row.section.clone().unwrap_or_default()))
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -1194,16 +1201,16 @@ mod tests {
             .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
 
-        assert_eq!(state.selected_index(), Some(1));
+        assert_eq!(state.selected_index(), Some(4));
         state.move_down();
-        assert_eq!(state.selected_index(), Some(2));
+        assert_eq!(state.selected_index(), Some(5));
 
         state.toggle_subtask_visibility();
 
-        assert_eq!(state.selected_index(), Some(1));
+        assert_eq!(state.selected_index(), Some(4));
 
         state.move_section_down();
-        assert_eq!(state.selected_index(), Some(3));
+        assert_eq!(state.selected_index(), Some(7));
     }
 
     #[test]
@@ -1238,13 +1245,13 @@ mod tests {
             .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
 
-        assert_eq!(state.selected_index(), Some(1));
+        assert_eq!(state.selected_index(), Some(4));
         state.move_down();
-        assert_eq!(state.selected_index(), Some(2));
+        assert_eq!(state.selected_index(), Some(5));
 
         state.toggle_subtask_visibility();
 
-        assert_eq!(state.selected_index(), Some(1));
+        assert_eq!(state.selected_index(), Some(4));
         assert_eq!(state.table().rows[state.selected_index().unwrap()].gid, "t1");
     }
 
@@ -1287,11 +1294,11 @@ mod tests {
             .expect("tasks load");
 
         state.move_down();
-        assert_eq!(state.selected_index(), Some(2));
+        assert_eq!(state.selected_index(), Some(5));
 
         state.move_section_down();
 
-        assert_eq!(state.selected_index(), Some(2));
+        assert_eq!(state.selected_index(), Some(5));
         assert_eq!(state.table().rows[state.selected_index().unwrap()].gid, "t2");
     }
 
@@ -1338,10 +1345,10 @@ mod tests {
             .expect("tasks load");
 
         state.move_down();
-        assert_eq!(state.selected_index(), Some(2));
+        assert_eq!(state.selected_index(), Some(5));
 
         state.move_project_down();
-        assert_eq!(state.selected_index(), Some(1));
+        assert_eq!(state.selected_index(), Some(4));
         assert_eq!(state.table().rows[state.selected_index().unwrap()].gid, "t1");
     }
 

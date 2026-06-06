@@ -112,7 +112,14 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                         Constraint::Min(1),
                     ])
                     .split(task_area);
-                let task_body_height = task_chunks[3].height.saturating_sub(2) as usize;
+                let task_block = Block::default().borders(Borders::ALL).title("Tasks");
+                frame.render_widget(task_block.clone(), task_chunks[3]);
+                let task_inner = task_block.inner(task_chunks[3]);
+                let task_body_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Length(1), Constraint::Min(1)])
+                    .split(task_inner);
+                let task_body_height = task_body_chunks[1].height as usize;
                 app.tasks.ensure_selected_visible(task_body_height);
                 page_size = task_body_height.max(1);
 
@@ -120,15 +127,22 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                 frame.render_widget(Paragraph::new(task_view.status_line.as_str()), task_chunks[1]);
                 frame.render_widget(Paragraph::new(task_view.hint_lines.join("\n")), task_chunks[2]);
 
-                let body = Paragraph::new(crate::ui::task_table::build_task_lines(
+                frame.render_widget(
+                    Paragraph::new(crate::ui::task_table::build_task_header_line(
+                        &task_view,
+                        task_body_chunks[0].width as usize,
+                    )),
+                    task_body_chunks[0],
+                );
+
+                let body = Paragraph::new(crate::ui::task_table::build_task_body_lines(
                     &task_view,
                     app.tasks.selected_index(),
-                    task_chunks[3].width.saturating_sub(2) as usize,
+                    task_body_chunks[1].width as usize,
                 ))
                 .scroll((app.tasks.vertical_scroll() as u16, 0))
-                .block(Block::default().borders(Borders::ALL).title("Tasks"))
                 ;
-                frame.render_widget(body, task_chunks[3]);
+                frame.render_widget(body, task_body_chunks[1]);
             } else {
                 page_size = project_page_size;
             }

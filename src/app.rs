@@ -626,10 +626,10 @@ mod tests {
         app.tasks.set_visible(true);
 
         app.handle_action(&Action::PageDown, 2).expect("page down");
-        assert_eq!(app.tasks.selected_index(), Some(3));
+        assert_eq!(app.tasks.selected_index(), Some(6));
 
         app.handle_action(&Action::PageUp, 2).expect("page up");
-        assert_eq!(app.tasks.selected_index(), Some(1));
+        assert_eq!(app.tasks.selected_index(), Some(4));
     }
 
     #[test]

@@ -120,7 +120,6 @@ fn pressing_m_displays_the_task_view() {
 
     assert!(text.contains("Task review"));
     assert!(text.contains("Tasks"));
-    assert!(text.contains("Today"));
 }
 
 #[test]
@@ -181,7 +180,7 @@ fn task_view_scrolls_to_keep_the_selected_row_visible() {
 
     run_project_list_session(&mut app, &mut source, &mut terminal).expect("session runs");
 
-    assert_eq!(app.tasks.selected_index(), Some(5));
+    assert_eq!(app.tasks.selected_index(), Some(8));
     assert!(app.tasks.vertical_scroll() > 0);
 }
 
