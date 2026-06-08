@@ -183,7 +183,7 @@ pub fn build_task_lines(
     lines
 }
 
-pub(crate) fn build_task_filter_lines(
+pub(crate) fn build_task_filter_body_lines(
     view: &TaskFilterPanelView,
     viewport_width: usize,
 ) -> Vec<Line<'static>> {
@@ -199,9 +199,6 @@ pub(crate) fn build_task_filter_lines(
         pad_cell(&title, viewport_width),
         Style::default().add_modifier(Modifier::BOLD),
     )]));
-    for help in &view.help_lines {
-        lines.push(Line::from(vec![Span::raw(help.clone())]));
-    }
 
     for row in &view.rows {
         let marker = if row.selected { ">" } else { " " };
@@ -247,11 +244,12 @@ fn task_status(state: &TaskReviewState, suffix: &str) -> String {
 fn task_hint_lines(state: &TaskReviewState, scroll: usize, max_scroll: usize) -> Vec<String> {
     let compact_scroll_line = if max_scroll > 0 {
         format!(
-            "left/right: scroll columns ({}/{}), t: tasks, m: focus, r: refresh, q: quit",
+            "left/right: scroll columns ({}/{}), p/f/t: modes, [/]/{{}}/0: pane size, r: refresh, q: quit",
             scroll, max_scroll
         )
     } else {
-        "left/right: scroll columns, t: tasks, m: focus, r: refresh, q: quit".to_string()
+        "left/right: scroll columns, p/f/t: modes, [/]/{}/0: pane size, r: refresh, q: quit"
+            .to_string()
     };
     let expanded_scroll_line = if max_scroll > 0 {
         format!("scroll: left/right columns ({}/{})", scroll, max_scroll)
@@ -263,7 +261,7 @@ fn task_hint_lines(state: &TaskReviewState, scroll: usize, max_scroll: usize) ->
         return vec![
             "?: more hints".to_string(),
             "j/down,k/up: move, ctrl-u/d: page, home/end: top/bottom".to_string(),
-            "[]: section jumps, {}: project jumps, s: sort, p: project group, g: section group"
+            "[]: section jumps, {}: project jumps, s: sort, , project group, . section group"
                 .to_string(),
             "f: filters, enter: edit, s: mode, c: completed, z: subtasks".to_string(),
             compact_scroll_line,
@@ -275,13 +273,13 @@ fn task_hint_lines(state: &TaskReviewState, scroll: usize, max_scroll: usize) ->
         "navigation: j/down,k/up move; ctrl-u/d page; home/end top/bottom".to_string(),
         expanded_scroll_line,
         String::new(),
-        "grouping/sort: [] section jumps; {} project jumps; p project group; g section group; s sort"
+        "grouping/sort: [] section jumps; {} project jumps; , project group; . section group; s sort"
             .to_string(),
         String::new(),
         "filters: f panel; enter edit; s cycle mode; esc/enter done; c completed; z subtasks"
             .to_string(),
         String::new(),
-        "t: tasks, m: focus, r: refresh, q: quit".to_string(),
+        "p/f/t: modes, r: refresh, q: quit".to_string(),
     ]
 }
 
@@ -730,10 +728,11 @@ mod tests {
             vec![
                 "?: more hints".to_string(),
                 "j/down,k/up: move, ctrl-u/d: page, home/end: top/bottom".to_string(),
-                "[]: section jumps, {}: project jumps, s: sort, p: project group, g: section group"
+                "[]: section jumps, {}: project jumps, s: sort, , project group, . section group"
                     .to_string(),
                 "f: filters, enter: edit, s: mode, c: completed, z: subtasks".to_string(),
-                "left/right: scroll columns, t: tasks, m: focus, r: refresh, q: quit".to_string(),
+                "left/right: scroll columns, p/f/t: modes, [/]/{}/0: pane size, r: refresh, q: quit"
+                    .to_string(),
             ]
         );
         assert!(view.status_line.contains("grp p:off s:off"));
@@ -792,13 +791,13 @@ mod tests {
                 "navigation: j/down,k/up move; ctrl-u/d page; home/end top/bottom".to_string(),
                 "scroll: left/right columns".to_string(),
                 String::new(),
-                "grouping/sort: [] section jumps; {} project jumps; p project group; g section group; s sort"
+                "grouping/sort: [] section jumps; {} project jumps; , project group; . section group; s sort"
                     .to_string(),
                 String::new(),
                 "filters: f panel; enter edit; s cycle mode; esc/enter done; c completed; z subtasks"
                     .to_string(),
                 String::new(),
-                "t: tasks, m: focus, r: refresh, q: quit".to_string(),
+                "p/f/t: modes, r: refresh, q: quit".to_string(),
             ]
         );
     }
@@ -1153,7 +1152,7 @@ mod tests {
         let view = render_task_table(&state, 40);
 
         assert!(view.total_width > 40);
-        assert!(view.hint_lines.iter().any(|line| line.contains("t: tasks")));
+        assert!(view.hint_lines.iter().any(|line| line.contains("p/f/t: modes")));
     }
 
     #[test]

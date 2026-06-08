@@ -99,6 +99,8 @@ Current commands include:
 - `clear_search`
 - `toggle_selection`
 - `select_all_visible`
+- `select_all_starred_visible`
+- `select_all_non_hidden_visible`
 - `invert_selection`
 - `clear_selection`
 - `undo_selection`
@@ -108,6 +110,9 @@ Current commands include:
 - `toggle_hidden_group`
 - `toggle_task_view`
 - `toggle_task_mode`
+- `set_project_mode`
+- `set_filter_mode`
+- `set_task_mode`
 - `toggle_only_selected`
 - `start_search`
 - `search_fuzzy`
@@ -115,6 +120,11 @@ Current commands include:
 - `search_regex`
 - `page_up`
 - `page_down`
+- `resize_window_up`
+- `resize_window_down`
+- `minimize_window`
+- `maximize_window`
+- `restore_window`
 
 Project view shortcuts include:
 
@@ -132,14 +142,32 @@ Project view shortcuts include:
 - `*` to toggle starred state for the current selection
 - `h` to toggle hidden state for the current selection
 - `v` to show or hide hidden projects
-- `t` to toggle the task panel
-- `m` to switch task/project focus mode
+- `!` to select all starred visible projects
+- `@` to select all visible non-hidden projects
+- `t` to switch to task mode
+- `f` to switch to filter mode
+- `p` to switch to project mode
+- `[` and `]` to shrink or grow the top window
+- `{` to toggle minimization of the top window
+- `}` to toggle maximization of the top window
+- `0` to restore the top window to its previous size
 - `o` to filter to selected projects only
 - `/` to start search entry
 - `ctrl-l` to clear the search string
 - `ctrl-f`, `ctrl-s`, `ctrl-r` to switch search mode
 
-When the task panel is visible, the screen is split so the project list keeps just the top part of the view and the task table gets the remaining space.
+The top window is shared between the project list and the filter view. When the task panel is visible, the screen is split so the top window keeps the project or filter view and the task table gets the remaining space.
+
+Task view shortcuts include:
+
+- `c` to toggle the completed filter
+- `z` to toggle subtask visibility
+- `,` to toggle project grouping
+- `.` to toggle section grouping
+- `s` to cycle the task sort
+- `[` and `]` to move by section
+- `{` and `}` to move by project
+- `left` and `right` to scroll columns
 
 Search entry accepts ordinary typing, `backspace`, `enter`, and `esc`.
 The status area now shows a dedicated search line so you can see whether the view is not searching, awaiting input, or filtering by a query.

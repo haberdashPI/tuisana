@@ -109,7 +109,7 @@ fn pressing_m_displays_the_task_view() {
 
     let mut source = ScriptedSource {
         keys: vec![
-            KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
         ],
@@ -184,7 +184,7 @@ fn task_view_scrolls_to_keep_the_selected_row_visible() {
 
     let mut source = ScriptedSource {
         keys: vec![
-            KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
@@ -254,7 +254,7 @@ fn changing_the_completed_filter_updates_the_visible_task_rows() {
 
     let mut source = ScriptedSource {
         keys: vec![
-            KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
         ],

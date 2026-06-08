@@ -315,6 +315,7 @@ impl ProjectListState {
     pub fn toggle_current_selection(&mut self) {
         if let Some(project) = self.selected_project().cloned() {
             self.toggle_selection_for_project_id(&project.id);
+            self.move_down();
         }
     }
 
@@ -336,6 +337,42 @@ impl ProjectListState {
         self.push_selection_history();
         for project in &self.visible_projects {
             self.selected_ids.insert(project.id.clone());
+        }
+        self.rebuild_visible_projects(self.selected_project().map(|project| project.id.clone()));
+    }
+
+    pub fn select_all_starred_visible(&mut self) {
+        let targets = self
+            .visible_projects
+            .iter()
+            .filter(|project| project.starred)
+            .map(|project| project.id.clone())
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            return;
+        }
+
+        self.push_selection_history();
+        for project_id in targets {
+            self.selected_ids.insert(project_id);
+        }
+        self.rebuild_visible_projects(self.selected_project().map(|project| project.id.clone()));
+    }
+
+    pub fn select_all_non_hidden_visible(&mut self) {
+        let targets = self
+            .visible_projects
+            .iter()
+            .filter(|project| !project.hidden)
+            .map(|project| project.id.clone())
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            return;
+        }
+
+        self.push_selection_history();
+        for project_id in targets {
+            self.selected_ids.insert(project_id);
         }
         self.rebuild_visible_projects(self.selected_project().map(|project| project.id.clone()));
     }
@@ -410,6 +447,14 @@ impl ProjectListState {
             }
             Action::ToggleOnlySelected => {
                 self.toggle_selected_only();
+                None
+            }
+            Action::SelectAllStarredVisible => {
+                self.select_all_starred_visible();
+                None
+            }
+            Action::SelectAllNonHiddenVisible => {
+                self.select_all_non_hidden_visible();
                 None
             }
             Action::ClearSelection => {
@@ -836,7 +881,7 @@ mod tests {
         state.toggle_selected_only();
 
         let names: Vec<_> = state.items().iter().map(|project| project.name.as_str()).collect();
-        assert_eq!(names, vec!["Inbox", "Backlog"]);
+        assert_eq!(names, vec!["Inbox", "Roadmap"]);
         assert_eq!(state.selected_index(), Some(1));
     }
 

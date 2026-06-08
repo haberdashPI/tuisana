@@ -56,7 +56,7 @@ mod tests {
         assert_eq!(view.title, "Projects");
         assert_eq!(view.status_line, "2 visible, 0 selected");
         assert_eq!(view.search_line, "Search: not searching (substring)");
-        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select, /: search, t: tasks, m: focus, r: refresh, q: quit"]);
+        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select+down, /: search, p/f/t: modes, r: refresh, q: quit"]);
         assert_eq!(view.rows, vec!["[ ] [*] Inbox", "[ ] [ ] Backlog"]);
     }
 
@@ -68,7 +68,7 @@ mod tests {
 
         assert_eq!(view.status_line, "No projects");
         assert_eq!(view.search_line, "Search: not searching (substring)");
-        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select, /: search, t: tasks, m: focus, r: refresh, q: quit"]);
+        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select+down, /: search, p/f/t: modes, r: refresh, q: quit"]);
         assert!(view.rows.is_empty());
     }
 
@@ -90,7 +90,7 @@ mod tests {
 
         assert_eq!(view.status_line, "1 visible, 0 selected, 1 hidden");
         assert_eq!(view.search_line, "Search: not searching (substring)");
-        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select, /: search, t: tasks, m: focus, r: refresh, q: quit"]);
+        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select+down, /: search, p/f/t: modes, r: refresh, q: quit"]);
         assert_eq!(view.rows, vec!["[ ] [ ] Visible"]);
     }
 
@@ -194,7 +194,7 @@ fn build_search_line(state: &ProjectListState) -> String {
 fn build_hint_lines(state: &ProjectListState) -> Vec<String> {
     if !state.help_details_visible() {
         return vec![
-            "?: more hints, j/k: move, space: select, /: search, t: tasks, m: focus, r: refresh, q: quit"
+            "?: more hints, j/k: move, space: select+down, /: search, p/f/t: modes, r: refresh, q: quit"
                 .to_string(),
         ];
     }
@@ -203,7 +203,7 @@ fn build_hint_lines(state: &ProjectListState) -> Vec<String> {
         "?: fewer hints".to_string(),
         "j/down: move down, k/up: move up, ctrl-u: page up, ctrl-d: page down, home: top, end: bottom"
             .to_string(),
-        "space: select".to_string(),
+        "space: toggle selection then move down".to_string(),
     ];
 
     if state.selected_count() > 0 {
@@ -213,6 +213,7 @@ fn build_hint_lines(state: &ProjectListState) -> Vec<String> {
     let mut selection_line = vec!["*: star selected".to_string(), "h: hide selected".to_string()];
     selection_line.push("v: toggle hidden projects".to_string());
     selection_line.push("o: only selected".to_string());
+    selection_line.push("!: select starred, @: select non-hidden".to_string());
     if state.can_undo_selection() {
         selection_line.push("u: undo".to_string());
     }
@@ -228,8 +229,10 @@ fn build_hint_lines(state: &ProjectListState) -> Vec<String> {
     search_line.push("ctrl-f: fuzzy".to_string());
     search_line.push("ctrl-s: substring".to_string());
     search_line.push("ctrl-r: regex".to_string());
-    search_line.push("t: toggle tasks".to_string());
-    search_line.push("m: task focus".to_string());
+    search_line.push("t: task mode".to_string());
+    search_line.push("f: filter mode".to_string());
+    search_line.push("p: project mode".to_string());
+    search_line.push("[: shrink, ]: grow, {: toggle min, }: toggle max, 0: restore".to_string());
     search_line.push("r: refresh".to_string());
     search_line.push("q/ctrl-c: quit".to_string());
     lines.push(search_line.join(", "));

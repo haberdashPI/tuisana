@@ -60,6 +60,7 @@ pub struct TaskReviewState {
     loaded_project_scopes: HashMap<String, TaskLoadScope>,
     filter_editor: TaskFilterEditorState,
     task_vertical_scroll: usize,
+    filter_vertical_scroll: usize,
     help_details_visible: bool,
 }
 
@@ -880,6 +881,13 @@ impl TaskReviewState {
         }
     }
 
+    pub fn set_focus_mode(&mut self, mode: TaskFocusMode) {
+        self.focus_mode = mode;
+        if self.focus_mode == TaskFocusMode::Tasks {
+            self.visible = true;
+        }
+    }
+
     pub fn begin_loading(&mut self, projects: &[Project]) {
         self.status = TaskReviewStatus::Loading;
         self.loading_started_at = Some(Instant::now());
@@ -965,6 +973,36 @@ impl TaskReviewState {
 
     pub fn filter_panel_visible(&self) -> bool {
         self.filter_editor.visible()
+    }
+
+    pub fn filter_panel_scroll(&self) -> usize {
+        self.filter_vertical_scroll
+    }
+
+    pub fn ensure_filter_visible(&mut self, viewport_height: usize) {
+        let viewport_height = viewport_height.max(1);
+        let selected = self.filter_editor.selected;
+        let margin = 1usize.min(viewport_height.saturating_sub(1));
+        let min_visible = self.filter_vertical_scroll.saturating_add(margin);
+        let max_visible = self
+            .filter_vertical_scroll
+            .saturating_add(viewport_height.saturating_sub(1))
+            .saturating_sub(margin);
+
+        if selected < min_visible {
+            self.filter_vertical_scroll = selected.saturating_sub(margin);
+            return;
+        }
+
+        if selected > max_visible {
+            self.filter_vertical_scroll = selected
+                .saturating_add(margin)
+                .saturating_add(1)
+                .saturating_sub(viewport_height);
+        }
+
+        let max_scroll = self.filter_editor.fields.len().saturating_sub(1);
+        self.filter_vertical_scroll = self.filter_vertical_scroll.min(max_scroll);
     }
 
     pub fn filter_panel_editing(&self) -> bool {
@@ -1680,6 +1718,9 @@ impl TaskReviewState {
         self.filter_editor.selected = self
             .filter_editor
             .selected
+            .min(self.filter_editor.fields.len().saturating_sub(1));
+        self.filter_vertical_scroll = self
+            .filter_vertical_scroll
             .min(self.filter_editor.fields.len().saturating_sub(1));
 
         if !matches!(

@@ -233,6 +233,14 @@ fn default_bindings() -> Vec<Bind> {
             command: "select_all_visible".to_string(),
         },
         Bind {
+            key: "!".to_string(),
+            command: "select_all_starred_visible".to_string(),
+        },
+        Bind {
+            key: "@".to_string(),
+            command: "select_all_non_hidden_visible".to_string(),
+        },
+        Bind {
             key: "i".to_string(),
             command: "invert_selection".to_string(),
         },
@@ -270,15 +278,35 @@ fn default_bindings() -> Vec<Bind> {
         },
         Bind {
             key: "t".to_string(),
-            command: "toggle_task_view".to_string(),
-        },
-        Bind {
-            key: "m".to_string(),
-            command: "toggle_task_mode".to_string(),
+            command: "set_task_mode".to_string(),
         },
         Bind {
             key: "f".to_string(),
-            command: "toggle_task_filters".to_string(),
+            command: "set_filter_mode".to_string(),
+        },
+        Bind {
+            key: "p".to_string(),
+            command: "set_project_mode".to_string(),
+        },
+        Bind {
+            key: "[".to_string(),
+            command: "resize_window_down".to_string(),
+        },
+        Bind {
+            key: "]".to_string(),
+            command: "resize_window_up".to_string(),
+        },
+        Bind {
+            key: "{".to_string(),
+            command: "minimize_window".to_string(),
+        },
+        Bind {
+            key: "}".to_string(),
+            command: "maximize_window".to_string(),
+        },
+        Bind {
+            key: "0".to_string(),
+            command: "restore_window".to_string(),
         },
         Bind {
             key: "o".to_string(),
@@ -337,11 +365,11 @@ fn default_bindings() -> Vec<Bind> {
             command: "toggle_subtask_visibility".to_string(),
         },
         Bind {
-            key: "p".to_string(),
+            key: ",".to_string(),
             command: "toggle_project_grouping".to_string(),
         },
         Bind {
-            key: "g".to_string(),
+            key: ".".to_string(),
             command: "toggle_section_grouping".to_string(),
         },
         Bind {
