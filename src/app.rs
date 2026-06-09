@@ -183,11 +183,17 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     }
 
     fn set_project_mode(&mut self) {
+        if self.panel_size.is_minimized() {
+            self.restore_top_panel();
+        }
         self.mode = AppMode::Project;
         self.tasks.set_focus_mode(TaskFocusMode::Projects);
     }
 
     fn set_filter_mode(&mut self) {
+        if self.panel_size.is_minimized() {
+            self.restore_top_panel();
+        }
         self.mode = AppMode::Filter;
         self.tasks.set_visible(true);
         self.tasks.set_focus_mode(TaskFocusMode::Projects);
@@ -291,6 +297,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 } else {
                     self.minimize_top_panel();
                 }
+                self.set_task_mode();
                 return Ok(None);
             }
             Action::MaximizeWindow => {
@@ -855,7 +862,7 @@ mod tests {
         input::{Action, KeyBinding},
     };
 
-    use super::App;
+    use super::{App, AppMode};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
@@ -955,6 +962,7 @@ mod tests {
 
         assert!(app.panel_size().is_minimized());
         assert_eq!(app.panel_size().actual_height(20, 6), 0);
+        assert_eq!(app.mode(), AppMode::Task);
 
         app.handle_action(&Action::MinimizeWindow, 10)
             .expect("un-minimize top panel");
@@ -966,11 +974,38 @@ mod tests {
 
         assert!(app.panel_size().is_maximized());
         assert_eq!(app.panel_size().actual_height(20, 6), 20);
+        assert_eq!(app.mode(), AppMode::Task);
 
         app.handle_action(&Action::MaximizeWindow, 10)
             .expect("un-maximize top panel");
 
         assert!(app.panel_size().is_normal());
+    }
+
+    #[test]
+    fn switching_to_project_or_filter_mode_restores_a_minimized_top_panel() {
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]);
+        let mut app = App::new(Config::default(), client);
+
+        app.handle_action(&Action::MinimizeWindow, 10)
+            .expect("minimize top panel");
+        assert!(app.panel_size().is_minimized());
+        assert_eq!(app.mode(), AppMode::Task);
+
+        app.handle_action(&Action::SetProjectMode, 10)
+            .expect("switch to project mode");
+        assert!(app.panel_size().is_normal());
+        assert_eq!(app.mode(), AppMode::Project);
+
+        app.handle_action(&Action::MinimizeWindow, 10)
+            .expect("minimize top panel again");
+        assert!(app.panel_size().is_minimized());
+        assert_eq!(app.mode(), AppMode::Task);
+
+        app.handle_action(&Action::SetFilterMode, 10)
+            .expect("switch to filter mode");
+        assert!(app.panel_size().is_normal());
+        assert_eq!(app.mode(), AppMode::Filter);
     }
 
     #[test]
