@@ -1,3 +1,9 @@
+//! State and behavior for the project list pane.
+//!
+//! This module owns the project list's search, selection, visibility, and
+//! sorting state. The UI renderer consumes this state to build the visible
+//! project list view.
+
 use std::collections::HashSet;
 
 use regex::RegexBuilder;
@@ -10,6 +16,7 @@ use crate::{
     input::{Action, AppCommand},
 };
 
+/// The search strategy used by the project list.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SearchMode {
     Fuzzy,
@@ -18,10 +25,11 @@ pub enum SearchMode {
     Regex,
 }
 
+/// Live state for the project list pane.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectListState {
     all_projects: Vec<Project>,
-    visible_projects: Vec<Project>,
+    visible_project_indices: Vec<usize>,
     selected_ids: HashSet<String>,
     undo_selection_history: Vec<SelectionSnapshot>,
     redo_selection_history: Vec<SelectionSnapshot>,
@@ -36,6 +44,7 @@ pub struct ProjectListState {
     show_help_details: bool,
 }
 
+/// High-level project list status for the UI.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectListStatus {
     Idle,
@@ -76,7 +85,7 @@ impl ProjectListState {
             Ok(projects) => projects,
             Err(err) => {
                 self.all_projects.clear();
-                self.visible_projects.clear();
+                self.visible_project_indices.clear();
                 self.selected_ids.clear();
                 self.undo_selection_history.clear();
                 self.redo_selection_history.clear();
@@ -85,7 +94,12 @@ impl ProjectListState {
                 return Err(err);
             }
         };
-        apply_visibility_preferences(&mut projects, visibility);
+        // Projects omitted from the config start hidden; explicit config entries
+        // can then reopen selected projects or preserve starred metadata.
+        for project in &mut projects {
+            project.hidden = true;
+        }
+        apply_project_visibility_config(&mut projects, visibility);
         sort_projects(&mut projects);
         self.all_projects = projects;
         self.selected_ids.clear();
@@ -109,11 +123,11 @@ impl ProjectListState {
         mut projects: Vec<Project>,
         visibility: &[ProjectVisibilityConfig],
     ) -> Self {
-        apply_visibility_preferences(&mut projects, visibility);
+        apply_project_visibility_config(&mut projects, visibility);
         sort_projects(&mut projects);
         let mut state = Self {
             all_projects: projects,
-            visible_projects: Vec::new(),
+            visible_project_indices: Vec::new(),
             selected_ids: HashSet::new(),
             undo_selection_history: Vec::new(),
             redo_selection_history: Vec::new(),
@@ -136,8 +150,11 @@ impl ProjectListState {
         state
     }
 
-    pub fn items(&self) -> &[Project] {
-        &self.visible_projects
+    pub fn items(&self) -> Vec<&Project> {
+        self.visible_project_indices
+            .iter()
+            .filter_map(|&index| self.all_projects.get(index))
+            .collect()
     }
 
     pub fn selected_projects(&self) -> Vec<Project> {
@@ -154,7 +171,8 @@ impl ProjectListState {
 
     pub fn selected_project(&self) -> Option<&Project> {
         self.selected
-            .and_then(|index| self.visible_projects.get(index))
+            .and_then(|index| self.visible_project_indices.get(index))
+            .and_then(|&project_index| self.all_projects.get(project_index))
     }
 
     pub fn selected_count(&self) -> usize {
@@ -178,7 +196,7 @@ impl ProjectListState {
     }
 
     pub fn hidden_visible(&self) -> bool {
-        self.show_hidden
+        self.show_hidden || self.all_projects.iter().all(|project| project.hidden)
     }
 
     pub fn show_selected_only(&self) -> bool {
@@ -218,10 +236,10 @@ impl ProjectListState {
 
     pub fn move_down(&mut self) {
         if let Some(index) = self.selected {
-            if index + 1 < self.visible_projects.len() {
+            if index + 1 < self.visible_project_indices.len() {
                 self.selected = Some(index + 1);
             }
-        } else if !self.visible_projects.is_empty() {
+        } else if !self.visible_project_indices.is_empty() {
             self.selected = Some(0);
         }
     }
@@ -237,16 +255,18 @@ impl ProjectListState {
     pub fn page_down(&mut self, page_size: usize) {
         let step = page_size.max(1);
         if let Some(index) = self.selected {
-            if index + 1 < self.visible_projects.len() {
-                self.selected = Some((index + step).min(self.visible_projects.len() - 1));
+            if index + 1 < self.visible_project_indices.len() {
+                self.selected = Some(
+                    (index + step).min(self.visible_project_indices.len() - 1),
+                );
             }
-        } else if !self.visible_projects.is_empty() {
+        } else if !self.visible_project_indices.is_empty() {
             self.selected = Some(0);
         }
     }
 
     pub fn jump_top(&mut self) {
-        if self.visible_projects.is_empty() {
+        if self.visible_project_indices.is_empty() {
             self.selected = None;
         } else {
             self.selected = Some(0);
@@ -254,10 +274,10 @@ impl ProjectListState {
     }
 
     pub fn jump_bottom(&mut self) {
-        if self.visible_projects.is_empty() {
+        if self.visible_project_indices.is_empty() {
             self.selected = None;
         } else {
-            self.selected = Some(self.visible_projects.len() - 1);
+            self.selected = Some(self.visible_project_indices.len() - 1);
         }
     }
 
@@ -330,20 +350,25 @@ impl ProjectListState {
     }
 
     pub fn select_all_visible(&mut self) {
-        if self.visible_projects.is_empty() {
+        if self.visible_project_indices.is_empty() {
             return;
         }
 
+        let project_ids = self
+            .items()
+            .into_iter()
+            .map(|project| project.id.clone())
+            .collect::<Vec<_>>();
         self.push_selection_history();
-        for project in &self.visible_projects {
-            self.selected_ids.insert(project.id.clone());
+        for project_id in project_ids {
+            self.selected_ids.insert(project_id);
         }
         self.rebuild_visible_projects(self.selected_project().map(|project| project.id.clone()));
     }
 
     pub fn select_all_starred_visible(&mut self) {
         let targets = self
-            .visible_projects
+            .items()
             .iter()
             .filter(|project| project.starred)
             .map(|project| project.id.clone())
@@ -361,7 +386,7 @@ impl ProjectListState {
 
     pub fn select_all_non_hidden_visible(&mut self) {
         let targets = self
-            .visible_projects
+            .items()
             .iter()
             .filter(|project| !project.hidden)
             .map(|project| project.id.clone())
@@ -378,14 +403,19 @@ impl ProjectListState {
     }
 
     pub fn invert_selection_visible(&mut self) {
-        if self.visible_projects.is_empty() {
+        if self.visible_project_indices.is_empty() {
             return;
         }
 
+        let project_ids = self
+            .items()
+            .into_iter()
+            .map(|project| project.id.clone())
+            .collect::<Vec<_>>();
         self.push_selection_history();
-        for project in &self.visible_projects {
-            if !self.selected_ids.insert(project.id.clone()) {
-                self.selected_ids.remove(&project.id);
+        for project_id in project_ids {
+            if !self.selected_ids.insert(project_id.clone()) {
+                self.selected_ids.remove(&project_id);
             }
         }
         self.rebuild_visible_projects(self.selected_project().map(|project| project.id.clone()));
@@ -517,11 +547,13 @@ impl ProjectListState {
         }
     }
 
-    pub fn visibility_preferences(&self) -> Vec<ProjectVisibilityConfig> {
+    pub fn project_visibility_config(&self) -> Vec<ProjectVisibilityConfig> {
+        // Persist only the projects that are visible or explicitly starred; any
+        // omitted project stays hidden on the next load.
         let mut preferences: Vec<ProjectVisibilityConfig> = self
             .all_projects
             .iter()
-            .filter(|project| project.starred || project.hidden)
+            .filter(|project| project.starred || !project.hidden)
             .map(|project| ProjectVisibilityConfig {
                 gid: project.id.clone(),
                 starred: project.starred,
@@ -577,6 +609,7 @@ impl ProjectListState {
     fn rebuild_visible_projects(&mut self, previous_cursor_id: Option<String>) {
         let previous_cursor_index = self.selected;
         self.search_error = None;
+        let show_hidden = self.show_hidden || self.all_projects.iter().all(|project| project.hidden);
 
         let regex = if self.search_mode == SearchMode::Regex && !self.search_query.is_empty() {
             match RegexBuilder::new(&self.search_query)
@@ -593,23 +626,25 @@ impl ProjectListState {
             None
         };
 
-        self.visible_projects = self
+        self.visible_project_indices = self
             .all_projects
             .iter()
-            .filter(|project| self.project_matches(project, regex.as_ref()))
-            .cloned()
+            .enumerate()
+            .filter(|(_, project)| self.project_matches(project, regex.as_ref(), show_hidden))
+            .map(|(index, _)| index)
             .collect();
 
-        if self.visible_projects.is_empty() {
+        if self.visible_project_indices.is_empty() {
             self.selected = None;
             return;
         }
 
         if let Some(previous_cursor_id) = previous_cursor_id {
-            if let Some(index) = self
-                .visible_projects
-                .iter()
-                .position(|project| project.id == previous_cursor_id)
+            if let Some(index) = self.visible_project_indices.iter().position(|&project_index| {
+                self.all_projects
+                    .get(project_index)
+                    .is_some_and(|project| project.id == previous_cursor_id)
+            })
             {
                 self.selected = Some(index);
                 return;
@@ -618,12 +653,17 @@ impl ProjectListState {
 
         let index = previous_cursor_index
             .unwrap_or(0)
-            .min(self.visible_projects.len() - 1);
+            .min(self.visible_project_indices.len() - 1);
         self.selected = Some(index);
     }
 
-    fn project_matches(&self, project: &Project, regex: Option<&regex::Regex>) -> bool {
-        if !self.show_hidden && project.hidden {
+    fn project_matches(
+        &self,
+        project: &Project,
+        regex: Option<&regex::Regex>,
+        show_hidden: bool,
+    ) -> bool {
+        if !show_hidden && project.hidden {
             return false;
         }
 
@@ -681,7 +721,7 @@ fn sort_projects(projects: &mut [Project]) {
     });
 }
 
-fn apply_visibility_preferences(
+fn apply_project_visibility_config(
     projects: &mut [Project],
     visibility: &[ProjectVisibilityConfig],
 ) {
@@ -804,6 +844,23 @@ mod tests {
 
         assert_eq!(names, vec!["Visible Starred", "Visible Unstarred"]);
         assert_eq!(state.hidden_count(), 1);
+    }
+
+    #[test]
+    fn loads_projects_as_hidden_by_default_when_visibility_is_missing() {
+        let client = FakeAsanaClient::new(vec![
+            Project::new("1", "Inbox", true),
+            Project::new("2", "Backlog", false),
+        ]);
+        let mut state = ProjectListState::new();
+
+        state
+            .load_with_visibility(&client, &[])
+            .expect("projects load");
+
+        assert_eq!(state.items().len(), 2);
+        assert!(state.items().iter().all(|project| project.hidden));
+        assert_eq!(state.hidden_count(), 2);
     }
 
     #[test]
@@ -1013,14 +1070,23 @@ mod tests {
         state.toggle_current_selection();
         state.toggle_starred_selected();
         assert!(state
-            .visibility_preferences()
+            .project_visibility_config()
             .iter()
             .any(|project| project.gid == "1" && project.starred));
 
         state.toggle_hidden_selected();
         assert!(state
-            .visibility_preferences()
+            .project_visibility_config()
             .iter()
             .any(|project| project.gid == "1" && project.hidden));
+    }
+
+    #[test]
+    fn omits_hidden_only_projects_from_project_visibility_config() {
+        let mut state = ProjectListState::from_projects(vec![Project::new("1", "Inbox", false)]);
+
+        state.toggle_hidden_selected();
+
+        assert!(state.project_visibility_config().is_empty());
     }
 }

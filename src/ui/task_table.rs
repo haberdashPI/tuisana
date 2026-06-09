@@ -1,8 +1,14 @@
-use ratatui::{style::{Modifier, Style}, text::{Line, Span}};
+//! Rendering helpers for the task table and filter panel.
+
+use ratatui::{
+    style::{Modifier, Style},
+    text::{Line, Span},
+};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
-    app::task_review::{TaskFocusMode, TaskFilterPanelEntry, TaskReviewState, TaskReviewStatus},
+    app::task::{TaskFilterPanelEntry, TaskState, TaskStatus},
+    config::Mode,
     domain::{TaskRow, TaskRowKind},
 };
 
@@ -10,31 +16,51 @@ const COLUMN_SEPARATOR: &str = " | ";
 const COLUMN_SEPARATOR_WIDTH: usize = 3;
 const DEFAULT_OTHER_COLUMN_CAP: usize = 18;
 
+/// Snapshot of the task table used by the UI renderer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskTableView {
+    /// The pane title.
     pub title: String,
+    /// The one-line task status summary.
     pub status_line: String,
+    /// Help text for the task pane.
     pub hint_lines: Vec<String>,
+    /// Visible column labels.
     pub columns: Vec<String>,
+    /// The rendered table rows.
     pub rows: Vec<TaskRow>,
+    /// Calculated column widths for rendering.
     pub column_widths: Vec<usize>,
+    /// The full rendered width of the table.
     pub total_width: usize,
+    /// Horizontal scroll offset.
     pub scroll_offset: usize,
 }
 
+/// Snapshot of the task filter panel used by the UI renderer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TaskFilterPanelView {
+    /// The pane title.
     pub title: String,
+    /// The filter rows shown in the panel.
     pub(crate) rows: Vec<TaskFilterPanelEntry>,
+    /// Whether any filters are active.
     pub has_active_filters: bool,
+    /// Whether the filter editor is in edit mode.
     pub editing: bool,
+    /// Help text specific to the filter panel.
     pub help_lines: Vec<String>,
 }
 
-pub fn render_task_table(state: &TaskReviewState, viewport_width: usize) -> TaskTableView {
+/// Renders the task table state into a UI-friendly snapshot.
+pub fn render_task_table(
+    state: &TaskState,
+    viewport_width: usize,
+    mode: Mode,
+) -> TaskTableView {
     let status_line = match state.status() {
-        TaskReviewStatus::Idle => "Tasks idle".to_string(),
-        TaskReviewStatus::Loading => {
+        TaskStatus::Idle => "Tasks idle".to_string(),
+        TaskStatus::Loading => {
             let targets = if state.loading_targets().is_empty() {
                 String::new()
             } else {
@@ -42,13 +68,15 @@ pub fn render_task_table(state: &TaskReviewState, viewport_width: usize) -> Task
             };
             format!("Loading tasks{} {}", targets, state.loading_spinner())
         }
-        TaskReviewStatus::Ready => task_status(state, &format!("ready, {}", state.filter_summary())),
-        TaskReviewStatus::OutOfDate(message) => task_status(
+        TaskStatus::Ready => {
+            task_status(state, &format!("ready, {}", state.filter_summary()))
+        }
+        TaskStatus::OutOfDate(message) => task_status(
             state,
             &format!("stale: {message}, {}", state.filter_summary()),
         ),
-        TaskReviewStatus::Empty => "No tasks available".to_string(),
-        TaskReviewStatus::Error(message) => format!("Error: {message}"),
+        TaskStatus::Empty => "No tasks available".to_string(),
+        TaskStatus::Error(message) => format!("Error: {message}"),
     };
 
     let columns = state.table().columns.clone();
@@ -64,11 +92,7 @@ pub fn render_task_table(state: &TaskReviewState, viewport_width: usize) -> Task
         *width = (*width).min(column_cap(index));
     }
 
-    let other_width_total = column_widths
-        .iter()
-        .skip(1)
-        .copied()
-        .sum::<usize>()
+    let other_width_total = column_widths.iter().skip(1).copied().sum::<usize>()
         + COLUMN_SEPARATOR_WIDTH * column_widths.len().saturating_sub(1);
     let widest_other = column_widths.iter().skip(1).copied().max().unwrap_or(0);
     let title_cap = ((viewport_width as f64) * 0.6).floor() as usize;
@@ -90,9 +114,15 @@ pub fn render_task_table(state: &TaskReviewState, viewport_width: usize) -> Task
     let hint_lines = task_hint_lines(state, scroll, max_scroll);
 
     TaskTableView {
-        title: match state.focus_mode() {
-            TaskFocusMode::Projects => "Task review (project focus)".to_string(),
-            TaskFocusMode::Tasks => "Task review (task focus)".to_string(),
+        title: match mode {
+            Mode::Task => "Task review (task focus)".to_string(),
+            Mode::Project
+            | Mode::ProjectSearch
+            | Mode::Filter
+            | Mode::FilterEdit => {
+                "Task review (project focus)".to_string()
+            }
+            Mode::Any => "Task review".to_string(),
         },
         status_line,
         hint_lines,
@@ -104,12 +134,14 @@ pub fn render_task_table(state: &TaskReviewState, viewport_width: usize) -> Task
     }
 }
 
-pub fn build_task_header_line(view: &TaskTableView, viewport_width: usize) -> Line<'static> {
+/// Renders the header row for the task table.
+pub fn format_task_header_line(view: &TaskTableView, viewport_width: usize) -> Line<'static> {
     let spans = row_spans(&view.columns, &view.column_widths, true);
     Line::from(slice_spans(&spans, view.scroll_offset, viewport_width))
 }
 
-pub fn build_task_body_lines(
+/// Renders the task body rows for the task table.
+pub fn format_task_body(
     view: &TaskTableView,
     selected_index: Option<usize>,
     viewport_width: usize,
@@ -172,18 +204,20 @@ pub fn build_task_body_lines(
     lines
 }
 
-pub fn build_task_lines(
+/// Renders the header plus body rows for the task table.
+pub fn format_task_lines(
     view: &TaskTableView,
     selected_index: Option<usize>,
     viewport_width: usize,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(view.rows.len().saturating_add(1));
-    lines.push(build_task_header_line(view, viewport_width));
-    lines.extend(build_task_body_lines(view, selected_index, viewport_width));
+    lines.push(format_task_header_line(view, viewport_width));
+    lines.extend(format_task_body(view, selected_index, viewport_width));
     lines
 }
 
-pub(crate) fn build_task_filter_body_lines(
+/// Renders the task filter panel body.
+pub(crate) fn format_task_filter_body(
     view: &TaskFilterPanelView,
     viewport_width: usize,
 ) -> Vec<Line<'static>> {
@@ -222,14 +256,17 @@ pub(crate) fn build_task_filter_body_lines(
         } else {
             let mut content = prefix;
             content.push_str(&row.query);
-            lines.push(Line::from(vec![Span::raw(truncate_to_width(&content, viewport_width))]));
+            lines.push(Line::from(vec![Span::raw(truncate_to_width(
+                &content,
+                viewport_width,
+            ))]));
         }
     }
 
     lines
 }
 
-fn task_status(state: &TaskReviewState, suffix: &str) -> String {
+fn task_status(state: &TaskState, suffix: &str) -> String {
     match state.selected_index() {
         Some(index) => format!(
             "{} tasks, row {}, {}",
@@ -241,7 +278,7 @@ fn task_status(state: &TaskReviewState, suffix: &str) -> String {
     }
 }
 
-fn task_hint_lines(state: &TaskReviewState, scroll: usize, max_scroll: usize) -> Vec<String> {
+fn task_hint_lines(state: &TaskState, scroll: usize, max_scroll: usize) -> Vec<String> {
     let compact_scroll_line = if max_scroll > 0 {
         format!(
             "left/right: scroll columns ({}/{}), p/f/t: modes, [/]/{{}}/0: pane size, r: refresh, q: quit",
@@ -283,7 +320,8 @@ fn task_hint_lines(state: &TaskReviewState, scroll: usize, max_scroll: usize) ->
     ]
 }
 
-pub(crate) fn render_task_filter_panel(state: &TaskReviewState) -> Option<TaskFilterPanelView> {
+/// Renders the filter panel snapshot from task state, if the panel is visible.
+pub(crate) fn render_task_filter_panel(state: &TaskState) -> Option<TaskFilterPanelView> {
     if !state.filter_panel_visible() {
         return None;
     }
@@ -484,7 +522,8 @@ mod tests {
     use ratatui::style::Modifier;
 
     use crate::{
-        app::task_review::TaskReviewState,
+        app::task::TaskState,
+        config::Mode,
         asana::{
             dto::{
                 CustomFieldDto, CustomFieldValueDto, ProjectCustomFieldSettingDto, SectionDto,
@@ -495,7 +534,7 @@ mod tests {
         domain::{Project, TaskRowKind},
     };
 
-    use super::{build_task_body_lines, build_task_header_line, build_task_lines, render_task_table};
+    use super::{format_task_body, format_task_header_line, format_task_lines, render_task_table};
 
     #[test]
     fn renders_task_table_columns_and_rows() {
@@ -547,13 +586,13 @@ mod tests {
                 }],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
         state.set_visible(true);
 
-        let view = render_task_table(&state, 120);
+        let view = render_task_table(&state, 120, Mode::Project);
 
         assert_eq!(view.title, "Task review (project focus)");
         assert!(view.status_line.contains("1 tasks"));
@@ -570,11 +609,13 @@ mod tests {
         assert_eq!(view.rows[4].cells[2], "2026-06-10");
         assert!(view.total_width <= 120);
 
-        let lines = build_task_lines(&view, state.selected_index(), 120);
+        let lines = format_task_lines(&view, state.selected_index(), 120);
         assert!(lines[0].to_string().contains("Task"));
         assert!(lines[2].to_string().contains("Inbox"));
-        assert!(build_task_header_line(&view, 120).to_string().contains("Assignee"));
-        let body_lines = build_task_body_lines(&view, state.selected_index(), 120);
+        assert!(format_task_header_line(&view, 120)
+            .to_string()
+            .contains("Assignee"));
+        let body_lines = format_task_body(&view, state.selected_index(), 120);
         assert!(body_lines[2].to_string().contains(" | "));
         assert!(body_lines[3].to_string().contains(" | "));
     }
@@ -614,25 +655,34 @@ mod tests {
                 }],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
 
-        let view = render_task_table(&state, 120);
-        let body_lines = build_task_body_lines(&view, state.selected_index(), 120);
+        let view = render_task_table(&state, 120, Mode::Project);
+        let body_lines = format_task_body(&view, state.selected_index(), 120);
 
-        assert!(body_lines[1].spans[0].style.add_modifier.contains(Modifier::BOLD));
-        assert!(body_lines[3].spans[0].style.add_modifier.contains(Modifier::BOLD));
-        assert!(!body_lines[0].spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert!(body_lines[1].spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+        assert!(body_lines[3].spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+        assert!(!body_lines[0].spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
     }
 
     #[test]
     fn renders_loading_state_with_spinner_and_targets() {
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state.begin_loading(&[Project::new("p1", "Inbox", true)]);
 
-        let view = render_task_table(&state, 80);
+        let view = render_task_table(&state, 80, Mode::Project);
 
         assert!(view.status_line.contains("Loading tasks"));
         assert!(view.status_line.contains("Inbox"));
@@ -641,12 +691,12 @@ mod tests {
 
     #[test]
     fn renders_out_of_date_status_with_refresh_hint() {
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state.begin_loading(&[Project::new("p1", "Inbox", true)]);
         state.finish_loading(crate::domain::TaskTableModel::empty());
         state.mark_out_of_date("selected projects changed; switch to task view to refresh");
 
-        let view = render_task_table(&state, 80);
+        let view = render_task_table(&state, 80, Mode::Project);
 
         assert!(view.status_line.contains("stale"));
         assert!(view.status_line.contains("switch to task view"));
@@ -710,10 +760,10 @@ mod tests {
                 ],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state.set_completed_filter(None);
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
         state.toggle_completed_filter();
         state.toggle_subtask_visibility();
@@ -721,7 +771,7 @@ mod tests {
         state.toggle_section_grouping();
         state.cycle_sort_field();
 
-        let view = render_task_table(&state, 80);
+        let view = render_task_table(&state, 80, Mode::Project);
 
         assert_eq!(
             view.hint_lines,
@@ -776,13 +826,13 @@ mod tests {
                 }],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
         state.toggle_help_details();
 
-        let view = render_task_table(&state, 80);
+        let view = render_task_table(&state, 80, Mode::Project);
 
         assert_eq!(
             view.hint_lines,
@@ -894,14 +944,14 @@ mod tests {
                 ],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
         state.set_visible(true);
 
-        let view = render_task_table(&state, 200);
-        let lines = build_task_lines(&view, state.selected_index(), 200);
+        let view = render_task_table(&state, 200, Mode::Project);
+        let lines = format_task_lines(&view, state.selected_index(), 200);
 
         let separator_positions = lines
             .iter()
@@ -909,7 +959,9 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(!separator_positions.is_empty());
-        assert!(separator_positions.windows(2).all(|pair| pair[0] == pair[1]));
+        assert!(separator_positions
+            .windows(2)
+            .all(|pair| pair[0] == pair[1]));
     }
 
     #[test]
@@ -976,12 +1028,12 @@ mod tests {
                 ],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
 
-        let view = render_task_table(&state, 120);
+        let view = render_task_table(&state, 120, Mode::Project);
         assert_eq!(view.rows[0].kind, TaskRowKind::ProjectSeparator);
         assert_eq!(view.rows[1].kind, TaskRowKind::ProjectHeader);
         assert_eq!(view.rows[2].kind, TaskRowKind::SectionSpacer);
@@ -1078,25 +1130,27 @@ mod tests {
                 ],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
         state.set_visible(true);
         for _ in 0..12 {
             state.scroll_right();
         }
 
-        let view = render_task_table(&state, 60);
+        let view = render_task_table(&state, 60, Mode::Project);
         assert!(view.scroll_offset > 0);
-        let lines = build_task_lines(&view, state.selected_index(), 60);
+        let lines = format_task_lines(&view, state.selected_index(), 60);
         let separator_positions = lines
             .iter()
             .filter_map(|line| line.to_string().find(" | "))
             .collect::<Vec<_>>();
 
         assert!(!separator_positions.is_empty());
-        assert!(separator_positions.windows(2).all(|pair| pair[0] == pair[1]));
+        assert!(separator_positions
+            .windows(2)
+            .all(|pair| pair[0] == pair[1]));
     }
 
     #[test]
@@ -1123,7 +1177,8 @@ mod tests {
                 "p1",
                 vec![TaskDto {
                     gid: "t1".to_string(),
-                    name: "Ship release with a very long title that should force scrolling".to_string(),
+                    name: "Ship release with a very long title that should force scrolling"
+                        .to_string(),
                     completed: false,
                     modified_at: None,
                     due_on: Some("2026-06-10".to_string()),
@@ -1144,15 +1199,18 @@ mod tests {
                 }],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
 
-        let view = render_task_table(&state, 40);
+        let view = render_task_table(&state, 40, Mode::Project);
 
         assert!(view.total_width > 40);
-        assert!(view.hint_lines.iter().any(|line| line.contains("p/f/t: modes")));
+        assert!(view
+            .hint_lines
+            .iter()
+            .any(|line| line.contains("p/f/t: modes")));
     }
 
     #[test]
@@ -1194,14 +1252,17 @@ mod tests {
                 }],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
 
-        let view = render_task_table(&state, 50);
-        let lines = build_task_lines(&view, state.selected_index(), 50);
-        let rendered = lines.iter().map(|line| line.to_string()).collect::<Vec<_>>();
+        let view = render_task_table(&state, 50, Mode::Project);
+        let lines = format_task_lines(&view, state.selected_index(), 50);
+        let rendered = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
 
         assert!(view.column_widths[0] <= 30);
         assert!(rendered.iter().any(|line| line.contains('…')));

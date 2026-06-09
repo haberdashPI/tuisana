@@ -1,35 +1,26 @@
 use crate::{
     asana::{AsanaClient, TaskLoadScope},
-    config::Config,
+    config::{Config, Mode},
     error::Result,
     input::{Action, AppCommand, KeyBinding, KeyMap},
 };
 
 use std::{
-    path::PathBuf,
     sync::mpsc::{self, Receiver},
     thread,
 };
 
 pub mod project_list;
-pub mod task_review;
+pub mod task;
 
 use self::project_list::ProjectListState;
-use self::task_review::{TaskFocusMode, TaskReviewState};
+use self::task::TaskState;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AppMode {
-    Project,
-    Filter,
-    Task,
-}
-
-impl Default for AppMode {
-    fn default() -> Self {
-        Self::Project
-    }
-}
-
+/// Internal state for the top pane's size and transient maximize/minimize mode.
+///
+/// The pane is shared between the project list and the filter view, so this
+/// type remembers the preferred height and whether the pane is temporarily
+/// hidden or expanded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PaneMode {
     Normal,
@@ -37,6 +28,11 @@ enum PaneMode {
     Maximized,
 }
 
+/// Tracks the preferred height of the top pane and how it should be rendered.
+///
+/// The project list and filter panel both live in this region. The app uses
+/// this state to remember the user's preferred split and to support temporary
+/// minimize/maximize toggles.
 #[derive(Clone, Debug)]
 pub struct PaneSizeState {
     preferred: u16,
@@ -111,51 +107,55 @@ impl PaneSizeState {
     }
 }
 
+/// Central application state and coordinator.
+///
+/// `App` owns the project list state, task state, bind mode, pane
+/// sizing, and asynchronous task loading. The runtime and tests drive this
+/// type directly so the UI stays thin and the behavior remains easy to verify.
 #[derive(Debug)]
 pub struct App<C> {
     pub config: Config,
     pub projects: ProjectListState,
-    pub tasks: TaskReviewState,
-    mode: AppMode,
+    pub tasks: TaskState,
+    mode: Mode,
     panel_size: PaneSizeState,
     client: C,
-    config_path: Option<PathBuf>,
-    task_load_generation: u64,
-    task_load_receiver: Option<Receiver<TaskLoadMessage>>,
+    /// Monotonic tag for the current async task-data request.
+    ///
+    /// Each new task-data request increments this counter. Worker messages carry the
+    /// generation they were started under so `poll_task_data` can ignore stale
+    /// results from an earlier request after the user has triggered a newer one.
+    task_data_generation: u64,
+    /// Receiver for the in-flight async task-data worker, if one is active.
+    ///
+    /// The app keeps the receiver here so the main loop can poll for partial
+    /// results, completion, or failure without blocking the UI.
+    task_data_receiver: Option<Receiver<TaskDataMessage>>,
 }
 
-struct TaskLoadMessage {
+/// Internal message sent back from the task-data worker thread.
+///
+/// The app uses this to merge task data incrementally and to know when a request
+/// has completed or failed.
+struct TaskDataMessage {
     generation: u64,
     project_id: Option<String>,
     scope: TaskLoadScope,
-    result: Result<crate::app::task_review::TaskDataset>,
+    result: Result<crate::app::task::TaskDataset>,
     done: bool,
 }
 
 impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     pub fn new(config: Config, client: C) -> Self {
-        Self::with_optional_config_path(None, config, client)
-    }
-
-    pub fn with_config_path(path: impl Into<PathBuf>, config: Config, client: C) -> Self {
-        Self::with_optional_config_path(Some(path.into()), config, client)
-    }
-
-    fn with_optional_config_path(
-        config_path: Option<PathBuf>,
-        config: Config,
-        client: C,
-    ) -> Self {
         Self {
             config,
             projects: ProjectListState::new(),
-            tasks: TaskReviewState::new(),
-            mode: AppMode::default(),
+            tasks: TaskState::new(),
+            mode: Mode::Project,
             panel_size: PaneSizeState::default(),
             client,
-            config_path,
-            task_load_generation: 0,
-            task_load_receiver: None,
+            task_data_generation: 0,
+            task_data_receiver: None,
         }
     }
 
@@ -165,8 +165,9 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         Ok(())
     }
 
-    pub fn load_tasks(&mut self) -> Result<()> {
-        self.start_task_load();
+    /// Start the asynchronous task-data request for the currently selected projects.
+    pub fn request_task_data(&mut self) -> Result<()> {
+        self.start_task_data_fetch();
         Ok(())
     }
 
@@ -174,7 +175,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         KeyMap::from_bindings(&self.config.effective_bindings())
     }
 
-    pub fn mode(&self) -> AppMode {
+    pub fn mode(&self) -> Mode {
         self.mode
     }
 
@@ -184,69 +185,399 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
 
     fn set_project_mode(&mut self) {
         if self.panel_size.is_minimized() {
-            self.restore_top_panel();
+            self.restore_top_pane();
         }
-        self.mode = AppMode::Project;
-        self.tasks.set_focus_mode(TaskFocusMode::Projects);
+        if self.projects.search_active() {
+            self.projects.end_search();
+        }
+        if self.tasks.filter_panel_visible() {
+            self.tasks.toggle_filter_panel();
+        }
+        self.mode = Mode::Project;
+    }
+
+    fn set_project_search_mode(&mut self) {
+        if self.panel_size.is_minimized() {
+            self.restore_top_pane();
+        }
+        if self.tasks.filter_panel_visible() {
+            self.tasks.toggle_filter_panel();
+        }
+        self.mode = Mode::ProjectSearch;
     }
 
     fn set_filter_mode(&mut self) {
         if self.panel_size.is_minimized() {
-            self.restore_top_panel();
+            self.restore_top_pane();
         }
-        self.mode = AppMode::Filter;
+        if self.projects.search_active() {
+            self.projects.end_search();
+        }
+        self.mode = Mode::Filter;
         self.tasks.set_visible(true);
-        self.tasks.set_focus_mode(TaskFocusMode::Projects);
         if !self.tasks.filter_panel_visible() {
             self.tasks.toggle_filter_panel();
+        }
+        if self.tasks.filter_panel_editing() {
+            self.tasks.filter_edit_done();
+        }
+    }
+
+    fn set_filter_edit_mode(&mut self) {
+        if self.panel_size.is_minimized() {
+            self.restore_top_pane();
+        }
+        if self.projects.search_active() {
+            self.projects.end_search();
+        }
+        self.mode = Mode::FilterEdit;
+        self.tasks.set_visible(true);
+        if !self.tasks.filter_panel_visible() {
+            self.tasks.toggle_filter_panel();
+        }
+        if !self.tasks.filter_panel_editing() {
+            self.tasks.filter_edit_begin();
         }
     }
 
     fn set_task_mode(&mut self) {
-        self.mode = AppMode::Task;
+        if self.projects.search_active() {
+            self.projects.end_search();
+        }
+        self.mode = Mode::Task;
         self.tasks.set_visible(true);
-        self.tasks.set_focus_mode(TaskFocusMode::Tasks);
         if self.tasks.filter_panel_visible() {
             self.tasks.toggle_filter_panel();
         }
     }
 
-    fn set_top_panel_height_delta(&mut self, delta: i16) {
+    fn adjust_top_pane_height(&mut self, delta: i16) {
         self.panel_size.resize(delta);
     }
 
-    fn minimize_top_panel(&mut self) {
+    fn minimize_top_pane(&mut self) {
         self.panel_size.minimize();
     }
 
-    fn maximize_top_panel(&mut self) {
+    fn maximize_top_pane(&mut self) {
         self.panel_size.maximize();
     }
 
-    fn restore_top_panel(&mut self) {
+    fn restore_top_pane(&mut self) {
         self.panel_size.restore();
     }
 
-    pub fn handle_action(&mut self, action: &Action, page_size: usize) -> Result<Option<AppCommand>> {
+    fn task_data_needs_refresh(&self) -> bool {
+        self.task_data_receiver.is_none()
+            && !self.tasks.can_serve_scope_for_targets(
+                &self.task_target_project_ids(),
+                self.tasks.desired_load_scope(),
+            )
+    }
+
+    fn ensure_task_data(&mut self) {
+        if self.tasks.visible() && self.task_data_needs_refresh() {
+            self.start_task_data_fetch();
+        }
+    }
+
+    fn update_task_data_after_action(&mut self, task_targets_before: Option<Vec<String>>) {
+        if let Some(before) = task_targets_before {
+            let after = self.task_target_project_ids();
+            if before != after
+                && !matches!(
+                    self.tasks.status(),
+                    crate::app::task::TaskStatus::Idle
+                )
+            {
+                if self.task_data_receiver.is_some() {
+                    self.task_data_generation = self.task_data_generation.wrapping_add(1);
+                }
+                if self.tasks.visible() {
+                    self.start_task_data_fetch();
+                } else {
+                    self.tasks.mark_out_of_date(
+                        "selected projects changed; switch to task view to refresh",
+                    );
+                }
+            }
+        }
+
+        if self.tasks.visible() && self.task_data_needs_refresh() {
+            self.start_task_data_fetch();
+        }
+    }
+
+    fn handle_filter_field_input(
+        &mut self,
+        event: crossterm::event::KeyEvent,
+        page_size: usize,
+    ) -> Result<bool> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let editing = self.tasks.filter_panel_editing();
+        let is_plain_char = !event
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        let selected_kind = self.tasks.filter_selected_kind();
+
+        if editing {
+            match event.code {
+                KeyCode::Esc | KeyCode::Enter => {
+                    self.tasks.filter_edit_done();
+                    if matches!(event.code, KeyCode::Esc) {
+                        self.tasks.toggle_filter_panel();
+                        self.set_task_mode();
+                    } else {
+                        self.set_filter_mode();
+                    }
+                    return Ok(true);
+                }
+                KeyCode::Backspace => {
+                    self.tasks.filter_pop_char();
+                    return Ok(true);
+                }
+                KeyCode::Char('h')
+                    if is_plain_char
+                        && matches!(
+                            selected_kind,
+                            Some(crate::app::task::TaskFieldFilterKind::Labels)
+                        ) =>
+                {
+                    self.tasks.filter_move_label_left();
+                    return Ok(true);
+                }
+                KeyCode::Char('l')
+                    if is_plain_char
+                        && matches!(
+                            selected_kind,
+                            Some(crate::app::task::TaskFieldFilterKind::Labels)
+                        ) =>
+                {
+                    self.tasks.filter_move_label_right();
+                    return Ok(true);
+                }
+                KeyCode::Char('j')
+                    if is_plain_char
+                        && matches!(
+                            selected_kind,
+                            Some(crate::app::task::TaskFieldFilterKind::Labels)
+                        ) =>
+                {
+                    self.tasks.filter_cycle_label_value(1);
+                    return Ok(true);
+                }
+                KeyCode::Char('k')
+                    if is_plain_char
+                        && matches!(
+                            selected_kind,
+                            Some(crate::app::task::TaskFieldFilterKind::Labels)
+                        ) =>
+                {
+                    self.tasks.filter_cycle_label_value(-1);
+                    return Ok(true);
+                }
+                KeyCode::Char('a')
+                    if is_plain_char
+                        && matches!(
+                            selected_kind,
+                            Some(crate::app::task::TaskFieldFilterKind::Labels)
+                        ) =>
+                {
+                    self.tasks.filter_add_label();
+                    return Ok(true);
+                }
+                KeyCode::Char('d')
+                    if is_plain_char
+                        && matches!(
+                            selected_kind,
+                            Some(crate::app::task::TaskFieldFilterKind::Labels)
+                        ) =>
+                {
+                    self.tasks.filter_delete_label();
+                    return Ok(true);
+                }
+                KeyCode::Char('l')
+                    if event
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.tasks.filter_clear_current();
+                    return Ok(true);
+                }
+                KeyCode::Char('f')
+                    if event
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.tasks
+                        .filter_set_mode(crate::app::task::TaskFieldStringMode::Fuzzy);
+                    return Ok(true);
+                }
+                KeyCode::Char('s')
+                    if event
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.tasks
+                        .filter_set_mode(crate::app::task::TaskFieldStringMode::Substring);
+                    return Ok(true);
+                }
+                KeyCode::Char('r')
+                    if event
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.tasks
+                        .filter_set_mode(crate::app::task::TaskFieldStringMode::Regex);
+                    return Ok(true);
+                }
+                KeyCode::Char(c) if is_plain_char => {
+                    self.tasks.filter_push_char(c);
+                    return Ok(true);
+                }
+                _ => {}
+            }
+        } else {
+            match event.code {
+                KeyCode::Esc => {
+                    self.tasks.toggle_filter_panel();
+                    self.set_task_mode();
+                    return Ok(true);
+                }
+                KeyCode::Enter => {
+                    self.tasks.filter_edit_begin();
+                    self.set_filter_edit_mode();
+                    return Ok(true);
+                }
+                KeyCode::Up | KeyCode::Char('k') if is_plain_char => {
+                    self.tasks.move_filter_up();
+                    return Ok(true);
+                }
+                KeyCode::Down | KeyCode::Char('j') if is_plain_char => {
+                    self.tasks.move_filter_down();
+                    return Ok(true);
+                }
+                KeyCode::PageUp | KeyCode::Char('u')
+                    if event.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    self.tasks.filter_page_up(page_size);
+                    return Ok(true);
+                }
+                KeyCode::PageDown | KeyCode::Char('d')
+                    if event.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    self.tasks.filter_page_down(page_size);
+                    return Ok(true);
+                }
+                KeyCode::Char('f') if is_plain_char => {
+                    self.tasks.toggle_filter_panel();
+                    self.set_task_mode();
+                    return Ok(true);
+                }
+                KeyCode::Char('s') if is_plain_char => {
+                    self.tasks.filter_cycle_mode();
+                    return Ok(true);
+                }
+                KeyCode::Char('l')
+                    if event
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.tasks.filter_clear_current();
+                    return Ok(true);
+                }
+                KeyCode::Char('f')
+                    if event
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.tasks
+                        .filter_set_mode(crate::app::task::TaskFieldStringMode::Fuzzy);
+                    return Ok(true);
+                }
+                KeyCode::Char('s')
+                    if event
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.tasks
+                        .filter_set_mode(crate::app::task::TaskFieldStringMode::Substring);
+                    return Ok(true);
+                }
+                KeyCode::Char('r')
+                    if event
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.tasks
+                        .filter_set_mode(crate::app::task::TaskFieldStringMode::Regex);
+                    return Ok(true);
+                }
+                _ => {}
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn handle_project_search_input(&mut self, event: crossterm::event::KeyEvent) -> Result<bool> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        match event.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                self.projects.end_search();
+                self.set_project_mode();
+                Ok(true)
+            }
+            KeyCode::Backspace => {
+                self.projects.pop_search_char();
+                Ok(true)
+            }
+            KeyCode::Char(c)
+                if !event
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.projects.push_search_char(c.to_ascii_lowercase());
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    pub fn handle_action(
+        &mut self,
+        action: &Action,
+        page_size: usize,
+    ) -> Result<Option<AppCommand>> {
         if let Some(command) = action.as_app_command() {
             debug_log(&format!("app command: {command:?}"));
             return Ok(Some(command));
         }
 
-        let task_targets_before = if !matches!(self.tasks.status(), crate::app::task_review::TaskReviewStatus::Idle) {
+        let task_targets_before = if !matches!(
+            self.tasks.status(),
+            crate::app::task::TaskStatus::Idle
+        ) {
             Some(self.task_target_project_ids())
         } else {
             None
         };
 
+        let mode = self.mode;
         debug_log(&format!(
-            "handle_action: action={action} mode={:?} focus={:?} visible_tasks={}",
-            self.mode,
-            self.tasks.focus_mode(),
+            "handle_action: action={action} mode={:?} visible_tasks={}",
+            mode,
             self.tasks.visible(),
         ));
 
         match action {
+            Action::BeginFilterEdit => {
+                self.tasks.filter_edit_begin();
+                self.set_filter_edit_mode();
+                return Ok(None);
+            }
             Action::SetProjectMode => {
                 self.set_project_mode();
                 return Ok(None);
@@ -257,59 +588,45 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             }
             Action::SetTaskMode => {
                 self.set_task_mode();
-                if self.task_load_receiver.is_none()
-                    && !self.tasks.can_serve_scope_for_targets(
-                        &self.task_target_project_ids(),
-                        self.tasks.desired_load_scope(),
-                    )
-                {
-                    self.start_task_load();
-                }
+                self.ensure_task_data();
                 return Ok(None);
             }
             Action::ToggleTaskMode => {
-                if self.mode == AppMode::Task {
+                if self.mode == Mode::Task {
                     self.set_project_mode();
                 } else {
                     self.set_task_mode();
-                    if self.task_load_receiver.is_none()
-                        && !self.tasks.can_serve_scope_for_targets(
-                            &self.task_target_project_ids(),
-                            self.tasks.desired_load_scope(),
-                        )
-                    {
-                        self.start_task_load();
-                    }
+                    self.ensure_task_data();
                 }
                 return Ok(None);
             }
-            Action::ResizeWindowUp => {
-                self.set_top_panel_height_delta(2);
+            Action::ResizeTopPaneUp => {
+                self.adjust_top_pane_height(2);
                 return Ok(None);
             }
-            Action::ResizeWindowDown => {
-                self.set_top_panel_height_delta(-2);
+            Action::ResizeTopPaneDown => {
+                self.adjust_top_pane_height(-2);
                 return Ok(None);
             }
-            Action::MinimizeWindow => {
+            Action::MinimizeTopPane => {
                 if self.panel_size.is_minimized() {
-                    self.restore_top_panel();
+                    self.restore_top_pane();
                 } else {
-                    self.minimize_top_panel();
+                    self.minimize_top_pane();
                 }
                 self.set_task_mode();
                 return Ok(None);
             }
-            Action::MaximizeWindow => {
+            Action::MaximizeTopPane => {
                 if self.panel_size.is_maximized() {
-                    self.restore_top_panel();
+                    self.restore_top_pane();
                 } else {
-                    self.maximize_top_panel();
+                    self.maximize_top_pane();
                 }
                 return Ok(None);
             }
-            Action::RestoreWindow => {
-                self.restore_top_panel();
+            Action::RestoreTopPane => {
+                self.restore_top_pane();
                 return Ok(None);
             }
             Action::ToggleTaskView => {
@@ -318,9 +635,8 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                     self.set_project_mode();
                 }
                 debug_log(&format!(
-                    "toggle_task_view -> visible={} focus={:?}",
+                    "toggle_task_view -> visible={}",
                     self.tasks.visible(),
-                    self.tasks.focus_mode()
                 ));
                 return Ok(None);
             }
@@ -351,76 +667,44 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                     &self.task_target_project_ids(),
                     self.tasks.desired_load_scope(),
                 ) {
-                    if self.task_load_receiver.is_some() {
-                        self.task_load_generation = self.task_load_generation.wrapping_add(1);
-                        self.task_load_receiver = None;
+                    if self.task_data_receiver.is_some() {
+                        self.task_data_generation = self.task_data_generation.wrapping_add(1);
+                        self.task_data_receiver = None;
                     }
                     self.tasks.refresh_from_cache();
                 } else {
-                    self.start_task_load();
+                    self.start_task_data_fetch();
                 }
                 return Ok(None);
             }
             _ => {}
         }
 
-        let task_action = matches!(
-            action,
-            Action::MoveSectionUp
-                | Action::MoveSectionDown
-                | Action::MoveProjectUp
-                | Action::MoveProjectDown
-                | Action::ScrollLeft
-                | Action::ScrollRight
-                | Action::PageUp
-                | Action::PageDown
-                | Action::ToggleCompletedFilter
-                | Action::ToggleSubtaskVisibility
-                | Action::ToggleProjectGrouping
-                | Action::ToggleSectionGrouping
-                | Action::CycleTaskSort
-        ) && self.tasks.visible();
+        let task_action = action.is_task_view_action() && self.tasks.visible();
 
-        let result = if self.mode == AppMode::Project && !task_action {
+        let result = if matches!(mode, Mode::Project | Mode::ProjectSearch) && !task_action
+        {
             self.projects.apply_action(action, page_size)
         } else {
             self.tasks.apply_action(action, page_size)
         };
 
+        if matches!(action, Action::StartSearch) && matches!(mode, Mode::Project) {
+            self.set_project_search_mode();
+        } else if matches!(action, Action::ClearSearch)
+            && matches!(mode, Mode::ProjectSearch)
+        {
+            self.set_project_mode();
+        }
+
         if matches!(
             action,
             Action::ToggleStarredSelected | Action::ToggleHiddenSelected
         ) {
-            self.sync_visibility_preferences()?;
+            self.persist_project_visibility()?;
         }
 
-        if let Some(before) = task_targets_before {
-            let after = self.task_target_project_ids();
-            if before != after
-                && !matches!(self.tasks.status(), crate::app::task_review::TaskReviewStatus::Idle)
-            {
-                if self.task_load_receiver.is_some() {
-                    self.task_load_generation = self.task_load_generation.wrapping_add(1);
-                }
-                if self.tasks.visible() {
-                    self.start_task_load();
-                } else {
-                    self.tasks.mark_out_of_date(
-                        "selected projects changed; switch to task view to refresh",
-                    );
-                }
-            }
-        }
-
-        if self.task_load_receiver.is_none()
-            && self.tasks.visible()
-            && !self.tasks.can_serve_scope_for_targets(
-                &self.task_target_project_ids(),
-                self.tasks.desired_load_scope(),
-            )
-        {
-            self.start_task_load();
-        }
+        self.update_task_data_after_action(task_targets_before);
 
         Ok(result)
     }
@@ -431,265 +715,48 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         event: crossterm::event::KeyEvent,
         page_size: usize,
     ) -> Result<Option<AppCommand>> {
-        if matches!(KeyBinding::from_crossterm_event(event), Some(KeyBinding::Ctrl('c'))) {
+        if matches!(
+            KeyBinding::from_crossterm_event(event),
+            Some(KeyBinding::Ctrl('c'))
+        ) {
             return Ok(Some(AppCommand::Quit));
         }
 
-        self.poll_task_load();
+        self.poll_task_data();
 
-        debug_log(&format!("key event: {:?} {:?}", event.code, event.modifiers));
-
-        if self.tasks.filter_panel_visible() {
-            use crossterm::event::{KeyCode, KeyModifiers};
-
-            let editing = self.tasks.filter_panel_editing();
-            let is_plain_char = !event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-            let selected_kind = self.tasks.filter_selected_kind();
-
-            if editing {
-                match event.code {
-                    KeyCode::Esc | KeyCode::Enter => {
-                        self.tasks.filter_edit_done();
-                        if matches!(event.code, KeyCode::Esc) {
-                            self.tasks.toggle_filter_panel();
-                            self.set_task_mode();
-                        }
-                        return Ok(None);
-                    }
-                    KeyCode::Backspace => {
-                        self.tasks.filter_pop_char();
-                        return Ok(None);
-                    }
-                    KeyCode::Char('h')
-                        if is_plain_char
-                            && matches!(
-                                selected_kind,
-                                Some(crate::app::task_review::TaskFieldFilterKind::Labels)
-                            ) =>
-                    {
-                        self.tasks.filter_move_label_left();
-                        return Ok(None);
-                    }
-                    KeyCode::Char('l')
-                        if is_plain_char
-                            && matches!(
-                                selected_kind,
-                                Some(crate::app::task_review::TaskFieldFilterKind::Labels)
-                            ) =>
-                    {
-                        self.tasks.filter_move_label_right();
-                        return Ok(None);
-                    }
-                    KeyCode::Char('j')
-                        if is_plain_char
-                            && matches!(
-                                selected_kind,
-                                Some(crate::app::task_review::TaskFieldFilterKind::Labels)
-                            ) =>
-                    {
-                        self.tasks.filter_cycle_label_value(1);
-                        return Ok(None);
-                    }
-                    KeyCode::Char('k')
-                        if is_plain_char
-                            && matches!(
-                                selected_kind,
-                                Some(crate::app::task_review::TaskFieldFilterKind::Labels)
-                            ) =>
-                    {
-                        self.tasks.filter_cycle_label_value(-1);
-                        return Ok(None);
-                    }
-                    KeyCode::Char('a')
-                        if is_plain_char
-                            && matches!(
-                                selected_kind,
-                                Some(crate::app::task_review::TaskFieldFilterKind::Labels)
-                            ) =>
-                    {
-                        self.tasks.filter_add_label();
-                        return Ok(None);
-                    }
-                    KeyCode::Char('d')
-                        if is_plain_char
-                            && matches!(
-                                selected_kind,
-                                Some(crate::app::task_review::TaskFieldFilterKind::Labels)
-                            ) =>
-                    {
-                        self.tasks.filter_delete_label();
-                        return Ok(None);
-                    }
-                    KeyCode::Char('l')
-                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        self.tasks.filter_clear_current();
-                        return Ok(None);
-                    }
-                    KeyCode::Char('f')
-                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        self.tasks
-                            .filter_set_mode(crate::app::task_review::TaskFieldStringMode::Fuzzy);
-                        return Ok(None);
-                    }
-                    KeyCode::Char('s')
-                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        self.tasks.filter_set_mode(
-                            crate::app::task_review::TaskFieldStringMode::Substring,
-                        );
-                        return Ok(None);
-                    }
-                    KeyCode::Char('r')
-                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        self.tasks
-                            .filter_set_mode(crate::app::task_review::TaskFieldStringMode::Regex);
-                        return Ok(None);
-                    }
-                    KeyCode::Char(c) if is_plain_char => {
-                        self.tasks.filter_push_char(c);
-                        return Ok(None);
-                    }
-                    _ => {}
-                }
-            } else {
-                match event.code {
-                    KeyCode::Esc => {
-                        self.tasks.toggle_filter_panel();
-                        self.set_task_mode();
-                        return Ok(None);
-                    }
-                    KeyCode::Enter => {
-                        self.tasks.filter_edit_begin();
-                        return Ok(None);
-                    }
-                    KeyCode::Up | KeyCode::Char('k') if is_plain_char => {
-                        self.tasks.move_filter_up();
-                        return Ok(None);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') if is_plain_char => {
-                        self.tasks.move_filter_down();
-                        return Ok(None);
-                    }
-                    KeyCode::PageUp
-                    | KeyCode::Char('u')
-                        if event.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        self.tasks.filter_page_up(page_size);
-                        return Ok(None);
-                    }
-                    KeyCode::PageDown
-                    | KeyCode::Char('d')
-                        if event.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        self.tasks.filter_page_down(page_size);
-                        return Ok(None);
-                    }
-                    KeyCode::Char('f') if is_plain_char =>
-                    {
-                        self.tasks.toggle_filter_panel();
-                        return Ok(None);
-                    }
-                    KeyCode::Char('s') if is_plain_char => {
-                        self.tasks.filter_cycle_mode();
-                        return Ok(None);
-                    }
-                    KeyCode::Char('l')
-                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        self.tasks.filter_clear_current();
-                        return Ok(None);
-                    }
-                    KeyCode::Char('f')
-                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        self.tasks.filter_set_mode(crate::app::task_review::TaskFieldStringMode::Fuzzy);
-                        return Ok(None);
-                    }
-                    KeyCode::Char('s')
-                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        self.tasks
-                            .filter_set_mode(crate::app::task_review::TaskFieldStringMode::Substring);
-                        return Ok(None);
-                    }
-                    KeyCode::Char('r')
-                        if event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        self.tasks.filter_set_mode(crate::app::task_review::TaskFieldStringMode::Regex);
-                        return Ok(None);
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        if self.projects.search_active() {
-            use crossterm::event::{KeyCode, KeyModifiers};
-
-            match event.code {
-                KeyCode::Esc | KeyCode::Enter => {
-                    self.projects.end_search();
-                    return Ok(None);
-                }
-                KeyCode::Backspace => {
-                    self.projects.pop_search_char();
-                    return Ok(None);
-                }
-                KeyCode::Char(c)
-                    if !event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    self.projects.push_search_char(c.to_ascii_lowercase());
-                    return Ok(None);
-                }
-                _ => {}
-            }
-        }
+        debug_log(&format!(
+            "key event: {:?} {:?}",
+            event.code, event.modifiers
+        ));
 
         if let Some(binding) = KeyBinding::from_crossterm_event(event) {
             debug_log(&format!("resolved binding: {binding:?}"));
-            if self.mode != AppMode::Task {
-                match binding {
-                    KeyBinding::Char('[') => {
-                        return self.handle_action(&Action::ResizeWindowDown, page_size);
-                    }
-                    KeyBinding::Char(']') => {
-                        return self.handle_action(&Action::ResizeWindowUp, page_size);
-                    }
-                    KeyBinding::Char('{') => {
-                        return self.handle_action(&Action::MinimizeWindow, page_size);
-                    }
-                    KeyBinding::Char('}') => {
-                        return self.handle_action(&Action::MaximizeWindow, page_size);
-                    }
-                    KeyBinding::Char('0') => {
-                        return self.handle_action(&Action::RestoreWindow, page_size);
-                    }
-                    _ => {}
-                }
-            }
-            if self.tasks.visible() && self.mode == AppMode::Task {
-                if let Some(action) = task_view_action_for(&binding) {
-                    debug_log(&format!("task overlay action: {action}"));
-                    return self.handle_action(&action, page_size);
-                }
-            }
-            if let Some(action) = keymap.action_for(&binding).cloned() {
+            if let Some(action) = keymap.action_for(&binding, self.mode).cloned() {
                 debug_log(&format!("resolved action: {action}"));
                 return self.handle_action(&action, page_size);
             }
             debug_log("no action for binding");
         }
 
+        if self.tasks.filter_panel_visible() {
+            if self.handle_filter_field_input(event, page_size)? {
+                return Ok(None);
+            }
+        }
+
+        if self.projects.search_active() {
+            if self.handle_project_search_input(event)? {
+                return Ok(None);
+            }
+        }
+
         Ok(None)
     }
 
-    pub fn poll_task_load(&mut self) {
+    pub fn poll_task_data(&mut self) {
         loop {
             let result = {
-                let Some(receiver) = self.task_load_receiver.as_ref() else {
+                let Some(receiver) = self.task_data_receiver.as_ref() else {
                     return;
                 };
                 receiver.try_recv()
@@ -697,10 +764,10 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
 
             match result {
                 Ok(message) => {
-                    if message.generation == self.task_load_generation {
+                    if message.generation == self.task_data_generation {
                         if message.done {
                             self.tasks.finish_loading_targets();
-                            self.task_load_receiver = None;
+                            self.task_data_receiver = None;
                             break;
                         }
 
@@ -708,11 +775,14 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                             continue;
                         };
                         match message.result {
-                            Ok(dataset) => self.tasks.ingest_loaded_project(project_id, message.scope, dataset),
+                            Ok(dataset) => {
+                                self.tasks
+                                    .ingest_loaded_project(project_id, message.scope, dataset)
+                            }
                             Err(err) => {
-                                debug_log(&format!("task load error: {err}"));
+                                debug_log(&format!("task data error: {err}"));
                                 self.tasks.set_error(err.to_string());
-                                self.task_load_receiver = None;
+                                self.task_data_receiver = None;
                                 break;
                             }
                         }
@@ -720,22 +790,20 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.task_load_receiver = None;
+                    self.task_data_receiver = None;
                     break;
                 }
             }
         }
     }
 
-    fn sync_visibility_preferences(&mut self) -> Result<()> {
-        self.config.project_visibility = self.projects.visibility_preferences();
-        if let Some(path) = &self.config_path {
-            self.config.save_to_path(path)?;
-        }
+    fn persist_project_visibility(&mut self) -> Result<()> {
+        self.config.project_visibility = self.projects.project_visibility_config();
+        self.config.save_to_source_path()?;
         Ok(())
     }
 
-fn task_target_projects(&self) -> Vec<crate::domain::Project> {
+    fn task_target_projects(&self) -> Vec<crate::domain::Project> {
         let selected_projects = self.projects.selected_projects();
 
         if !selected_projects.is_empty() {
@@ -756,14 +824,13 @@ fn task_target_projects(&self) -> Vec<crate::domain::Project> {
             .collect()
     }
 
-    fn start_task_load(&mut self) {
+    fn start_task_data_fetch(&mut self) {
         let targets = self.task_target_projects();
         let scope = self.tasks.desired_load_scope();
         let projects_to_load = self.tasks.projects_requiring_load(&targets, scope);
         debug_log(&format!(
-            "start_task_load: visible={} focus={:?} scope={:?} targets={} load={}",
+            "start_task_data_fetch: visible={} scope={:?} targets={} data={}",
             self.tasks.visible(),
-            self.tasks.focus_mode(),
             scope,
             targets
                 .iter()
@@ -779,7 +846,7 @@ fn task_target_projects(&self) -> Vec<crate::domain::Project> {
 
         if targets.is_empty() {
             self.tasks
-                .finish_loading_dataset(crate::app::task_review::TaskDataset::default());
+                .finish_loading_dataset(crate::app::task::TaskDataset::default());
             return;
         }
 
@@ -789,22 +856,22 @@ fn task_target_projects(&self) -> Vec<crate::domain::Project> {
             return;
         }
 
-        self.task_load_generation = self.task_load_generation.wrapping_add(1);
-        let generation = self.task_load_generation;
+        self.task_data_generation = self.task_data_generation.wrapping_add(1);
+        let generation = self.task_data_generation;
         self.tasks.begin_loading(&targets);
 
         let (sender, receiver) = mpsc::channel();
         let client = self.client.clone();
-        self.task_load_receiver = Some(receiver);
+        self.task_data_receiver = Some(receiver);
 
         thread::spawn(move || {
             for project in projects_to_load {
-                let result = crate::app::task_review::TaskReviewState::build_dataset_for_projects(
+                let result = crate::app::task::TaskState::build_dataset_for_projects(
                     &client,
                     &[project.clone()],
                     scope,
                 );
-                let _ = sender.send(TaskLoadMessage {
+                let _ = sender.send(TaskDataMessage {
                     generation,
                     project_id: Some(project.id.clone()),
                     scope,
@@ -813,31 +880,14 @@ fn task_target_projects(&self) -> Vec<crate::domain::Project> {
                 });
             }
 
-            let _ = sender.send(TaskLoadMessage {
+            let _ = sender.send(TaskDataMessage {
                 generation,
                 project_id: None,
                 scope,
-                result: Ok(crate::app::task_review::TaskDataset::default()),
+                result: Ok(crate::app::task::TaskDataset::default()),
                 done: true,
             });
         });
-    }
-}
-
-fn task_view_action_for(binding: &KeyBinding) -> Option<Action> {
-    match binding {
-        KeyBinding::Char('c') => Some(Action::ToggleCompletedFilter),
-        KeyBinding::Char('z') => Some(Action::ToggleSubtaskVisibility),
-        KeyBinding::Char('s') => Some(Action::CycleTaskSort),
-        KeyBinding::Char('[') => Some(Action::MoveSectionUp),
-        KeyBinding::Char(']') => Some(Action::MoveSectionDown),
-        KeyBinding::Char('{') => Some(Action::MoveProjectUp),
-        KeyBinding::Char('}') => Some(Action::MoveProjectDown),
-        KeyBinding::Left => Some(Action::ScrollLeft),
-        KeyBinding::Right => Some(Action::ScrollRight),
-        KeyBinding::PageUp => Some(Action::PageUp),
-        KeyBinding::PageDown => Some(Action::PageDown),
-        _ => None,
     }
 }
 
@@ -862,7 +912,8 @@ mod tests {
         input::{Action, KeyBinding},
     };
 
-    use super::{App, AppMode};
+    use super::App;
+    use crate::config::Mode;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
@@ -900,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn app_applies_project_visibility_preferences_from_config() {
+    fn app_applies_project_visibility_config_from_config() {
         let client = FakeAsanaClient::new(vec![
             Project::new("1", "Inbox", false),
             Project::new("2", "Backlog", false),
@@ -915,9 +966,10 @@ mod tests {
 
         app.load_projects().expect("projects load");
 
-        assert_eq!(app.projects.items().len(), 1);
-        assert_eq!(app.projects.items()[0].id, "1");
-        assert_eq!(app.projects.hidden_count(), 1);
+        assert_eq!(app.projects.items().len(), 2);
+        assert_eq!(app.projects.items()[0].id, "2");
+        assert_eq!(app.projects.items()[1].id, "1");
+        assert_eq!(app.projects.hidden_count(), 2);
     }
 
     #[test]
@@ -938,74 +990,90 @@ mod tests {
 
         let keymap = app.keymap().expect("keymap builds");
 
-        assert_eq!(keymap.action_for(&KeyBinding::Char('x')), Some(&Action::Quit));
-        assert_eq!(keymap.action_for(&KeyBinding::Char('j')), Some(&Action::MoveDown));
-        assert_eq!(keymap.action_for(&KeyBinding::Char('t')), Some(&Action::SetTaskMode));
-        assert_eq!(keymap.action_for(&KeyBinding::Char('f')), Some(&Action::SetFilterMode));
         assert_eq!(
-            keymap.action_for(&KeyBinding::Char('p')),
+            keymap.action_for(&KeyBinding::Char('x'), Mode::Any),
+            Some(&Action::Quit)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('j'), Mode::Any),
+            Some(&Action::MoveDown)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('t'), Mode::Project),
+            Some(&Action::ToggleTaskView)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('f'), Mode::Project),
+            Some(&Action::SetFilterMode)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('/'), Mode::Project),
+            Some(&Action::StartSearch)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('p'), Mode::Any),
             Some(&Action::SetProjectMode)
         );
         assert_eq!(
-            keymap.action_for(&KeyBinding::Char('m')),
-            None
+            keymap.action_for(&KeyBinding::Char('m'), Mode::Any),
+            Some(&Action::ToggleTaskMode)
         );
     }
 
     #[test]
-    fn braces_toggle_the_top_panel_between_restored_minimized_and_maximized() {
+    fn braces_toggle_the_top_pane_between_restored_minimized_and_maximized() {
         let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]);
         let mut app = App::new(Config::default(), client);
 
-        app.handle_action(&Action::MinimizeWindow, 10)
-            .expect("minimize top panel");
+        app.handle_action(&Action::MinimizeTopPane, 10)
+            .expect("minimize top pane");
 
         assert!(app.panel_size().is_minimized());
         assert_eq!(app.panel_size().actual_height(20, 6), 0);
-        assert_eq!(app.mode(), AppMode::Task);
+        assert_eq!(app.mode(), Mode::Task);
 
-        app.handle_action(&Action::MinimizeWindow, 10)
-            .expect("un-minimize top panel");
+        app.handle_action(&Action::MinimizeTopPane, 10)
+            .expect("un-minimize top pane");
 
         assert!(app.panel_size().is_normal());
 
-        app.handle_action(&Action::MaximizeWindow, 10)
-            .expect("maximize top panel");
+        app.handle_action(&Action::MaximizeTopPane, 10)
+            .expect("maximize top pane");
 
         assert!(app.panel_size().is_maximized());
         assert_eq!(app.panel_size().actual_height(20, 6), 20);
-        assert_eq!(app.mode(), AppMode::Task);
+        assert_eq!(app.mode(), Mode::Task);
 
-        app.handle_action(&Action::MaximizeWindow, 10)
-            .expect("un-maximize top panel");
+        app.handle_action(&Action::MaximizeTopPane, 10)
+            .expect("un-maximize top pane");
 
         assert!(app.panel_size().is_normal());
     }
 
     #[test]
-    fn switching_to_project_or_filter_mode_restores_a_minimized_top_panel() {
+    fn switching_to_project_or_filter_mode_restores_a_minimized_top_pane() {
         let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]);
         let mut app = App::new(Config::default(), client);
 
-        app.handle_action(&Action::MinimizeWindow, 10)
-            .expect("minimize top panel");
+        app.handle_action(&Action::MinimizeTopPane, 10)
+            .expect("minimize top pane");
         assert!(app.panel_size().is_minimized());
-        assert_eq!(app.mode(), AppMode::Task);
+        assert_eq!(app.mode(), Mode::Task);
 
         app.handle_action(&Action::SetProjectMode, 10)
             .expect("switch to project mode");
         assert!(app.panel_size().is_normal());
-        assert_eq!(app.mode(), AppMode::Project);
+        assert_eq!(app.mode(), Mode::Project);
 
-        app.handle_action(&Action::MinimizeWindow, 10)
-            .expect("minimize top panel again");
+        app.handle_action(&Action::MinimizeTopPane, 10)
+            .expect("minimize top pane again");
         assert!(app.panel_size().is_minimized());
-        assert_eq!(app.mode(), AppMode::Task);
+        assert_eq!(app.mode(), Mode::Task);
 
         app.handle_action(&Action::SetFilterMode, 10)
             .expect("switch to filter mode");
         assert!(app.panel_size().is_normal());
-        assert_eq!(app.mode(), AppMode::Filter);
+        assert_eq!(app.mode(), Mode::Filter);
     }
 
     #[test]
@@ -1034,7 +1102,7 @@ mod tests {
         let mut app = App::new(Config::default(), client);
         app.load_projects().expect("projects load");
 
-        let table = crate::app::task_review::TaskReviewState::build_table_for_projects(
+        let table = crate::app::task::TaskState::build_table_for_projects(
             &app.client,
             &[Project::new("1", "Inbox", true)],
         )
@@ -1042,7 +1110,10 @@ mod tests {
         app.tasks.begin_loading(&[Project::new("1", "Inbox", true)]);
         app.tasks.finish_loading(table);
 
-        assert_eq!(app.tasks.status(), &crate::app::task_review::TaskReviewStatus::Empty);
+        assert_eq!(
+            app.tasks.status(),
+            &crate::app::task::TaskStatus::Empty
+        );
 
         app.handle_action(&Action::MoveDown, 10).expect("move down");
         app.handle_action(&Action::ToggleSelection, 10)
@@ -1050,7 +1121,7 @@ mod tests {
 
         assert!(matches!(
             app.tasks.status(),
-            crate::app::task_review::TaskReviewStatus::OutOfDate(message)
+            crate::app::task::TaskStatus::OutOfDate(message)
                 if message.contains("switch to task view")
         ));
     }
@@ -1200,7 +1271,7 @@ mod tests {
                     },
                 ],
             );
-        let table = crate::app::task_review::TaskReviewState::build_table_for_projects(
+        let table = crate::app::task::TaskState::build_table_for_projects(
             &client,
             &[Project::new("1", "Inbox", true)],
         )
@@ -1293,7 +1364,7 @@ mod tests {
         app.load_projects().expect("projects load");
         app.tasks.set_completed_filter(None);
         app.tasks
-            .load_for_projects(&app.client, &[Project::new("1", "Inbox", true)])
+            .load_task_dataset_for_projects(&app.client, &[Project::new("1", "Inbox", true)])
             .expect("tasks load");
         app.tasks.set_visible(true);
 
@@ -1380,7 +1451,7 @@ mod tests {
         let mut app = App::new(Config::default(), client);
         app.load_projects().expect("projects load");
         app.tasks
-            .load_for_projects(&app.client, &[Project::new("1", "Inbox", true)])
+            .load_task_dataset_for_projects(&app.client, &[Project::new("1", "Inbox", true)])
             .expect("tasks load");
         app.tasks.set_visible(true);
 
@@ -1403,8 +1474,12 @@ mod tests {
             .map(|row| row.kind)
             .expect("selected filter exists");
 
-        app.handle_key_event(&keymap, KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE), 10)
-            .expect("cycle string mode");
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+            10,
+        )
+        .expect("cycle string mode");
         let cycled_kind = app
             .tasks
             .filter_panel_entries()
@@ -1414,10 +1489,17 @@ mod tests {
             .expect("selected filter exists");
         assert_ne!(original_kind, cycled_kind);
 
-        app.handle_key_event(&keymap, KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE), 10)
-            .expect("move filter selection down");
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            10,
+        )
+        .expect("move filter selection down");
         assert_eq!(
-            app.tasks.filter_panel_entries().iter().position(|row| row.selected),
+            app.tasks
+                .filter_panel_entries()
+                .iter()
+                .position(|row| row.selected),
             Some(1)
         );
 
@@ -1428,7 +1510,10 @@ mod tests {
         )
         .expect("page filter selection down");
         assert_eq!(
-            app.tasks.filter_panel_entries().iter().position(|row| row.selected),
+            app.tasks
+                .filter_panel_entries()
+                .iter()
+                .position(|row| row.selected),
             Some(3)
         );
 
@@ -1439,19 +1524,33 @@ mod tests {
         )
         .expect("page filter selection up");
         assert_eq!(
-            app.tasks.filter_panel_entries().iter().position(|row| row.selected),
+            app.tasks
+                .filter_panel_entries()
+                .iter()
+                .position(|row| row.selected),
             Some(1)
         );
 
-        app.handle_key_event(&keymap, KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE), 10)
-            .expect("move filter selection up");
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+            10,
+        )
+        .expect("move filter selection up");
         assert_eq!(
-            app.tasks.filter_panel_entries().iter().position(|row| row.selected),
+            app.tasks
+                .filter_panel_entries()
+                .iter()
+                .position(|row| row.selected),
             Some(0)
         );
 
-        app.handle_key_event(&keymap, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10)
-            .expect("enter edit mode");
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            10,
+        )
+        .expect("enter edit mode");
         assert!(app.tasks.filter_panel_editing());
 
         app.handle_key_event(
@@ -1488,8 +1587,12 @@ mod tests {
         );
         assert_eq!(app.tasks.table().task_count(), 1);
 
-        app.handle_key_event(&keymap, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10)
-            .expect("leave edit mode");
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            10,
+        )
+        .expect("leave edit mode");
         assert!(!app.tasks.filter_panel_editing());
 
         app.handle_key_event(

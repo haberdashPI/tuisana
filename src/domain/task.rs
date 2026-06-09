@@ -1,12 +1,21 @@
+//! Task-domain models and table-building logic.
+//!
+//! This module owns the app's task representation, the task table model, and
+//! the filtering/sorting/grouping rules used to build the visible task rows.
+
 use std::collections::HashMap;
 
+/// A section within a project.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Section {
+    /// The stable section identifier.
     pub gid: String,
+    /// The display name shown in the UI.
     pub name: String,
 }
 
 impl Section {
+    /// Constructs a section from an id and display name.
     pub fn new(gid: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             gid: gid.into(),
@@ -15,13 +24,17 @@ impl Section {
     }
 }
 
+/// A custom field definition attached to a project.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomFieldDefinition {
+    /// The stable custom-field identifier.
     pub gid: String,
+    /// The display name shown in the task table header.
     pub name: String,
 }
 
 impl CustomFieldDefinition {
+    /// Constructs a custom-field definition.
     pub fn new(gid: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             gid: gid.into(),
@@ -30,38 +43,59 @@ impl CustomFieldDefinition {
     }
 }
 
+/// One task table column backed by a custom field.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomFieldColumn {
+    /// The custom field definition that labels this column.
     pub definition: CustomFieldDefinition,
+    /// One display value per task row.
     pub values: Vec<String>,
 }
 
 impl CustomFieldColumn {
+    /// Joins the non-empty cell values into a single display string.
     pub fn value(&self) -> String {
         join_non_empty(&self.values)
     }
 }
 
+/// Canonical task data used by the app and task table builder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskRecord {
+    /// The stable task identifier.
     pub gid: String,
+    /// The task title.
     pub name: String,
+    /// Whether the task is complete.
     pub completed: bool,
+    /// The most recent modified timestamp seen for this task.
     pub modified_at: Option<String>,
+    /// The assignee name or id used for display and filtering.
     pub assignee: Option<String>,
+    /// The due date in display-friendly form.
     pub due_date: Option<String>,
+    /// The start date in display-friendly form.
     pub start_date: Option<String>,
+    /// The parent task id for subtasks.
     pub parent_gid: Option<String>,
+    /// The nesting depth used when rendering subtasks.
     pub subtask_depth: usize,
+    /// The natural API ordering of the task.
     pub natural_order: usize,
+    /// The order of the task's section, if any.
     pub section_order: Option<usize>,
+    /// All project ids associated with this task.
     pub project_gids: Vec<String>,
+    /// Human-readable section names associated with this task.
     pub sections: Vec<String>,
+    /// Human-readable project names associated with this task.
     pub projects: Vec<String>,
+    /// Multi-valued custom fields keyed by field id.
     pub custom_fields: HashMap<String, Vec<String>>,
 }
 
 impl TaskRecord {
+    /// Constructs a task record with default values for all optional fields.
     pub fn new(gid: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             gid: gid.into(),
@@ -82,37 +116,53 @@ impl TaskRecord {
         }
     }
 
+    /// Returns `true` when this record is a subtask.
     pub fn is_subtask(&self) -> bool {
         self.parent_gid.is_some()
     }
 }
 
+/// The non-task rows that can appear in a task table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TaskRowKind {
+    /// A blank separator between projects.
     ProjectSeparator,
+    /// A labeled row introducing a project.
     ProjectHeader,
+    /// A blank spacer between sections.
     SectionSpacer,
+    /// A labeled row introducing a section.
     SectionHeader,
+    /// A selectable task row.
     Task,
 }
 
 impl TaskRowKind {
+    /// Returns `true` for rows that represent selectable tasks.
     pub fn is_task(&self) -> bool {
         matches!(self, Self::Task)
     }
 }
 
+/// One rendered row in the task table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskRow {
+    /// The row kind used for rendering and navigation.
     pub kind: TaskRowKind,
+    /// The row task id, or empty for separators and headers.
     pub gid: String,
+    /// The project label for project rows.
     pub project: Option<String>,
+    /// The section label for section rows.
     pub section: Option<String>,
+    /// The section ordering used for navigation.
     pub section_order: Option<usize>,
+    /// One cell per visible table column.
     pub cells: Vec<String>,
 }
 
 impl TaskRow {
+    /// Builds a selectable task row.
     pub fn task(gid: impl Into<String>, cells: Vec<String>) -> Self {
         Self {
             kind: TaskRowKind::Task,
@@ -124,6 +174,7 @@ impl TaskRow {
         }
     }
 
+    /// Builds a blank separator row between project groups.
     pub fn project_separator(column_count: usize) -> Self {
         Self {
             kind: TaskRowKind::ProjectSeparator,
@@ -135,6 +186,7 @@ impl TaskRow {
         }
     }
 
+    /// Builds a labeled project header row.
     pub fn project_header(label: impl Into<String>, column_count: usize) -> Self {
         let label = label.into();
         let mut cells = vec![String::new(); column_count];
@@ -149,6 +201,7 @@ impl TaskRow {
         }
     }
 
+    /// Builds a labeled section header row.
     pub fn section_header(label: impl Into<String>, column_count: usize) -> Self {
         let label = label.into();
         let mut cells = vec![String::new(); column_count];
@@ -163,6 +216,7 @@ impl TaskRow {
         }
     }
 
+    /// Builds a blank spacer row between section groups.
     pub fn section_spacer(column_count: usize) -> Self {
         Self {
             kind: TaskRowKind::SectionSpacer,
@@ -175,16 +229,23 @@ impl TaskRow {
     }
 }
 
+/// The fully assembled task table used by the renderer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskTableModel {
+    /// The visible column labels.
     pub columns: Vec<String>,
+    /// Any custom-field columns appended after the built-in columns.
     pub custom_field_columns: Vec<CustomFieldColumn>,
+    /// The rendered rows.
     pub rows: Vec<TaskRow>,
 }
 
+/// Task table filter and sort settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskTableSettings {
+    /// The active filter.
     pub filter: TaskFilter,
+    /// The active sort and grouping settings.
     pub sort: TaskSort,
 }
 
@@ -197,13 +258,20 @@ impl Default for TaskTableSettings {
     }
 }
 
+/// The active task filter state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskFilter {
+    /// Free-text filtering for task titles or other textual fields.
     pub text: Option<String>,
+    /// A single named field filter.
     pub field: Option<TaskFieldFilter>,
+    /// The assignee filter.
     pub assignee: Option<String>,
+    /// `Some(false)` = open, `Some(true)` = done, `None` = all.
     pub completed: Option<bool>,
+    /// Date-range filtering for due/start dates.
     pub date_range: Option<TaskDateRange>,
+    /// Whether subtasks should be shown or hidden.
     pub subtasks: SubtaskVisibility,
 }
 
@@ -221,6 +289,7 @@ impl Default for TaskFilter {
 }
 
 impl TaskFilter {
+    /// Cycles the completed-state filter through open, done, and all.
     pub fn toggle_completed_filter(&mut self) {
         self.completed = match self.completed {
             Some(false) => Some(true),
@@ -229,6 +298,7 @@ impl TaskFilter {
         };
     }
 
+    /// Toggles whether subtasks are visible.
     pub fn toggle_subtask_visibility(&mut self) {
         self.subtasks = match self.subtasks {
             SubtaskVisibility::Show => SubtaskVisibility::Hide,
@@ -237,24 +307,34 @@ impl TaskFilter {
     }
 }
 
+/// A single field/value filter used by the task filter UI.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskFieldFilter {
+    /// The field name.
     pub name: String,
+    /// The selected value, if any.
     pub value: Option<String>,
 }
 
+/// A date range used by the task filter UI.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskDateRange {
+    /// Inclusive start date, if set.
     pub start: Option<String>,
+    /// Inclusive end date, if set.
     pub end: Option<String>,
 }
 
+/// Whether subtasks are included in the task table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SubtaskVisibility {
+    /// Show subtasks.
     Show,
+    /// Hide subtasks.
     Hide,
 }
 
+/// The task fields the table can sort or group by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TaskSortField {
     Project,
@@ -266,22 +346,32 @@ pub enum TaskSortField {
     Natural,
 }
 
+/// The direction of a sort rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortDirection {
+    /// Ascending order.
     Asc,
+    /// Descending order.
     Desc,
 }
 
+/// One sort rule applied to the task table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskSortRule {
+    /// The field to sort by.
     pub field: TaskSortField,
+    /// The direction for this field.
     pub direction: SortDirection,
 }
 
+/// The active task-table grouping and sort configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskSort {
+    /// Whether rows are grouped by project.
     pub group_by_project: bool,
+    /// Whether rows are grouped by section.
     pub group_by_section: bool,
+    /// The ordered list of sort rules.
     pub rules: Vec<TaskSortRule>,
 }
 
@@ -309,14 +399,17 @@ impl Default for TaskSort {
 }
 
 impl TaskSort {
+    /// Toggles project grouping.
     pub fn toggle_project_grouping(&mut self) {
         self.group_by_project = !self.group_by_project;
     }
 
+    /// Toggles section grouping.
     pub fn toggle_section_grouping(&mut self) {
         self.group_by_section = !self.group_by_section;
     }
 
+    /// Cycles the primary sort field through the supported fields.
     pub fn cycle_primary_field(&mut self) {
         let next_field = match self.rules.first().map(|rule| rule.field) {
             Some(TaskSortField::Date) | None => TaskSortField::Title,
@@ -337,6 +430,7 @@ impl TaskSort {
         }
     }
 
+    /// Returns a short label for the primary sort field.
     pub fn primary_field_label(&self) -> &'static str {
         match self.rules.first().map(|rule| rule.field) {
             Some(TaskSortField::Date) | None => "date",
@@ -357,6 +451,7 @@ impl Default for TaskTableModel {
 }
 
 impl TaskTableSettings {
+    /// Returns a compact human-readable summary of the active settings.
     pub fn summary(&self) -> String {
         let grouping = format!(
             "grp p:{} s:{}",
@@ -384,6 +479,7 @@ impl TaskTableSettings {
 }
 
 impl TaskTableModel {
+    /// Returns an empty model with the built-in columns.
     pub fn empty() -> Self {
         Self {
             columns: default_columns(),
@@ -392,6 +488,7 @@ impl TaskTableModel {
         }
     }
 
+    /// Builds a table model from raw task records and custom-field metadata.
     pub fn from_records(
         records: Vec<TaskRecord>,
         custom_field_definitions: Vec<CustomFieldDefinition>,
@@ -399,6 +496,7 @@ impl TaskTableModel {
         Self::from_records_with_settings(records, custom_field_definitions, &TaskTableSettings::default())
     }
 
+    /// Builds a table model using the provided filter and sort settings.
     pub fn from_records_with_settings(
         records: Vec<TaskRecord>,
         custom_field_definitions: Vec<CustomFieldDefinition>,
@@ -441,10 +539,12 @@ impl TaskTableModel {
         }
     }
 
+    /// Counts only the selectable task rows.
     pub fn task_count(&self) -> usize {
         self.rows.iter().filter(|row| row.kind.is_task()).count()
     }
 
+    /// Returns the row indices that correspond to selectable tasks.
     pub fn selectable_row_indices(&self) -> Vec<usize> {
         self.rows
             .iter()
@@ -453,14 +553,17 @@ impl TaskTableModel {
             .collect()
     }
 
+    /// Returns the first selectable row index, if any.
     pub fn first_selectable_row_index(&self) -> Option<usize> {
         self.selectable_row_indices().into_iter().next()
     }
 
+    /// Returns the last selectable row index, if any.
     pub fn last_selectable_row_index(&self) -> Option<usize> {
         self.selectable_row_indices().into_iter().last()
     }
 
+    /// Returns the next selectable row index after `current`.
     pub fn next_selectable_row_index(&self, current: usize, step: usize) -> Option<usize> {
         let selectable = self.selectable_row_indices();
         let current_position = selectable.iter().position(|&index| index == current)?;
@@ -468,6 +571,7 @@ impl TaskTableModel {
         selectable.get(next_position).copied()
     }
 
+    /// Returns the previous selectable row index before `current`.
     pub fn previous_selectable_row_index(&self, current: usize, step: usize) -> Option<usize> {
         let selectable = self.selectable_row_indices();
         let current_position = selectable.iter().position(|&index| index == current)?;
@@ -475,6 +579,7 @@ impl TaskTableModel {
         selectable.get(previous_position).copied()
     }
 
+    /// Returns the 1-based position of a selectable row, if the row is selectable.
     pub fn selectable_position(&self, index: usize) -> Option<usize> {
         self.selectable_row_indices()
             .iter()
@@ -482,18 +587,22 @@ impl TaskTableModel {
             .map(|position| position + 1)
     }
 
+    /// Returns the next row index that starts a section group.
     pub fn next_section_row_index(&self, current: usize, step: usize) -> Option<usize> {
         self.next_group_row_index(current, step, GroupScope::Section)
     }
 
+    /// Returns the previous row index that starts a section group.
     pub fn previous_section_row_index(&self, current: usize, step: usize) -> Option<usize> {
         self.previous_group_row_index(current, step, GroupScope::Section)
     }
 
+    /// Returns the next row index that starts a project group.
     pub fn next_project_row_index(&self, current: usize, step: usize) -> Option<usize> {
         self.next_group_row_index(current, step, GroupScope::Project)
     }
 
+    /// Returns the previous row index that starts a project group.
     pub fn previous_project_row_index(&self, current: usize, step: usize) -> Option<usize> {
         self.previous_group_row_index(current, step, GroupScope::Project)
     }

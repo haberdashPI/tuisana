@@ -1,3 +1,8 @@
+//! HTTP-backed Asana client implementation.
+//!
+//! This module turns the app's abstract `AsanaClient` trait into concrete
+//! requests against the public Asana REST API.
+
 use reqwest::blocking::Client;
 use serde_json::Value;
 
@@ -15,10 +20,12 @@ use crate::{
 
 const ASANA_API_BASE_URL: &str = "https://app.asana.com/api/1.0";
 
+/// Minimal transport abstraction for JSON GET requests.
 pub trait Transport {
     fn get_json(&self, path: &str, query: &[(&str, String)], token: &str) -> Result<Value>;
 }
 
+/// Production HTTP transport using `reqwest`.
 #[derive(Clone)]
 pub struct ReqwestTransport {
     client: Client,
@@ -26,6 +33,7 @@ pub struct ReqwestTransport {
 }
 
 impl ReqwestTransport {
+    /// Builds a transport configured for the public Asana API.
     pub fn new() -> Result<Self> {
         Ok(Self {
             client: Client::new(),
@@ -60,6 +68,7 @@ impl Transport for ReqwestTransport {
     }
 }
 
+/// HTTP implementation of the app's `AsanaClient` trait.
 #[derive(Clone)]
 pub struct HttpAsanaClient<T = ReqwestTransport> {
     transport: T,
@@ -68,6 +77,7 @@ pub struct HttpAsanaClient<T = ReqwestTransport> {
 }
 
 impl HttpAsanaClient<ReqwestTransport> {
+    /// Builds an HTTP client from the loaded auth configuration.
     pub fn from_config(config: &AuthConfig) -> Result<Self> {
         Ok(Self {
             transport: ReqwestTransport::new()?,
@@ -79,6 +89,7 @@ impl HttpAsanaClient<ReqwestTransport> {
 
 impl<T: Transport> HttpAsanaClient<T> {
     #[cfg(test)]
+    /// Builds a client with a custom transport for tests.
     pub(crate) fn with_transport(
         transport: T,
         personal_access_token: impl Into<String>,

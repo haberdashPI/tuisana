@@ -2,7 +2,7 @@ use tuisana::{
     app::App,
     asana::fake::FakeAsanaClient,
     config::Config,
-    ui::runtime::{run_project_list_session, InputEvent, KeySource},
+    ui::runtime::{run_session, InputEvent, KeySource},
     domain::Project,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -41,7 +41,7 @@ fn keyboard_input_moves_project_selection() {
     let backend = TestBackend::new(60, 10);
     let mut terminal = Terminal::new(backend).expect("terminal");
 
-    run_project_list_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
 
     assert_eq!(app.projects.selected_index(), Some(1));
     let buffer = terminal.backend_mut().buffer().clone();

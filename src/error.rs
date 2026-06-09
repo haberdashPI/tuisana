@@ -1,5 +1,8 @@
+//! Shared application error types.
+
 use std::fmt::{Display, Formatter};
 
+/// The app's top-level error type.
 #[derive(Debug)]
 pub enum Error {
     ConfigParse(toml::de::Error),
@@ -33,6 +36,7 @@ impl From<std::io::Error> for Error {
     }
 }
 
+/// The common result type used throughout the crate.
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]

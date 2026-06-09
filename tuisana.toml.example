@@ -8,6 +8,8 @@ personal_access_token = "your-asana-pat-here"
 # Optional. Leave this out if you want to list projects without narrowing to a workspace.
 workspace_gid = "your-workspace-gid-here"
 
+# Projects not listed here default to hidden.
+
 [[bind]]
 key = "?"
 command = "toggle_help_details"
@@ -29,44 +31,12 @@ key = "j"
 command = "move_down"
 
 [[bind]]
-key = "enter"
-command = "open"
+key = "ctrl-u"
+command = "page_up"
 
 [[bind]]
-key = "r"
-command = "refresh"
-
-[[bind]]
-key = "/"
-command = "start_search"
-
-[[bind]]
-key = "ctrl-l"
-command = "clear_search"
-
-[[bind]]
-key = "space"
-command = "toggle_selection"
-
-[[bind]]
-key = "a"
-command = "select_all_visible"
-
-[[bind]]
-key = "i"
-command = "invert_selection"
-
-[[bind]]
-key = "c"
-command = "clear_selection"
-
-[[bind]]
-key = "u"
-command = "undo_selection"
-
-[[bind]]
-key = "ctrl-y"
-command = "redo_selection"
+key = "ctrl-d"
+command = "page_down"
 
 [[bind]]
 key = "home"
@@ -77,16 +47,20 @@ key = "end"
 command = "jump_bottom"
 
 [[bind]]
-key = "*"
-command = "toggle_starred_selected"
+key = "left"
+command = "scroll_left"
 
 [[bind]]
-key = "h"
-command = "toggle_hidden_selected"
+key = "right"
+command = "scroll_right"
 
 [[bind]]
-key = "v"
-command = "toggle_hidden_group"
+key = "f"
+command = "set_filter_mode"
+
+[[bind]]
+key = "p"
+command = "set_project_mode"
 
 [[bind]]
 key = "t"
@@ -97,55 +71,180 @@ key = "m"
 command = "toggle_task_mode"
 
 [[bind]]
+key = "["
+command = "resize_top_pane_down"
+
+[[bind]]
+key = "]"
+command = "resize_top_pane_up"
+
+[[bind]]
+key = "{"
+command = "minimize_top_pane"
+
+[[bind]]
+key = "}"
+command = "maximize_top_pane"
+
+[[bind]]
+key = "0"
+command = "restore_top_pane"
+
+[[bind]]
+key = "enter"
+mode = "project"
+command = "open"
+
+[[bind]]
+key = "r"
+command = "refresh"
+
+[[bind]]
+key = "/"
+mode = "project"
+command = "start_search"
+
+[[bind]]
+key = "ctrl-l"
+mode = "project_search"
+command = "clear_search"
+
+[[bind]]
+key = "space"
+mode = "project"
+command = "toggle_selection"
+
+[[bind]]
+key = "a"
+mode = "project"
+command = "select_all_visible"
+
+[[bind]]
+key = "!"
+mode = "project"
+command = "select_all_starred_visible"
+
+[[bind]]
+key = "@"
+mode = "project"
+command = "select_all_non_hidden_visible"
+
+[[bind]]
+key = "i"
+mode = "project"
+command = "invert_selection"
+
+[[bind]]
+key = "c"
+mode = "project"
+command = "clear_selection"
+
+[[bind]]
+key = "u"
+mode = "project"
+command = "undo_selection"
+
+[[bind]]
+key = "ctrl-y"
+mode = "project"
+command = "redo_selection"
+
+[[bind]]
+key = "*"
+mode = "project"
+command = "toggle_starred_selected"
+
+[[bind]]
+key = "h"
+mode = "project"
+command = "toggle_hidden_selected"
+
+[[bind]]
+key = "v"
+mode = "project"
+command = "toggle_hidden_group"
+
+[[bind]]
 key = "o"
+mode = "project"
 command = "toggle_only_selected"
 
 [[bind]]
 key = "ctrl-f"
+mode = "project"
 command = "search_fuzzy"
 
 [[bind]]
 key = "ctrl-s"
+mode = "project"
 command = "search_substring"
 
 [[bind]]
 key = "ctrl-r"
+mode = "project"
 command = "search_regex"
 
 [[bind]]
-key = "ctrl-u"
-command = "page_up"
+key = "enter"
+mode = "filter"
+command = "begin_filter_edit"
 
 [[bind]]
-key = "ctrl-d"
-command = "page_down"
+key = "f"
+mode = "filter"
+command = "toggle_task_filters"
+
+[[bind]]
+key = "s"
+mode = "filter"
+command = "cycle_filter_string_mode"
+
+[[bind]]
+key = "["
+mode = "task"
+command = "move_section_up"
+
+[[bind]]
+key = "]"
+mode = "task"
+command = "move_section_down"
+
+[[bind]]
+key = "{"
+mode = "task"
+command = "move_project_up"
+
+[[bind]]
+key = "}"
+mode = "task"
+command = "move_project_down"
 
 [[bind]]
 key = "c"
+mode = "task"
 command = "toggle_completed_filter"
 
 [[bind]]
 key = "z"
+mode = "task"
 command = "toggle_subtask_visibility"
 
 [[bind]]
-key = "p"
+key = ","
+mode = "task"
 command = "toggle_project_grouping"
 
 [[bind]]
-key = "g"
+key = "."
+mode = "task"
 command = "toggle_section_grouping"
 
 [[bind]]
 key = "s"
+mode = "task"
 command = "cycle_task_sort"
 
 [[project]]
 gid = "project-gid-here"
 starred = true
 hidden = false
-
-[[project]]
-gid = "another-project-gid-here"
-starred = false
-hidden = true

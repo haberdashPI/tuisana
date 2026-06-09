@@ -1,3 +1,5 @@
+//! In-memory Asana client used by tests.
+
 use std::collections::HashMap;
 
 use crate::{
@@ -9,6 +11,7 @@ use crate::{
     error::Result,
 };
 
+/// A simple in-memory `AsanaClient` implementation for tests.
 #[derive(Clone, Debug, Default)]
 pub struct FakeAsanaClient {
     projects: Vec<Project>,
@@ -19,6 +22,7 @@ pub struct FakeAsanaClient {
 }
 
 impl FakeAsanaClient {
+    /// Builds a fake client with the given projects.
     pub fn new(projects: Vec<Project>) -> Self {
         Self {
             projects,
@@ -26,25 +30,30 @@ impl FakeAsanaClient {
         }
     }
 
+    /// Builds a fake client with the repository's default sample projects.
     pub fn with_default_projects() -> Self {
         Self::new(vec![Project::new("1", "Inbox", true), Project::new("2", "Backlog", false)])
     }
 
+    /// Adds task fixtures for a project.
     pub fn with_tasks(mut self, project_gid: impl Into<String>, tasks: Vec<TaskDto>) -> Self {
         self.tasks_by_project.insert(project_gid.into(), tasks);
         self
     }
 
+    /// Adds subtask fixtures for a task.
     pub fn with_subtasks(mut self, task_gid: impl Into<String>, subtasks: Vec<TaskDto>) -> Self {
         self.subtasks_by_task.insert(task_gid.into(), subtasks);
         self
     }
 
+    /// Adds section fixtures for a project.
     pub fn with_sections(mut self, project_gid: impl Into<String>, sections: Vec<SectionDto>) -> Self {
         self.sections_by_project.insert(project_gid.into(), sections);
         self
     }
 
+    /// Adds custom-field settings fixtures for a project.
     pub fn with_custom_field_settings(
         mut self,
         project_gid: impl Into<String>,

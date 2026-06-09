@@ -1,10 +1,16 @@
+//! Key bindings, actions, and command parsing.
+//!
+//! This module translates raw terminal keys and config command names into the
+//! semantic actions that the app state machine understands.
+
 use std::{collections::HashMap, fmt::Display, str::FromStr};
 
 use crate::{
-    config::Bind,
+    config::{Bind, Mode},
     error::{Error, Result},
 };
 
+/// A normalized key understood by the binding system.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum KeyBinding {
     Char(char),
@@ -50,6 +56,7 @@ impl FromStr for KeyBinding {
 }
 
 impl KeyBinding {
+    /// Converts a crossterm key event into a normalized key binding.
     pub fn from_crossterm_event(event: crossterm::event::KeyEvent) -> Option<Self> {
         use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -74,6 +81,7 @@ impl KeyBinding {
     }
 }
 
+/// A semantic action produced by the keybinding system.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Action {
     Quit,
@@ -102,6 +110,8 @@ pub enum Action {
     SetFilterMode,
     SetTaskMode,
     ToggleTaskFilters,
+    BeginFilterEdit,
+    CycleFilterStringMode,
     SearchFuzzy,
     SearchSubstring,
     SearchRegex,
@@ -109,11 +119,11 @@ pub enum Action {
     JumpBottom,
     PageUp,
     PageDown,
-    ResizeWindowUp,
-    ResizeWindowDown,
-    MinimizeWindow,
-    MaximizeWindow,
-    RestoreWindow,
+    ResizeTopPaneUp,
+    ResizeTopPaneDown,
+    MinimizeTopPane,
+    MaximizeTopPane,
+    RestoreTopPane,
     ScrollLeft,
     ScrollRight,
     MoveSectionUp,
@@ -128,6 +138,7 @@ pub enum Action {
 }
 
 impl Action {
+    /// Parses a config command name into an action.
     pub fn from_command(command: &str) -> Result<Self> {
         match command.trim().to_ascii_lowercase().as_str() {
             "quit" => Ok(Self::Quit),
@@ -152,10 +163,12 @@ impl Action {
             "toggle_hidden_group" => Ok(Self::ToggleHiddenGroup),
             "toggle_task_view" => Ok(Self::ToggleTaskView),
             "toggle_task_mode" => Ok(Self::ToggleTaskMode),
-            "set_project_mode" => Ok(Self::SetProjectMode),
+            "set_project_mode" | "set_project_bind_mode" => Ok(Self::SetProjectMode),
             "set_filter_mode" => Ok(Self::SetFilterMode),
-            "set_task_mode" => Ok(Self::SetTaskMode),
+            "set_task_mode" | "set_task_bind_mode" => Ok(Self::SetTaskMode),
             "toggle_task_filters" => Ok(Self::ToggleTaskFilters),
+            "begin_filter_edit" => Ok(Self::BeginFilterEdit),
+            "cycle_filter_string_mode" => Ok(Self::CycleFilterStringMode),
             "search_fuzzy" => Ok(Self::SearchFuzzy),
             "search_substring" => Ok(Self::SearchSubstring),
             "search_regex" => Ok(Self::SearchRegex),
@@ -163,11 +176,11 @@ impl Action {
             "jump_bottom" => Ok(Self::JumpBottom),
             "page_up" => Ok(Self::PageUp),
             "page_down" => Ok(Self::PageDown),
-            "resize_window_up" => Ok(Self::ResizeWindowUp),
-            "resize_window_down" => Ok(Self::ResizeWindowDown),
-            "minimize_window" => Ok(Self::MinimizeWindow),
-            "maximize_window" => Ok(Self::MaximizeWindow),
-            "restore_window" => Ok(Self::RestoreWindow),
+            "resize_top_pane_up" | "resize_window_up" => Ok(Self::ResizeTopPaneUp),
+            "resize_top_pane_down" | "resize_window_down" => Ok(Self::ResizeTopPaneDown),
+            "minimize_top_pane" | "minimize_window" => Ok(Self::MinimizeTopPane),
+            "maximize_top_pane" | "maximize_window" => Ok(Self::MaximizeTopPane),
+            "restore_top_pane" | "restore_window" => Ok(Self::RestoreTopPane),
             "scroll_left" => Ok(Self::ScrollLeft),
             "scroll_right" => Ok(Self::ScrollRight),
             "move_section_up" => Ok(Self::MoveSectionUp),
@@ -182,8 +195,31 @@ impl Action {
             other => Err(Error::Backend(format!("unsupported command: {other}"))),
         }
     }
+
+    /// Returns `true` for task-view actions that should be routed to the task pane
+    /// even when the project list is also visible.
+    pub fn is_task_view_action(&self) -> bool {
+        matches!(
+            self,
+            Action::MoveSectionUp
+                | Action::MoveSectionDown
+                | Action::MoveProjectUp
+                | Action::MoveProjectDown
+                | Action::ScrollLeft
+                | Action::ScrollRight
+                | Action::PageUp
+                | Action::PageDown
+                | Action::ToggleCompletedFilter
+                | Action::ToggleSubtaskVisibility
+                | Action::ToggleProjectGrouping
+                | Action::ToggleSectionGrouping
+                | Action::CycleTaskSort
+        )
+    }
+
 }
 
+/// Top-level commands the app can trigger directly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AppCommand {
     Quit,
@@ -191,6 +227,7 @@ pub enum AppCommand {
 }
 
 impl Action {
+    /// Maps an action to a direct application command when one exists.
     pub fn as_app_command(&self) -> Option<AppCommand> {
         match self {
             Action::Quit => Some(AppCommand::Quit),
@@ -229,6 +266,8 @@ impl Display for Action {
             Action::SetFilterMode => "set_filter_mode",
             Action::SetTaskMode => "set_task_mode",
             Action::ToggleTaskFilters => "toggle_task_filters",
+            Action::BeginFilterEdit => "begin_filter_edit",
+            Action::CycleFilterStringMode => "cycle_filter_string_mode",
             Action::SearchFuzzy => "search_fuzzy",
             Action::SearchSubstring => "search_substring",
             Action::SearchRegex => "search_regex",
@@ -236,11 +275,11 @@ impl Display for Action {
             Action::JumpBottom => "jump_bottom",
             Action::PageUp => "page_up",
             Action::PageDown => "page_down",
-            Action::ResizeWindowUp => "resize_window_up",
-            Action::ResizeWindowDown => "resize_window_down",
-            Action::MinimizeWindow => "minimize_window",
-            Action::MaximizeWindow => "maximize_window",
-            Action::RestoreWindow => "restore_window",
+            Action::ResizeTopPaneUp => "resize_top_pane_up",
+            Action::ResizeTopPaneDown => "resize_top_pane_down",
+            Action::MinimizeTopPane => "minimize_top_pane",
+            Action::MaximizeTopPane => "maximize_top_pane",
+            Action::RestoreTopPane => "restore_top_pane",
             Action::ScrollLeft => "scroll_left",
             Action::ScrollRight => "scroll_right",
             Action::MoveSectionUp => "move_section_up",
@@ -259,7 +298,7 @@ impl Display for Action {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyMap {
-    bindings: HashMap<KeyBinding, Action>,
+    bindings: HashMap<(Mode, KeyBinding), Action>,
 }
 
 impl KeyMap {
@@ -268,56 +307,54 @@ impl KeyMap {
         for bind in bindings {
             let key = bind.key.parse()?;
             let action = Action::from_command(&bind.command)?;
-            map.insert(key, action);
+            map.insert((bind.mode, key), action);
         }
         Ok(Self { bindings: map })
     }
 
-    pub fn action_for(&self, key: &KeyBinding) -> Option<&Action> {
-        self.bindings.get(key)
+    pub fn action_for(&self, key: &KeyBinding, mode: Mode) -> Option<&Action> {
+        self.bindings.get(&(mode, key.clone())).or_else(|| {
+            if mode.allows_any_fallback() {
+                self.bindings.get(&(Mode::Any, key.clone()))
+            } else {
+                None
+            }
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Action, AppCommand, KeyBinding, KeyMap};
+    use crate::config::Mode;
     use crate::config::Bind;
 
     #[test]
     fn parses_keys_and_builds_keymap() {
         let keymap = KeyMap::from_bindings(&[
-            Bind {
-                key: "?".to_string(),
-                command: "toggle_help_details".to_string(),
-            },
-            Bind {
-                key: "x".to_string(),
-                command: "quit".to_string(),
-            },
-            Bind {
-                key: "j".to_string(),
-                command: "move_down".to_string(),
-            },
-            Bind {
-                key: "ctrl-u".to_string(),
-                command: "page_up".to_string(),
-            },
-            Bind {
-                key: "space".to_string(),
-                command: "toggle_selection".to_string(),
-            },
-            Bind {
-                key: "home".to_string(),
-                command: "jump_top".to_string(),
-            },
+            Bind::new("?", "toggle_help_details"),
+            Bind::new("x", "quit"),
+            Bind::new("j", "move_down"),
+            Bind::new("ctrl-u", "page_up"),
+            Bind::new("space", "toggle_selection"),
+            Bind::new("home", "jump_top"),
         ])
         .expect("keymap parses");
 
-        assert_eq!(keymap.action_for(&KeyBinding::Char('x')), Some(&Action::Quit));
-        assert_eq!(keymap.action_for(&KeyBinding::Char('j')), Some(&Action::MoveDown));
-        assert_eq!(keymap.action_for(&KeyBinding::Ctrl('u')), Some(&Action::PageUp));
         assert_eq!(
-            keymap.action_for(&KeyBinding::Char('?')),
+            keymap.action_for(&KeyBinding::Char('x'), Mode::Any),
+            Some(&Action::Quit)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('j'), Mode::Any),
+            Some(&Action::MoveDown)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('u'), Mode::Any),
+            Some(&Action::PageUp)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('?'), Mode::Any),
             Some(&Action::ToggleHelpDetails)
         );
     }
@@ -362,6 +399,11 @@ mod tests {
             Action::ToggleHiddenGroup
         );
         assert_eq!(
+            Action::from_command("cycle_filter_string_mode")
+                .expect("cycle_filter_string_mode parses"),
+            Action::CycleFilterStringMode
+        );
+        assert_eq!(
             Action::from_command("search_regex").expect("search_regex parses"),
             Action::SearchRegex
         );
@@ -373,6 +415,14 @@ mod tests {
         assert_eq!(
             Action::from_command("scroll_right").expect("scroll_right parses"),
             Action::ScrollRight
+        );
+        assert_eq!(
+            Action::from_command("resize_top_pane_up").expect("resize_top_pane_up parses"),
+            Action::ResizeTopPaneUp
+        );
+        assert_eq!(
+            Action::from_command("resize_window_up").expect("legacy resize_window_up parses"),
+            Action::ResizeTopPaneUp
         );
     }
 
@@ -394,5 +444,51 @@ mod tests {
         assert_eq!(Action::MoveDown.as_app_command(), None);
         assert_eq!(Action::ToggleSelection.as_app_command(), None);
         assert_eq!(Action::ToggleHiddenSelected.as_app_command(), None);
+    }
+
+    #[test]
+    fn mode_specific_bindings_override_any_bindings() {
+        let keymap = KeyMap::from_bindings(&[
+            Bind::with_mode("[", Mode::Any, "scroll_left"),
+            Bind::with_mode("[", Mode::Project, "resize_top_pane_down"),
+            Bind::with_mode("[", Mode::ProjectSearch, "clear_search"),
+            Bind::with_mode("[", Mode::Filter, "resize_top_pane_up"),
+            Bind::with_mode("[", Mode::FilterEdit, "toggle_help_details"),
+            Bind::with_mode("[", Mode::Task, "move_section_up"),
+        ])
+        .expect("keymap parses");
+
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('['), Mode::Project),
+            Some(&Action::ResizeTopPaneDown)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('['), Mode::ProjectSearch),
+            Some(&Action::ClearSearch)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('['), Mode::Filter),
+            Some(&Action::ResizeTopPaneUp)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('['), Mode::FilterEdit),
+            Some(&Action::ToggleHelpDetails)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('['), Mode::Task),
+            Some(&Action::MoveSectionUp)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('['), Mode::Any),
+            Some(&Action::ScrollLeft)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('x'), Mode::ProjectSearch),
+            None
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('x'), Mode::FilterEdit),
+            None
+        );
     }
 }

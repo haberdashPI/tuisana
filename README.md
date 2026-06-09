@@ -186,7 +186,7 @@ command = "move_down"
 Use the project tasks:
 
 ```bash
-mise run
+cargo run
 mise test
 mise coverage
 ```

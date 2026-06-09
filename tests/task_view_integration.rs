@@ -13,7 +13,7 @@ use tuisana::{
     },
     config::Config,
     domain::Project,
-    ui::runtime::{run_project_list_session, InputEvent, KeySource},
+    ui::runtime::{run_session, InputEvent, KeySource},
 };
 
 struct ScriptedSource {
@@ -68,18 +68,18 @@ fn make_task() -> TaskDto {
     }
 }
 
-fn wait_for_task_load<C: AsanaClient + Clone + Send + 'static>(app: &mut App<C>) {
+fn wait_for_task_data<C: AsanaClient + Clone + Send + 'static>(app: &mut App<C>) {
     for _ in 0..50 {
-        app.poll_task_load();
+        app.poll_task_data();
         if !matches!(
             app.tasks.status(),
-            tuisana::app::task_review::TaskReviewStatus::Loading
+            tuisana::app::task::TaskStatus::Loading
         ) {
             break;
         }
         thread::sleep(Duration::from_millis(20));
     }
-    app.poll_task_load();
+    app.poll_task_data();
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn pressing_m_displays_the_task_view() {
 
     let mut source = ScriptedSource {
         keys: vec![
-            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
         ],
@@ -118,13 +118,12 @@ fn pressing_m_displays_the_task_view() {
     let backend = TestBackend::new(80, 20);
     let mut terminal = Terminal::new(backend).expect("terminal");
 
-    run_project_list_session(&mut app, &mut source, &mut terminal).expect("session runs");
-    wait_for_task_load(&mut app);
+    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    wait_for_task_data(&mut app);
 
     assert!(app.tasks.visible());
-    assert_eq!(app.tasks.focus_mode(), tuisana::app::task_review::TaskFocusMode::Tasks);
     assert_eq!(app.tasks.table().task_count(), 1);
-    assert_eq!(app.tasks.status(), &tuisana::app::task_review::TaskReviewStatus::Ready);
+    assert_eq!(app.tasks.status(), &tuisana::app::task::TaskStatus::Ready);
     assert!(app.tasks.horizontal_scroll() > 0);
 
     let buffer = terminal.backend_mut().buffer().clone();
@@ -184,7 +183,7 @@ fn task_view_scrolls_to_keep_the_selected_row_visible() {
 
     let mut source = ScriptedSource {
         keys: vec![
-            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
@@ -196,7 +195,7 @@ fn task_view_scrolls_to_keep_the_selected_row_visible() {
     let backend = TestBackend::new(80, 18);
     let mut terminal = Terminal::new(backend).expect("terminal");
 
-    run_project_list_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
 
     assert_eq!(app.tasks.selected_index(), Some(8));
     assert!(app.tasks.vertical_scroll() > 0);
@@ -254,7 +253,7 @@ fn changing_the_completed_filter_updates_the_visible_task_rows() {
 
     let mut source = ScriptedSource {
         keys: vec![
-            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
         ],
@@ -263,8 +262,8 @@ fn changing_the_completed_filter_updates_the_visible_task_rows() {
     let backend = TestBackend::new(80, 20);
     let mut terminal = Terminal::new(backend).expect("terminal");
 
-    run_project_list_session(&mut app, &mut source, &mut terminal).expect("session runs");
-    wait_for_task_load(&mut app);
+    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    wait_for_task_data(&mut app);
 
     assert_eq!(app.tasks.table().task_count(), 1);
     assert!(app.tasks.filter_summary().contains("comp done"));

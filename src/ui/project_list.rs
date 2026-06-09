@@ -1,18 +1,27 @@
+//! Rendering helpers for the project list pane.
+
 use crate::app::project_list::{ProjectListState, ProjectListStatus};
 
+/// Snapshot of the project list used by the UI renderer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectListView {
+    /// The pane title.
     pub title: String,
+    /// The one-line project status summary.
     pub status_line: String,
+    /// The project-search line shown below the status.
     pub search_line: String,
+    /// Help text lines.
     pub hint_lines: Vec<String>,
+    /// One rendered row per visible project.
     pub rows: Vec<String>,
 }
 
+/// Renders the project list state into a UI-friendly snapshot.
 pub fn render_project_list(state: &ProjectListState) -> ProjectListView {
-    let status_line = build_status_line(state);
-    let search_line = build_search_line(state);
-    let hint_lines = build_hint_lines(state);
+    let status_line = format_status_line(state);
+    let search_line = format_search_line(state);
+    let hint_lines = format_hint_lines(state);
 
     let rows = state
         .items()
@@ -56,7 +65,7 @@ mod tests {
         assert_eq!(view.title, "Projects");
         assert_eq!(view.status_line, "2 visible, 0 selected");
         assert_eq!(view.search_line, "Search: not searching (substring)");
-        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select+down, /: search, p/f/t: modes, r: refresh, q: quit"]);
+        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select+down, /: search (project), p/f/t: modes, r: refresh, q: quit"]);
         assert_eq!(view.rows, vec!["[ ] [*] Inbox", "[ ] [ ] Backlog"]);
     }
 
@@ -68,7 +77,7 @@ mod tests {
 
         assert_eq!(view.status_line, "No projects");
         assert_eq!(view.search_line, "Search: not searching (substring)");
-        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select+down, /: search, p/f/t: modes, r: refresh, q: quit"]);
+        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select+down, /: search (project), p/f/t: modes, r: refresh, q: quit"]);
         assert!(view.rows.is_empty());
     }
 
@@ -90,7 +99,7 @@ mod tests {
 
         assert_eq!(view.status_line, "1 visible, 0 selected, 1 hidden");
         assert_eq!(view.search_line, "Search: not searching (substring)");
-        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select+down, /: search, p/f/t: modes, r: refresh, q: quit"]);
+        assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select+down, /: search (project), p/f/t: modes, r: refresh, q: quit"]);
         assert_eq!(view.rows, vec!["[ ] [ ] Visible"]);
     }
 
@@ -124,7 +133,7 @@ mod tests {
     }
 }
 
-fn build_status_line(state: &ProjectListState) -> String {
+fn format_status_line(state: &ProjectListState) -> String {
     if let Some(error) = state.search_error() {
         return format!("Search error: {error}");
     }
@@ -173,7 +182,7 @@ fn build_status_line(state: &ProjectListState) -> String {
     }
 }
 
-fn build_search_line(state: &ProjectListState) -> String {
+fn format_search_line(state: &ProjectListState) -> String {
     let mode = match state.search_mode() {
         crate::app::project_list::SearchMode::Fuzzy => "fuzzy",
         crate::app::project_list::SearchMode::Substring => "substring",
@@ -191,10 +200,10 @@ fn build_search_line(state: &ProjectListState) -> String {
     format!("Search: {mode} \"{}\"", state.search_query())
 }
 
-fn build_hint_lines(state: &ProjectListState) -> Vec<String> {
+fn format_hint_lines(state: &ProjectListState) -> Vec<String> {
     if !state.help_details_visible() {
         return vec![
-            "?: more hints, j/k: move, space: select+down, /: search, p/f/t: modes, r: refresh, q: quit"
+        "?: more hints, j/k: move, space: select+down, /: search (project), p/f/t: modes, r: refresh, q: quit"
                 .to_string(),
         ];
     }
@@ -222,7 +231,7 @@ fn build_hint_lines(state: &ProjectListState) -> Vec<String> {
     }
     lines.push(selection_line.join(", "));
 
-    let mut search_line = vec!["/: search".to_string()];
+    let mut search_line = vec!["/: search (project)".to_string()];
     if state.search_active() || !state.search_query().is_empty() {
         search_line.push("ctrl-l: clear search".to_string());
     }

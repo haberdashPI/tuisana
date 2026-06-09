@@ -1,3 +1,8 @@
+//! State and behavior for the task pane.
+//!
+//! This module owns the task table's live state, the task-loading cache, and
+//! the task filter editor used by the UI.
+
 use std::{
     collections::{HashMap, VecDeque},
     time::{Instant, SystemTime, UNIX_EPOCH},
@@ -19,15 +24,9 @@ use crate::{
 
 const HORIZONTAL_SCROLL_STEP: usize = 8;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum TaskFocusMode {
-    #[default]
-    Projects,
-    Tasks,
-}
-
+/// High-level status for the task state machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TaskReviewStatus {
+pub enum TaskStatus {
     Idle,
     Loading,
     Ready,
@@ -36,40 +35,57 @@ pub enum TaskReviewStatus {
     Error(String),
 }
 
-impl Default for TaskReviewStatus {
+impl Default for TaskStatus {
     fn default() -> Self {
         Self::Idle
     }
 }
 
+/// State for the task pane, including the loaded dataset, filter editor,
+/// scroll position, and the table model rendered by the UI.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct TaskReviewState {
+pub struct TaskState {
+    view: TaskViewState,
+    loading: TaskLoadingState,
+}
+
+/// User-facing task pane state: selection, table settings, filter editor,
+/// pane visibility, and scroll position.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TaskViewState {
     visible: bool,
-    focus_mode: TaskFocusMode,
-    status: TaskReviewStatus,
     selected: Option<usize>,
     table: TaskTableModel,
     settings: TaskTableSettings,
-    dataset: Option<TaskDataset>,
-    cache: TaskCache,
     horizontal_scroll: usize,
-    loading_started_at: Option<Instant>,
-    loading_targets: Vec<String>,
-    loading_target_ids: Vec<String>,
-    loaded_target_ids: Vec<String>,
-    loaded_project_scopes: HashMap<String, TaskLoadScope>,
     filter_editor: TaskFilterEditorState,
     task_vertical_scroll: usize,
     filter_vertical_scroll: usize,
     help_details_visible: bool,
 }
 
+/// Task loading state: the cache, dataset, and in-flight load metadata.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TaskLoadingState {
+    status: TaskStatus,
+    dataset: Option<TaskDataset>,
+    cache: TaskCache,
+    loading_started_at: Option<Instant>,
+    loading_targets: Vec<String>,
+    loading_target_ids: Vec<String>,
+    loaded_target_ids: Vec<String>,
+    loaded_project_scopes: HashMap<String, TaskLoadScope>,
+}
+
+/// The merged task records and custom field definitions used to rebuild the
+/// visible task table.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TaskDataset {
     records: Vec<TaskRecord>,
     custom_field_definitions: Vec<CustomFieldDefinition>,
 }
 
+/// The coarse type of filter supported by the task filter editor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TaskFieldFilterKind {
     String,
@@ -77,6 +93,7 @@ pub(crate) enum TaskFieldFilterKind {
     Date,
 }
 
+/// The matching strategy for string filters in the task filter editor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TaskFieldStringMode {
     Fuzzy,
@@ -84,6 +101,7 @@ pub(crate) enum TaskFieldStringMode {
     Regex,
 }
 
+/// Static metadata for one filter row in the task filter editor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TaskFilterFieldSpec {
     key: String,
@@ -91,6 +109,8 @@ struct TaskFilterFieldSpec {
     kind: TaskFieldFilterKind,
 }
 
+/// Mutable state for one filter row, including the user query and any selected
+/// label values.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TaskFilterFieldState {
     spec: TaskFilterFieldSpec,
@@ -101,6 +121,7 @@ struct TaskFilterFieldState {
     label_cursor: usize,
 }
 
+/// A display-friendly snapshot of one task filter row for the filter panel UI.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TaskFilterPanelEntry {
     pub label: String,
@@ -112,6 +133,7 @@ pub(crate) struct TaskFilterPanelEntry {
     pub label_cursor: Option<usize>,
 }
 
+/// Tracks the filter panel's visibility, edit mode, selected row, and fields.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct TaskFilterEditorState {
     visible: bool,
@@ -120,6 +142,7 @@ struct TaskFilterEditorState {
     fields: Vec<TaskFilterFieldState>,
 }
 
+/// Small cache of task records and custom field names keyed by task GID.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct TaskCache {
     records: HashMap<String, TaskRecord>,
@@ -839,130 +862,116 @@ fn task_fuzzy_match(haystack: &str, needle: &str) -> bool {
     false
 }
 
-impl TaskReviewState {
+impl TaskState {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn visible(&self) -> bool {
-        self.visible
+        self.view.visible
     }
 
     pub fn set_visible(&mut self, visible: bool) {
-        self.visible = visible;
-        if self.visible && self.selected.is_none() {
-            self.selected = self.table.first_selectable_row_index();
+        self.view.visible = visible;
+        if self.view.visible && self.view.selected.is_none() {
+            self.view.selected = self.view.table.first_selectable_row_index();
         }
     }
 
     pub fn toggle_visible(&mut self) {
-        self.set_visible(!self.visible);
+        self.set_visible(!self.view.visible);
     }
 
     pub fn help_details_visible(&self) -> bool {
-        self.help_details_visible
+        self.view.help_details_visible
     }
 
     pub fn toggle_help_details(&mut self) {
-        self.help_details_visible = !self.help_details_visible;
+        self.view.help_details_visible = !self.view.help_details_visible;
     }
 
-    pub fn focus_mode(&self) -> TaskFocusMode {
-        self.focus_mode
-    }
-
-    pub fn toggle_focus_mode(&mut self) {
-        self.focus_mode = match self.focus_mode {
-            TaskFocusMode::Projects => TaskFocusMode::Tasks,
-            TaskFocusMode::Tasks => TaskFocusMode::Projects,
-        };
-        if self.focus_mode == TaskFocusMode::Tasks {
-            self.visible = true;
-        }
-    }
-
-    pub fn set_focus_mode(&mut self, mode: TaskFocusMode) {
-        self.focus_mode = mode;
-        if self.focus_mode == TaskFocusMode::Tasks {
-            self.visible = true;
-        }
-    }
-
+    /// Mark the task pane as loading data for the given projects.
     pub fn begin_loading(&mut self, projects: &[Project]) {
-        self.status = TaskReviewStatus::Loading;
-        self.loading_started_at = Some(Instant::now());
-        self.loading_targets = projects.iter().map(|project| project.name.clone()).collect();
-        self.loading_target_ids = projects.iter().map(|project| project.id.clone()).collect();
+        self.loading.status = TaskStatus::Loading;
+        self.loading.loading_started_at = Some(Instant::now());
+        self.loading.loading_targets = projects.iter().map(|project| project.name.clone()).collect();
+        self.loading.loading_target_ids = projects.iter().map(|project| project.id.clone()).collect();
     }
 
+    /// Replace the visible table with a fully built table model.
     pub fn finish_loading(&mut self, table: TaskTableModel) {
-        self.dataset = None;
-        self.table = table;
-        self.horizontal_scroll = 0;
-        self.selected = self.table.first_selectable_row_index();
-        self.loaded_target_ids = self.loading_target_ids.clone();
-        self.status = if self.table.task_count() == 0 {
-            TaskReviewStatus::Empty
+        self.loading.dataset = None;
+        self.view.table = table;
+        self.view.horizontal_scroll = 0;
+        self.view.selected = self.view.table.first_selectable_row_index();
+        self.loading.loaded_target_ids = self.loading.loading_target_ids.clone();
+        self.loading.status = if self.view.table.task_count() == 0 {
+            TaskStatus::Empty
         } else {
-            TaskReviewStatus::Ready
+            TaskStatus::Ready
         };
-        self.loading_started_at = None;
-        self.loading_targets.clear();
-        self.loading_target_ids.clear();
-        self.task_vertical_scroll = 0;
+        self.loading.loading_started_at = None;
+        self.loading.loading_targets.clear();
+        self.loading.loading_target_ids.clear();
+        self.view.task_vertical_scroll = 0;
     }
 
+    /// Merge a freshly built dataset into the cache and rebuild the visible
+    /// table from the current target projects.
     pub(crate) fn finish_loading_dataset(&mut self, dataset: TaskDataset) {
-        self.cache.merge_dataset(dataset.clone());
+        self.loading.cache.merge_dataset(dataset.clone());
         self.rebuild_visible_dataset();
         let scope = self.desired_load_scope();
-        for project_id in &self.loading_target_ids {
-            self.loaded_project_scopes
+        for project_id in &self.loading.loading_target_ids {
+            self.loading.loaded_project_scopes
                 .insert(project_id.clone(), scope);
         }
         self.finish_loading_targets();
     }
 
+    /// Merge a partial dataset load for one project and refresh the table.
     #[allow(dead_code)]
     pub(crate) fn ingest_loaded_dataset(&mut self, dataset: TaskDataset) {
-        self.cache.merge_dataset(dataset);
+        self.loading.cache.merge_dataset(dataset);
         self.rebuild_visible_dataset();
     }
 
+    /// Merge a partial dataset for one project and remember which scope was fetched.
     pub(crate) fn ingest_loaded_project(
         &mut self,
         project_id: &str,
         scope: TaskLoadScope,
         dataset: TaskDataset,
     ) {
-        self.cache.merge_dataset(dataset);
-        self.loaded_project_scopes.insert(project_id.to_string(), scope);
+        self.loading.cache.merge_dataset(dataset);
+        self.loading.loaded_project_scopes.insert(project_id.to_string(), scope);
         self.rebuild_visible_dataset();
     }
 
+    /// Clear the loading state once all requested projects have been merged.
     pub(crate) fn finish_loading_targets(&mut self) {
-        let loaded_target_ids = self.loading_target_ids.clone();
-        self.horizontal_scroll = 0;
-        self.selected = self.table.first_selectable_row_index();
-        self.loading_started_at = None;
-        self.loading_targets.clear();
-        self.loading_target_ids.clear();
-        self.task_vertical_scroll = 0;
-        self.loaded_target_ids = loaded_target_ids;
-        self.status = TaskReviewStatus::Idle;
+        let loaded_target_ids = self.loading.loading_target_ids.clone();
+        self.view.horizontal_scroll = 0;
+        self.view.selected = self.view.table.first_selectable_row_index();
+        self.loading.loading_started_at = None;
+        self.loading.loading_targets.clear();
+        self.loading.loading_target_ids.clear();
+        self.view.task_vertical_scroll = 0;
+        self.loading.loaded_target_ids = loaded_target_ids;
+        self.loading.status = TaskStatus::Idle;
         self.rebuild_visible_dataset();
     }
 
     pub fn task_settings(&self) -> &TaskTableSettings {
-        &self.settings
+        &self.view.settings
     }
 
     pub fn filter_summary(&self) -> String {
-        let mut summary = self.settings.summary();
-        let active = self.filter_editor.active_count();
+        let mut summary = self.view.settings.summary();
+        let active = self.view.filter_editor.active_count();
         if active > 0 {
             summary.push_str(&format!("; filters {active}"));
-            if let Some(label) = self.filter_editor.selected_label() {
+            if let Some(label) = self.view.filter_editor.selected_label() {
                 summary.push_str(&format!(" ({label})"));
             }
         } else {
@@ -972,57 +981,58 @@ impl TaskReviewState {
     }
 
     pub fn filter_panel_visible(&self) -> bool {
-        self.filter_editor.visible()
+        self.view.filter_editor.visible()
     }
 
     pub fn filter_panel_scroll(&self) -> usize {
-        self.filter_vertical_scroll
+        self.view.filter_vertical_scroll
     }
 
     pub fn ensure_filter_visible(&mut self, viewport_height: usize) {
         let viewport_height = viewport_height.max(1);
-        let selected = self.filter_editor.selected;
+        let selected = self.view.filter_editor.selected;
         let margin = 1usize.min(viewport_height.saturating_sub(1));
-        let min_visible = self.filter_vertical_scroll.saturating_add(margin);
+        let min_visible = self.view.filter_vertical_scroll.saturating_add(margin);
         let max_visible = self
+            .view
             .filter_vertical_scroll
             .saturating_add(viewport_height.saturating_sub(1))
             .saturating_sub(margin);
 
         if selected < min_visible {
-            self.filter_vertical_scroll = selected.saturating_sub(margin);
+            self.view.filter_vertical_scroll = selected.saturating_sub(margin);
             return;
         }
 
         if selected > max_visible {
-            self.filter_vertical_scroll = selected
+            self.view.filter_vertical_scroll = selected
                 .saturating_add(margin)
                 .saturating_add(1)
                 .saturating_sub(viewport_height);
         }
 
-        let max_scroll = self.filter_editor.fields.len().saturating_sub(1);
-        self.filter_vertical_scroll = self.filter_vertical_scroll.min(max_scroll);
+        let max_scroll = self.view.filter_editor.fields.len().saturating_sub(1);
+        self.view.filter_vertical_scroll = self.view.filter_vertical_scroll.min(max_scroll);
     }
 
     pub fn filter_panel_editing(&self) -> bool {
-        self.filter_editor.editing()
+        self.view.filter_editor.editing()
     }
 
     pub(crate) fn filter_selected_kind(&self) -> Option<TaskFieldFilterKind> {
-        self.filter_editor.selected_kind()
+        self.view.filter_editor.selected_kind()
     }
 
     pub fn filter_panel_help_lines(&self) -> Vec<String> {
-        let mut lines = if self.filter_editor.editing() {
+        let mut lines = if self.view.filter_editor.editing() {
             vec!["enter/esc: done editing".to_string()]
         } else {
             vec!["enter: edit selected filter, f: hide filters".to_string()]
         };
 
-        match self.filter_editor.selected_kind() {
+        match self.view.filter_editor.selected_kind() {
             Some(TaskFieldFilterKind::String) => {
-                if !self.filter_editor.editing() {
+                if !self.view.filter_editor.editing() {
                     lines.push("s: cycle string mode".to_string());
                 }
                 lines.push("string: fuzzy | contains | regex".to_string());
@@ -1042,83 +1052,83 @@ impl TaskReviewState {
     }
 
     pub fn toggle_filter_panel(&mut self) {
-        self.filter_editor.toggle_visible();
+        self.view.filter_editor.toggle_visible();
     }
 
     pub fn move_filter_up(&mut self) {
-        self.filter_editor.move_up();
+        self.view.filter_editor.move_up();
     }
 
     pub fn move_filter_down(&mut self) {
-        self.filter_editor.move_down();
+        self.view.filter_editor.move_down();
     }
 
     pub fn filter_page_up(&mut self, page_size: usize) {
-        self.filter_editor.page_up(page_size);
+        self.view.filter_editor.page_up(page_size);
     }
 
     pub fn filter_page_down(&mut self, page_size: usize) {
-        self.filter_editor.page_down(page_size);
+        self.view.filter_editor.page_down(page_size);
     }
 
     pub fn filter_clear_current(&mut self) {
-        self.filter_editor.clear_current();
+        self.view.filter_editor.clear_current();
         self.refresh_table();
     }
 
     pub(crate) fn filter_set_mode(&mut self, mode: TaskFieldStringMode) {
-        self.filter_editor.set_mode(mode);
+        self.view.filter_editor.set_mode(mode);
         self.refresh_table();
     }
 
     pub(crate) fn filter_cycle_mode(&mut self) {
-        self.filter_editor.cycle_mode();
+        self.view.filter_editor.cycle_mode();
         self.refresh_table();
     }
 
     pub fn filter_push_char(&mut self, ch: char) {
-        self.filter_editor.push_char(ch);
+        self.view.filter_editor.push_char(ch);
         self.refresh_table();
     }
 
     pub fn filter_pop_char(&mut self) {
-        self.filter_editor.pop_char();
+        self.view.filter_editor.pop_char();
         self.refresh_table();
     }
 
     pub(crate) fn filter_edit_begin(&mut self) {
-        self.filter_editor.start_editing();
+        self.view.filter_editor.start_editing();
     }
 
     pub(crate) fn filter_edit_done(&mut self) {
-        self.filter_editor.stop_editing();
+        self.view.filter_editor.stop_editing();
     }
 
     pub(crate) fn filter_move_label_left(&mut self) {
-        self.filter_editor.move_label_cursor_left();
+        self.view.filter_editor.move_label_cursor_left();
     }
 
     pub(crate) fn filter_move_label_right(&mut self) {
-        self.filter_editor.move_label_cursor_right();
+        self.view.filter_editor.move_label_cursor_right();
     }
 
     pub(crate) fn filter_cycle_label_value(&mut self, delta: i32) {
-        self.filter_editor.cycle_selected_label(delta);
+        self.view.filter_editor.cycle_selected_label(delta);
         self.refresh_table();
     }
 
     pub(crate) fn filter_add_label(&mut self) {
-        self.filter_editor.add_label();
+        self.view.filter_editor.add_label();
         self.refresh_table();
     }
 
     pub(crate) fn filter_delete_label(&mut self) {
-        self.filter_editor.delete_selected_label();
+        self.view.filter_editor.delete_selected_label();
         self.refresh_table();
     }
 
     pub(crate) fn filter_panel_entries(&self) -> Vec<TaskFilterPanelEntry> {
-        self.filter_editor
+        self.view.filter_editor
             .fields
             .iter()
             .enumerate()
@@ -1143,10 +1153,10 @@ impl TaskReviewState {
                     TaskFieldFilterKind::Labels => "labels".to_string(),
                     TaskFieldFilterKind::Date => "date".to_string(),
                 },
-                selected: index == self.filter_editor.selected,
-                editing: self.filter_editor.editing(),
+                selected: index == self.view.filter_editor.selected,
+                editing: self.view.filter_editor.editing(),
                 label_values: field.label_values.clone(),
-                label_cursor: if index == self.filter_editor.selected
+                label_cursor: if index == self.view.filter_editor.selected
                     && matches!(field.spec.kind, TaskFieldFilterKind::Labels)
                 {
                     Some(field.label_cursor.min(field.label_values.len().saturating_sub(1)))
@@ -1157,21 +1167,25 @@ impl TaskReviewState {
             .collect()
     }
 
+    /// Translate the completed-task filter into the Asana fetch scope.
     pub fn desired_load_scope(&self) -> TaskLoadScope {
-        match self.settings.filter.completed {
+        match self.view.settings.filter.completed {
             Some(false) => TaskLoadScope::OpenOnly,
             Some(true) | None => TaskLoadScope::All,
         }
     }
 
+    /// Return `true` if the cache already covers every selected target project
+    /// at the requested scope.
     pub fn can_serve_scope_for_targets(&self, target_ids: &[String], scope: TaskLoadScope) -> bool {
-        target_ids.iter().all(|project_id| match self.loaded_project_scopes.get(project_id) {
+        target_ids.iter().all(|project_id| match self.loading.loaded_project_scopes.get(project_id) {
             Some(TaskLoadScope::All) => true,
             Some(TaskLoadScope::OpenOnly) => matches!(scope, TaskLoadScope::OpenOnly),
             None => false,
         })
     }
 
+    /// Return the subset of projects that still need to be loaded for the requested scope.
     pub fn projects_requiring_load(
         &self,
         projects: &[Project],
@@ -1179,7 +1193,7 @@ impl TaskReviewState {
     ) -> Vec<Project> {
         projects
             .iter()
-            .filter(|project| match self.loaded_project_scopes.get(&project.id) {
+            .filter(|project| match self.loading.loaded_project_scopes.get(&project.id) {
                 Some(TaskLoadScope::All) => false,
                 Some(TaskLoadScope::OpenOnly) => matches!(scope, TaskLoadScope::All),
                 None => true,
@@ -1189,44 +1203,45 @@ impl TaskReviewState {
     }
 
     pub fn mark_out_of_date(&mut self, message: impl Into<String>) {
-        if matches!(self.status, TaskReviewStatus::Idle) {
+        if matches!(self.loading.status, TaskStatus::Idle) {
             return;
         }
 
-        self.status = TaskReviewStatus::OutOfDate(message.into());
-        self.loading_started_at = None;
-        self.loading_targets.clear();
-        self.loading_target_ids.clear();
-        self.task_vertical_scroll = 0;
+        self.loading.status = TaskStatus::OutOfDate(message.into());
+        self.loading.loading_started_at = None;
+        self.loading.loading_targets.clear();
+        self.loading.loading_target_ids.clear();
+        self.view.task_vertical_scroll = 0;
     }
 
     pub fn set_error(&mut self, message: impl Into<String>) {
-        self.status = TaskReviewStatus::Error(message.into());
-        self.selected = None;
-        self.table = TaskTableModel::empty();
-        self.horizontal_scroll = 0;
-        self.loading_started_at = None;
-        self.loading_targets.clear();
-        self.loading_target_ids.clear();
-        self.loaded_target_ids.clear();
-        self.task_vertical_scroll = 0;
+        self.loading.status = TaskStatus::Error(message.into());
+        self.view.selected = None;
+        self.view.table = TaskTableModel::empty();
+        self.view.horizontal_scroll = 0;
+        self.loading.loading_started_at = None;
+        self.loading.loading_targets.clear();
+        self.loading.loading_target_ids.clear();
+        self.loading.loaded_target_ids.clear();
+        self.view.task_vertical_scroll = 0;
     }
 
     pub fn loading_started_at(&self) -> Option<Instant> {
-        self.loading_started_at
+        self.loading.loading_started_at
     }
 
     pub fn loading_targets(&self) -> &[String] {
-        &self.loading_targets
+        &self.loading.loading_targets
     }
 
     pub fn loaded_target_ids(&self) -> &[String] {
-        &self.loaded_target_ids
+        &self.loading.loaded_target_ids
     }
 
     pub fn loading_spinner(&self) -> &'static str {
         const FRAMES: [&str; 4] = ["|", "/", "-", "\\"];
         let elapsed = self
+            .loading
             .loading_started_at
             .map(|started| started.elapsed().as_millis())
             .unwrap_or_default();
@@ -1234,34 +1249,34 @@ impl TaskReviewState {
         FRAMES[index]
     }
 
-    pub fn status(&self) -> &TaskReviewStatus {
-        &self.status
+    pub fn status(&self) -> &TaskStatus {
+        &self.loading.status
     }
 
     pub fn table(&self) -> &TaskTableModel {
-        &self.table
+        &self.view.table
     }
 
     pub fn selected_index(&self) -> Option<usize> {
-        self.selected
+        self.view.selected
     }
 
     pub fn selected_task_position(&self) -> Option<usize> {
-        self.selected
-            .and_then(|index| self.table.selectable_position(index))
+        self.view.selected
+            .and_then(|index| self.view.table.selectable_position(index))
     }
 
     pub fn horizontal_scroll(&self) -> usize {
-        self.horizontal_scroll
+        self.view.horizontal_scroll
     }
 
     pub fn vertical_scroll(&self) -> usize {
-        self.task_vertical_scroll
+        self.view.task_vertical_scroll
     }
 
     pub fn ensure_selected_visible(&mut self, viewport_height: usize) {
-        let Some(selected_index) = self.selected else {
-            self.task_vertical_scroll = 0;
+        let Some(selected_index) = self.view.selected else {
+            self.view.task_vertical_scroll = 0;
             return;
         };
 
@@ -1269,19 +1284,20 @@ impl TaskReviewState {
         let selected_line = selected_index.saturating_add(1);
         let margin = 2usize.min(content_height.saturating_sub(1));
 
-        let min_visible = self.task_vertical_scroll.saturating_add(margin);
+        let min_visible = self.view.task_vertical_scroll.saturating_add(margin);
         let max_visible = self
+            .view
             .task_vertical_scroll
             .saturating_add(content_height.saturating_sub(1))
             .saturating_sub(margin);
 
         if selected_line < min_visible {
-            self.task_vertical_scroll = selected_line.saturating_sub(margin);
+            self.view.task_vertical_scroll = selected_line.saturating_sub(margin);
             return;
         }
 
         if selected_line > max_visible {
-            self.task_vertical_scroll = selected_line
+            self.view.task_vertical_scroll = selected_line
                 .saturating_add(margin)
                 .saturating_add(1)
                 .saturating_sub(content_height);
@@ -1289,33 +1305,38 @@ impl TaskReviewState {
     }
 
     pub fn scroll_left(&mut self) {
-        self.horizontal_scroll = self.horizontal_scroll.saturating_sub(HORIZONTAL_SCROLL_STEP);
+        self.view.horizontal_scroll = self.view.horizontal_scroll.saturating_sub(HORIZONTAL_SCROLL_STEP);
     }
 
     pub fn scroll_right(&mut self) {
-        self.horizontal_scroll = self.horizontal_scroll.saturating_add(HORIZONTAL_SCROLL_STEP);
+        self.view.horizontal_scroll = self.view.horizontal_scroll.saturating_add(HORIZONTAL_SCROLL_STEP);
     }
 
-    pub fn load_for_projects<C: AsanaClient>(
+    /// Load the full task dataset for the given projects, then rebuild the
+    /// visible table and filter state from the cached records.
+    pub fn load_task_dataset_for_projects<C: AsanaClient>(
         &mut self,
         client: &C,
         projects: &[Project],
     ) -> Result<()> {
-        debug_log(&format!("task load start: project_count={}", projects.len()));
+        debug_log(&format!("task data start: project_count={}", projects.len()));
+        // TODO(lazy-task-queries): replace this eager project-wide load with
+        // filter-aware task requests once the Asana client can express the
+        // active task filter set directly.
         let scope = self.desired_load_scope();
         let dataset = Self::build_dataset_for_projects(client, projects, scope)?;
-        self.cache.merge_dataset(dataset);
-        self.loading_target_ids = projects.iter().map(|project| project.id.clone()).collect();
-        self.loaded_target_ids = self.loading_target_ids.clone();
+        self.loading.cache.merge_dataset(dataset);
+        self.loading.loading_target_ids = projects.iter().map(|project| project.id.clone()).collect();
+        self.loading.loaded_target_ids = self.loading.loading_target_ids.clone();
         for project in projects {
-            self.loaded_project_scopes
+            self.loading.loaded_project_scopes
                 .insert(project.id.clone(), scope);
         }
         self.rebuild_visible_dataset();
         debug_log(&format!(
-            "task load complete: tasks={} columns={}",
-            self.table.task_count(),
-            self.table.columns.len()
+            "task data complete: tasks={} columns={}",
+            self.view.table.task_count(),
+            self.view.table.columns.len()
         ));
         Ok(())
     }
@@ -1349,7 +1370,7 @@ impl TaskReviewState {
         for project in projects {
             let sections = client.list_sections(&project.id)?;
             debug_log(&format!(
-                "task load project={} sections={}",
+                "task data project={} sections={}",
                 project.id,
                 sections.len()
             ));
@@ -1365,7 +1386,7 @@ impl TaskReviewState {
 
             for setting in client.list_project_custom_field_settings(&project.id)? {
                 debug_log(&format!(
-                    "task load project={} custom_field={}",
+                    "task data project={} custom_field={}",
                     project.id, setting.custom_field.name
                 ));
                 definitions_by_gid
@@ -1375,7 +1396,7 @@ impl TaskReviewState {
 
             let tasks = client.list_tasks(&project.id, scope)?;
             debug_log(&format!(
-                "task load project={} tasks={}",
+                "task data project={} tasks={}",
                 project.id,
                 tasks.len()
             ));
@@ -1412,143 +1433,143 @@ impl TaskReviewState {
 
     fn rebuild_visible_dataset(&mut self) {
         let target_ids = self.active_target_ids().to_vec();
-        let records = self.cache.records_for_targets(&target_ids);
-        let custom_field_definitions = self.cache.custom_field_definitions();
-        self.dataset = Some(TaskDataset {
+        let records = self.loading.cache.records_for_targets(&target_ids);
+        let custom_field_definitions = self.loading.cache.custom_field_definitions();
+        self.loading.dataset = Some(TaskDataset {
             records,
             custom_field_definitions,
         });
-        if let Some(dataset) = self.dataset.as_ref() {
-            let previous = self.filter_editor.clone();
-            self.filter_editor = TaskFilterEditorState::from_dataset(dataset);
-            self.filter_editor.restore_queries(previous);
+        if let Some(dataset) = self.loading.dataset.as_ref() {
+            let previous = self.view.filter_editor.clone();
+            self.view.filter_editor = TaskFilterEditorState::from_dataset(dataset);
+            self.view.filter_editor.restore_queries(previous);
         }
         self.refresh_table();
     }
 
     pub fn move_up(&mut self) {
-        if let Some(index) = self.selected {
-            if let Some(previous) = self.table.previous_selectable_row_index(index, 1) {
-                self.selected = Some(previous);
+        if let Some(index) = self.view.selected {
+            if let Some(previous) = self.view.table.previous_selectable_row_index(index, 1) {
+                self.view.selected = Some(previous);
             }
         }
     }
 
     pub fn move_down(&mut self) {
-        if let Some(index) = self.selected {
-            if let Some(next) = self.table.next_selectable_row_index(index, 1) {
-                self.selected = Some(next);
+        if let Some(index) = self.view.selected {
+            if let Some(next) = self.view.table.next_selectable_row_index(index, 1) {
+                self.view.selected = Some(next);
             }
         } else {
-            self.selected = self.table.first_selectable_row_index();
+            self.view.selected = self.view.table.first_selectable_row_index();
         }
     }
 
     pub fn page_up(&mut self, page_size: usize) {
         let step = page_size.max(1);
-        if let Some(index) = self.selected {
-            if let Some(previous) = self.table.previous_selectable_row_index(index, step) {
-                self.selected = Some(previous);
+        if let Some(index) = self.view.selected {
+            if let Some(previous) = self.view.table.previous_selectable_row_index(index, step) {
+                self.view.selected = Some(previous);
             }
         }
     }
 
     pub fn page_down(&mut self, page_size: usize) {
         let step = page_size.max(1);
-        if let Some(index) = self.selected {
-            if let Some(next) = self.table.next_selectable_row_index(index, step) {
-                self.selected = Some(next);
+        if let Some(index) = self.view.selected {
+            if let Some(next) = self.view.table.next_selectable_row_index(index, step) {
+                self.view.selected = Some(next);
             }
         } else {
-            self.selected = self.table.first_selectable_row_index();
+            self.view.selected = self.view.table.first_selectable_row_index();
         }
     }
 
     pub fn jump_top(&mut self) {
-        self.selected = self.table.first_selectable_row_index();
+        self.view.selected = self.view.table.first_selectable_row_index();
     }
 
     pub fn jump_bottom(&mut self) {
-        self.selected = self.table.last_selectable_row_index();
+        self.view.selected = self.view.table.last_selectable_row_index();
     }
 
     pub fn move_section_up(&mut self) {
-        if let Some(index) = self.selected {
-            if let Some(previous) = self.table.previous_section_row_index(index, 1) {
-                self.selected = Some(previous);
+        if let Some(index) = self.view.selected {
+            if let Some(previous) = self.view.table.previous_section_row_index(index, 1) {
+                self.view.selected = Some(previous);
             }
         }
     }
 
     pub fn move_section_down(&mut self) {
-        if let Some(index) = self.selected {
-            if let Some(next) = self.table.next_section_row_index(index, 1) {
-                self.selected = Some(next);
+        if let Some(index) = self.view.selected {
+            if let Some(next) = self.view.table.next_section_row_index(index, 1) {
+                self.view.selected = Some(next);
             }
         } else {
-            self.selected = self.table.first_selectable_row_index();
+            self.view.selected = self.view.table.first_selectable_row_index();
         }
     }
 
     pub fn move_project_up(&mut self) {
         if let Some(parent_index) = self.visible_parent_index() {
-            self.selected = Some(parent_index);
+            self.view.selected = Some(parent_index);
             return;
         }
 
-        if let Some(index) = self.selected {
-            if let Some(previous) = self.table.previous_project_row_index(index, 1) {
-                self.selected = Some(previous);
+        if let Some(index) = self.view.selected {
+            if let Some(previous) = self.view.table.previous_project_row_index(index, 1) {
+                self.view.selected = Some(previous);
             }
         }
     }
 
     pub fn move_project_down(&mut self) {
         if let Some(parent_index) = self.visible_parent_index() {
-            self.selected = Some(parent_index);
+            self.view.selected = Some(parent_index);
             return;
         }
 
-        if let Some(index) = self.selected {
-            if let Some(next) = self.table.next_project_row_index(index, 1) {
-                self.selected = Some(next);
+        if let Some(index) = self.view.selected {
+            if let Some(next) = self.view.table.next_project_row_index(index, 1) {
+                self.view.selected = Some(next);
             }
         } else {
-            self.selected = self.table.first_selectable_row_index();
+            self.view.selected = self.view.table.first_selectable_row_index();
         }
     }
 
     pub fn toggle_completed_filter(&mut self) {
-        self.settings.filter.toggle_completed_filter();
+        self.view.settings.filter.toggle_completed_filter();
         self.refresh_table();
     }
 
     pub fn set_completed_filter(&mut self, completed: Option<bool>) {
-        self.settings.filter.completed = completed;
+        self.view.settings.filter.completed = completed;
         self.refresh_table();
     }
 
     pub fn cycle_completed_filter_without_refresh(&mut self) {
-        self.settings.filter.toggle_completed_filter();
+        self.view.settings.filter.toggle_completed_filter();
     }
 
     pub fn toggle_subtask_visibility(&mut self) {
-        self.settings.filter.toggle_subtask_visibility();
+        self.view.settings.filter.toggle_subtask_visibility();
         self.refresh_table();
     }
 
     pub fn cycle_sort_field(&mut self) {
-        self.settings.sort.cycle_primary_field();
+        self.view.settings.sort.cycle_primary_field();
         self.refresh_table();
     }
 
     pub fn toggle_project_grouping(&mut self) {
-        self.settings.sort.toggle_project_grouping();
+        self.view.settings.sort.toggle_project_grouping();
         self.refresh_table();
     }
 
     pub fn toggle_section_grouping(&mut self) {
-        self.settings.sort.toggle_section_grouping();
+        self.view.settings.sort.toggle_section_grouping();
         self.refresh_table();
     }
 
@@ -1557,7 +1578,7 @@ impl TaskReviewState {
     }
 
     pub fn apply_action(&mut self, action: &Action, page_size: usize) -> Option<crate::input::AppCommand> {
-        if self.filter_editor.visible {
+        if self.view.filter_editor.visible {
             match action {
                 Action::MoveUp => {
                     self.move_filter_up();
@@ -1577,6 +1598,26 @@ impl TaskReviewState {
                 }
                 Action::ToggleTaskFilters => {
                     self.toggle_filter_panel();
+                    return None;
+                }
+                Action::ClearSearch => {
+                    self.filter_clear_current();
+                    return None;
+                }
+                Action::CycleFilterStringMode => {
+                    self.filter_cycle_mode();
+                    return None;
+                }
+                Action::SearchFuzzy => {
+                    self.filter_set_mode(TaskFieldStringMode::Fuzzy);
+                    return None;
+                }
+                Action::SearchSubstring => {
+                    self.filter_set_mode(TaskFieldStringMode::Substring);
+                    return None;
+                }
+                Action::SearchRegex => {
+                    self.filter_set_mode(TaskFieldStringMode::Regex);
                     return None;
                 }
                 _ => {}
@@ -1665,14 +1706,14 @@ impl TaskReviewState {
     }
 
     fn refresh_table(&mut self) {
-        let Some(dataset) = self.dataset.as_ref() else {
+        let Some(dataset) = self.loading.dataset.as_ref() else {
             return;
         };
 
-        let previous_selected_index = self.selected;
+        let previous_selected_index = self.view.selected;
         let selected_gid = self
-            .selected
-            .and_then(|index| self.table.rows.get(index))
+            .view.selected
+            .and_then(|index| self.view.table.rows.get(index))
             .map(|row| row.gid.clone());
         let selected_parent_gid = selected_gid.as_deref().and_then(|gid| {
             dataset
@@ -1684,80 +1725,83 @@ impl TaskReviewState {
 
         let filtered_records = self.apply_filter_panel(&dataset.records);
 
-        self.table = TaskTableModel::from_records_with_settings(
+        self.view.table = TaskTableModel::from_records_with_settings(
             filtered_records,
             dataset.custom_field_definitions.clone(),
-            &self.settings,
+            &self.view.settings,
         );
 
-        self.selected = selected_gid
+        self.view.selected = selected_gid
             .as_deref()
-            .and_then(|gid| self.table.rows.iter().position(|row| row.gid == gid));
+            .and_then(|gid| self.view.table.rows.iter().position(|row| row.gid == gid));
 
-        if self.selected.is_none() {
-            self.selected = selected_parent_gid
+        if self.view.selected.is_none() {
+            self.view.selected = selected_parent_gid
                 .as_deref()
-                .and_then(|gid| self.table.rows.iter().position(|row| row.gid == gid));
+                .and_then(|gid| self.view.table.rows.iter().position(|row| row.gid == gid));
         }
 
-        if self.selected.is_none() {
-            self.selected = previous_selected_index.and_then(|previous_index| {
-                self.table
+        if self.view.selected.is_none() {
+            self.view.selected = previous_selected_index.and_then(|previous_index| {
+                self.view.table
                     .selectable_row_indices()
                     .into_iter()
                     .rev()
                     .find(|index| *index <= previous_index)
-                    .or_else(|| self.table.last_selectable_row_index())
+                    .or_else(|| self.view.table.last_selectable_row_index())
             });
         }
 
-        if self.selected.is_none() {
-            self.selected = self.table.first_selectable_row_index();
+        if self.view.selected.is_none() {
+            self.view.selected = self.view.table.first_selectable_row_index();
         }
 
-        self.filter_editor.selected = self
+        self.view.filter_editor.selected = self
+            .view
             .filter_editor
             .selected
-            .min(self.filter_editor.fields.len().saturating_sub(1));
-        self.filter_vertical_scroll = self
+            .min(self.view.filter_editor.fields.len().saturating_sub(1));
+        self.view.filter_vertical_scroll = self
+            .view
             .filter_vertical_scroll
-            .min(self.filter_editor.fields.len().saturating_sub(1));
+            .min(self.view.filter_editor.fields.len().saturating_sub(1));
 
         if !matches!(
-            self.status,
-            TaskReviewStatus::OutOfDate(_) | TaskReviewStatus::Error(_) | TaskReviewStatus::Loading
+            self.loading.status,
+            TaskStatus::OutOfDate(_) | TaskStatus::Error(_) | TaskStatus::Loading
         ) {
-            self.status = if self.table.task_count() == 0 {
-                TaskReviewStatus::Empty
+            self.loading.status = if self.view.table.task_count() == 0 {
+                TaskStatus::Empty
             } else {
-                TaskReviewStatus::Ready
+                TaskStatus::Ready
             };
         }
     }
 
     fn active_target_ids(&self) -> &[String] {
-        if !self.loading_target_ids.is_empty() {
-            &self.loading_target_ids
+        if !self.loading.loading_target_ids.is_empty() {
+            &self.loading.loading_target_ids
         } else {
-            &self.loaded_target_ids
+            &self.loading.loaded_target_ids
         }
     }
 
     fn apply_filter_panel(&self, records: &[TaskRecord]) -> Vec<TaskRecord> {
         records
             .iter()
-            .filter(|record| self.filter_editor.matches(record))
+            .filter(|record| self.view.filter_editor.matches(record))
             .cloned()
             .collect()
     }
 
     fn visible_parent_index(&self) -> Option<usize> {
         let selected_gid = self
-            .selected
-            .and_then(|index| self.table.rows.get(index))
+            .view.selected
+            .and_then(|index| self.view.table.rows.get(index))
             .map(|row| row.gid.clone())?;
 
         let parent_gid = self
+            .loading
             .dataset
             .as_ref()?
             .records
@@ -1766,7 +1810,7 @@ impl TaskReviewState {
             .parent_gid
             .clone()?;
 
-        self.table.rows.iter().position(|row| row.gid == parent_gid)
+        self.view.table.rows.iter().position(|row| row.gid == parent_gid)
     }
 }
 
@@ -1888,7 +1932,7 @@ mod tests {
         domain::Project,
     };
 
-    use super::{TaskFieldFilterKind, TaskFocusMode, TaskReviewState, TaskReviewStatus};
+    use super::{TaskFieldFilterKind, TaskState, TaskStatus};
 
     fn task(
         gid: &str,
@@ -1988,17 +2032,16 @@ mod tests {
             vec![task("t1", "Ship release", "p2", "Backlog", "s2", "Later", "cf2", "Effort", "S")],
         );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
 
         state
-            .load_for_projects(
+            .load_task_dataset_for_projects(
                 &client,
                 &[Project::new("p1", "Inbox", true), Project::new("p2", "Backlog", false)],
             )
             .expect("tasks load");
 
-        assert_eq!(state.status(), &TaskReviewStatus::Ready);
-        assert_eq!(state.focus_mode(), TaskFocusMode::Projects);
+        assert_eq!(state.status(), &TaskStatus::Ready);
         assert_eq!(state.table().columns[0], "Task");
         assert!(state.table().columns.iter().any(|column| column == "Priority"));
         assert!(state.table().columns.iter().any(|column| column == "Effort"));
@@ -2029,11 +2072,10 @@ mod tests {
 
     #[test]
     fn switching_to_task_mode_makes_the_view_visible() {
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
 
-        state.toggle_focus_mode();
+        state.toggle_visible();
 
-        assert_eq!(state.focus_mode(), TaskFocusMode::Tasks);
         assert!(state.visible());
     }
 
@@ -2076,9 +2118,9 @@ mod tests {
             vec![task("t4", "Beta 1", "p2", "Beta", "s3", "Now", "cf1", "Priority", "Medium")],
         );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(
+            .load_task_dataset_for_projects(
                 &client,
                 &[Project::new("p1", "Alpha", true), Project::new("p2", "Beta", false)],
             )
@@ -2115,10 +2157,10 @@ mod tests {
                 ],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state.set_completed_filter(None);
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
         state.set_visible(true);
 
@@ -2154,11 +2196,11 @@ mod tests {
                         ..task("t2", "Closed task", "p1", "Inbox", "s1", "Today", "cf1", "Priority", "High")
                     },
                 ],
-            );
+        );
 
-        let mut state = TaskReviewState::new();
-        state.settings.filter.completed = None;
-        let dataset = TaskReviewState::build_dataset_for_projects(
+        let mut state = TaskState::new();
+        state.view.settings.filter.completed = None;
+        let dataset = TaskState::build_dataset_for_projects(
             &client,
             &[Project::new("p1", "Inbox", true)],
             TaskLoadScope::All,
@@ -2235,9 +2277,9 @@ mod tests {
                 }],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
 
         let task_rows = state
@@ -2276,9 +2318,9 @@ mod tests {
                 ],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
 
         let task_rows = state
@@ -2334,9 +2376,9 @@ mod tests {
                 }],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
 
         assert_eq!(state.selected_index(), Some(4));
@@ -2378,9 +2420,9 @@ mod tests {
                 }],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
 
         assert_eq!(state.selected_index(), Some(4));
@@ -2426,9 +2468,9 @@ mod tests {
                 }],
             );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
 
         state.move_down();
@@ -2474,9 +2516,9 @@ mod tests {
             vec![task("t3", "Other project task", "p2", "Later", "s1", "Today", "cf1", "Priority", "Medium")],
         );
 
-        let mut state = TaskReviewState::new();
+        let mut state = TaskState::new();
         state
-            .load_for_projects(
+            .load_task_dataset_for_projects(
                 &client,
                 &[Project::new("p1", "Inbox", true), Project::new("p2", "Later", false)],
             )
@@ -2511,12 +2553,12 @@ mod tests {
                         ..task("t2", "Closed task", "p1", "Inbox", "s1", "Today", "cf1", "Priority", "High")
                     },
                 ],
-            );
+        );
 
-        let mut state = TaskReviewState::new();
-        state.settings.filter.completed = None;
+        let mut state = TaskState::new();
+        state.view.settings.filter.completed = None;
         state.begin_loading(&[Project::new("p1", "Inbox", true)]);
-        let dataset = TaskReviewState::build_dataset_for_projects(
+        let dataset = TaskState::build_dataset_for_projects(
             &client,
             &[Project::new("p1", "Inbox", true)],
             TaskLoadScope::All,
@@ -2599,8 +2641,8 @@ mod tests {
                 ],
             );
 
-        let mut state = TaskReviewState::new();
-        let dataset = TaskReviewState::build_dataset_for_projects(
+        let mut state = TaskState::new();
+        let dataset = TaskState::build_dataset_for_projects(
             &client,
             &[Project::new("p1", "Inbox", true)],
             TaskLoadScope::All,
