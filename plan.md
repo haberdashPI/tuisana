@@ -297,7 +297,6 @@ Acceptance criteria:
 - page up and page down move by page size
 - search toggles are only shown when search is active
 - selection modifiers are only shown when something is selected
-- the current search state is clearly labeled as awaiting input, not searching, entered text, and search mode
 
 ## Milestone 6: Review tasks for one or many projects
 
@@ -418,34 +417,6 @@ Acceptance criteria:
 - sorting is deterministic
 - tests cover filter and sort combinations
 
-## Milestone 8: Lazy, filter-aware task loading
-
-Goal:
-
-- avoid loading a large task set eagerly when only a small subset is needed
-- push task retrieval decisions down to the current task filters and selected projects
-
-Deliverables:
-
-- a task query model that can express the active task filters and project scope
-- Asana client support for requesting tasks using that query model
-- app logic that requests only the data needed for the current task view state
-- fallback behavior for cases where the requested query cannot be expressed lazily
-
-Implementation notes:
-
-- keep the query model explicit so the Asana client and fake backend can both implement it
-- tailor the request to the active filter set instead of always loading whole project task trees
-- preserve the existing eager path as a fallback for unsupported query combinations
-- keep lazy loading incremental and cache-aware so switching projects does not discard useful data
-
-Acceptance criteria:
-
-- the app avoids querying the full task set when the active view only needs a narrower subset
-- filter-aware task requests work through the existing client abstraction
-- unsupported query combinations fall back to the current eager behavior
-- tests cover the query model, lazy loading behavior, and fallback path
-
 ## Milestone 7.5: Refine views / binding setup
 
 Goal:
@@ -540,7 +511,35 @@ Implementation notes:
 Acceptance criteria:
 - The behavior and appearance of the application remains unchanged.
 
-## Milestone 9: Edit tasks
+## Milestone 9: Lazy, filter-aware task loading
+
+Goal:
+
+- avoid loading a large task set eagerly when only a small subset is needed
+- push task retrieval decisions down to the current task filters and selected projects
+
+Deliverables:
+
+- a task query model that can express the active task filters and project scope
+- Asana client support for requesting tasks using that query model
+- app logic that requests only the data needed for the current task view state
+- fallback behavior for cases where the requested query cannot be expressed lazily
+
+Implementation notes:
+
+- keep the query model explicit so the Asana client and fake backend can both implement it
+- tailor the request to the active filter set instead of always loading whole project task trees
+- preserve the existing eager path as a fallback for unsupported query combinations
+- keep lazy loading incremental and cache-aware so switching projects does not discard useful data
+
+Acceptance criteria:
+
+- the app avoids querying the full task set when the active view only needs a narrower subset
+- filter-aware task requests work through the existing client abstraction
+- unsupported query combinations fall back to the current eager behavior
+- tests cover the query model, lazy loading behavior, and fallback path
+
+## Milestone 10: Edit tasks
 
 Goal:
 
@@ -573,7 +572,7 @@ Acceptance criteria:
 - date updates work
 - tests cover parsing, validation, and mutation application
 
-## Milestone 10: Hardening and polish
+## Milestone 11: Hardening and polish
 
 Goal:
 
