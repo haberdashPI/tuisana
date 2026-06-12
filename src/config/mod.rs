@@ -330,8 +330,25 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("h", Mode::Project, "toggle_hidden_selected"),
         Bind::with_mode("v", Mode::Project, "toggle_hidden_group"),
         Bind::with_mode("enter", Mode::Filter, "begin_filter_edit"),
+        Bind::with_mode("esc", Mode::Filter, "set_task_mode"),
         Bind::with_mode("f", Mode::Filter, "toggle_task_filters"),
         Bind::with_mode("s", Mode::Filter, "cycle_filter_string_mode"),
+        Bind::with_mode("ctrl-l", Mode::Filter, "clear_search"),
+        Bind::with_mode("ctrl-f", Mode::Filter, "search_fuzzy"),
+        Bind::with_mode("ctrl-s", Mode::Filter, "search_substring"),
+        Bind::with_mode("ctrl-r", Mode::Filter, "search_regex"),
+        Bind::with_mode("enter", Mode::FilterEdit, "filter_done_editing"),
+        Bind::with_mode("esc", Mode::FilterEdit, "filter_cancel_editing"),
+        Bind::with_mode("ctrl-l", Mode::FilterEdit, "clear_search"),
+        Bind::with_mode("ctrl-f", Mode::FilterEdit, "search_fuzzy"),
+        Bind::with_mode("ctrl-s", Mode::FilterEdit, "search_substring"),
+        Bind::with_mode("ctrl-r", Mode::FilterEdit, "search_regex"),
+        Bind::with_mode("h", Mode::FilterEdit, "filter_move_label_left"),
+        Bind::with_mode("l", Mode::FilterEdit, "filter_move_label_right"),
+        Bind::with_mode("j", Mode::FilterEdit, "filter_cycle_label_down"),
+        Bind::with_mode("k", Mode::FilterEdit, "filter_cycle_label_up"),
+        Bind::with_mode("a", Mode::FilterEdit, "filter_add_label"),
+        Bind::with_mode("d", Mode::FilterEdit, "filter_delete_label"),
         Bind::with_mode("[", Mode::Task, "move_section_up"),
         Bind::with_mode("]", Mode::Task, "move_section_down"),
         Bind::with_mode("{", Mode::Task, "move_project_up"),
@@ -630,12 +647,48 @@ mod tests {
             Some(&Action::BeginFilterEdit)
         );
         assert_eq!(
+            keymap.action_for(&KeyBinding::Esc, Mode::Filter),
+            Some(&Action::SetTaskMode)
+        );
+        assert_eq!(
             keymap.action_for(&KeyBinding::Char('f'), Mode::Filter),
             Some(&Action::ToggleTaskFilters)
         );
         assert_eq!(
             keymap.action_for(&KeyBinding::Char('s'), Mode::Filter),
             Some(&Action::CycleFilterStringMode)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('f'), Mode::Filter),
+            Some(&Action::SearchFuzzy)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('s'), Mode::Filter),
+            Some(&Action::SearchSubstring)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('r'), Mode::Filter),
+            Some(&Action::SearchRegex)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Enter, Mode::FilterEdit),
+            Some(&Action::FilterDoneEditing)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Esc, Mode::FilterEdit),
+            Some(&Action::FilterCancelEditing)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('f'), Mode::FilterEdit),
+            Some(&Action::SearchFuzzy)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('s'), Mode::FilterEdit),
+            Some(&Action::SearchSubstring)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('r'), Mode::FilterEdit),
+            Some(&Action::SearchRegex)
         );
         assert_eq!(
             keymap.action_for(&KeyBinding::Enter, Mode::Project),
@@ -652,8 +705,18 @@ mod tests {
             keymap.action_for(&KeyBinding::Ctrl('l'), Mode::ProjectSearch),
             Some(&Action::ClearSearch)
         );
+        // ctrl-l clears the active filter in both filter modes
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('l'), Mode::Filter),
+            Some(&Action::ClearSearch)
+        );
         assert_eq!(
             keymap.action_for(&KeyBinding::Ctrl('l'), Mode::FilterEdit),
+            Some(&Action::ClearSearch)
+        );
+        // but not in project mode, where it would be unintentional
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('l'), Mode::Project),
             None
         );
     }

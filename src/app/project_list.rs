@@ -14,6 +14,7 @@ use crate::{
     domain::Project,
     error::Result,
     input::{Action, AppCommand},
+    util::fuzzy_match,
 };
 
 /// The search strategy used by the project list.
@@ -731,30 +732,6 @@ fn apply_project_visibility_config(
             project.hidden = preference.hidden;
         }
     }
-}
-
-fn fuzzy_match(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-
-    let mut needle_chars = needle.chars();
-    let mut current = needle_chars.next();
-
-    if current.is_none() {
-        return true;
-    }
-
-    for candidate in haystack.chars() {
-        if Some(candidate) == current {
-            current = needle_chars.next();
-            if current.is_none() {
-                return true;
-            }
-        }
-    }
-
-    false
 }
 
 #[cfg(test)]

@@ -89,14 +89,52 @@ hidden = true
 The `[[bind]]` section maps keyboard input to command names.
 If you omit a command from your config, the built-in default binding for that command still applies.
 
-Current commands include:
+Each binding may include an optional `mode` field to restrict it to a specific UI context.
+Available modes are `any` (default), `project`, `project_search`, `filter`, `filter_edit`, and `task`.
+
+Example:
+
+```toml
+[[bind]]
+key = "j"
+command = "move_down"
+
+[[bind]]
+key = "ctrl-j"
+mode = "filter_edit"
+command = "filter_done_editing"
+```
+
+All bindable commands:
+
+**Global (any mode)**
 
 - `quit`
 - `move_up`
 - `move_down`
-- `open`
+- `page_up`
+- `page_down`
+- `jump_top`
+- `jump_bottom`
+- `scroll_left`
+- `scroll_right`
 - `refresh`
-- `clear_search`
+- `toggle_help_details`
+- `toggle_task_view`
+- `toggle_task_mode`
+- `set_project_mode`
+- `set_filter_mode`
+- `set_task_mode`
+- `resize_top_pane_up`
+- `resize_top_pane_down`
+- `minimize_top_pane`
+- `maximize_top_pane`
+- `restore_top_pane`
+
+**Project mode**
+
+- `open`
+- `start_search`
 - `toggle_selection`
 - `select_all_visible`
 - `select_all_starred_visible`
@@ -108,78 +146,121 @@ Current commands include:
 - `toggle_starred_selected`
 - `toggle_hidden_selected`
 - `toggle_hidden_group`
-- `toggle_task_view`
-- `toggle_task_mode`
-- `set_project_mode`
-- `set_filter_mode`
-- `set_task_mode`
 - `toggle_only_selected`
-- `start_search`
 - `search_fuzzy`
 - `search_substring`
 - `search_regex`
-- `page_up`
-- `page_down`
-- `resize_window_up`
-- `resize_window_down`
-- `minimize_window`
-- `maximize_window`
-- `restore_window`
 
-Project view shortcuts include:
+**Project search mode**
+
+- `clear_search`
+
+**Filter mode**
+
+- `begin_filter_edit`
+- `toggle_task_filters`
+- `cycle_filter_string_mode`
+- `clear_search`
+- `search_fuzzy`
+- `search_substring`
+- `search_regex`
+
+**Filter edit mode**
+
+- `filter_done_editing`
+- `filter_cancel_editing`
+- `filter_move_label_left`
+- `filter_move_label_right`
+- `filter_cycle_label_up`
+- `filter_cycle_label_down`
+- `filter_add_label`
+- `filter_delete_label`
+- `clear_search`
+- `search_fuzzy`
+- `search_substring`
+- `search_regex`
+
+**Task mode**
+
+- `toggle_completed_filter`
+- `toggle_subtask_visibility`
+- `toggle_project_grouping`
+- `toggle_section_grouping`
+- `cycle_task_sort`
+- `move_section_up`
+- `move_section_down`
+- `move_project_up`
+- `move_project_down`
+
+---
+
+The top window is shared between the project list and the filter view. When the task panel is visible, the screen is split so the top window keeps the project or filter view and the task table gets the remaining space.
+
+**Global shortcuts** (active in all modes unless overridden):
 
 - `?` to toggle compact vs expanded hint display
-- `j`/`down` to move down
-- `k`/`up` to move up
+- `j`/`down` to move down, `k`/`up` to move up
 - `ctrl-u` and `ctrl-d` to page through the list
 - `home` and `end` to jump to the top or bottom
+- `left` and `right` to scroll columns
+- `t` to toggle the task panel, `m` to toggle task mode
+- `f` to switch to filter mode, `p` to switch to project mode
+- `[` and `]` to shrink or grow the top window
+- `{` to minimize the top window, `}` to maximize it, `0` to restore
+- `r` to refresh
+
+**Project view shortcuts**:
+
+- `enter` to open the selected project in Asana
 - `space` to toggle selection for the current project
 - `a` to select all visible projects
 - `i` to invert the visible selection
 - `c` to clear the selection
-- `u` to undo the last selection change
-- `ctrl-y` to redo the last selection change
+- `u` to undo the last selection change, `ctrl-y` to redo
 - `*` to toggle starred state for the current selection
 - `h` to toggle hidden state for the current selection
 - `v` to show or hide hidden projects
 - `!` to select all starred visible projects
 - `@` to select all visible non-hidden projects
-- `t` to switch to task mode
-- `f` to switch to filter mode
-- `p` to switch to project mode
-- `[` and `]` to shrink or grow the top window
-- `{` to toggle minimization of the top window
-- `}` to toggle maximization of the top window
-- `0` to restore the top window to its previous size
 - `o` to filter to selected projects only
 - `/` to start search entry
+- `ctrl-f`, `ctrl-s`, `ctrl-r` to switch search mode (fuzzy / substring / regex)
+
+**Project search** accepts ordinary typing, `backspace`, `enter`, and `esc`.
+`ctrl-l` clears the search string.
+
+**Filter panel shortcuts** (filter browse mode):
+
+- `j`/`k` to move between filter fields
+- `enter` to start editing the selected field
+- `esc` to close the panel and return to task mode
+- `f` to toggle the filter panel
+- `s` to cycle the string-match mode
 - `ctrl-l` to clear the search string
 - `ctrl-f`, `ctrl-s`, `ctrl-r` to switch search mode
 
-The top window is shared between the project list and the filter view. When the task panel is visible, the screen is split so the top window keeps the project or filter view and the task table gets the remaining space.
+**Filter field editing** (filter edit mode):
 
-Task view shortcuts include:
+- Ordinary typing to edit a text or date field
+- `backspace` to delete the last character
+- `enter` to confirm the edit and return to filter browse mode
+- `esc` to discard the edit, close the panel, and return to task mode
+- `ctrl-l`, `ctrl-f`, `ctrl-s`, `ctrl-r` as above
+
+For fields include a fixed set of labels, the edit keys navigate instead of typing:
+
+- `h`/`l` to move between the set of listed labeles
+- `j`/`k` to cycle the selected label between the possible options
+- `a` to add a label, `d` to delete the current one
+
+**Task view shortcuts**:
 
 - `c` to toggle the completed filter
 - `z` to toggle subtask visibility
-- `,` to toggle project grouping
-- `.` to toggle section grouping
+- `,` to toggle project grouping, `.` to toggle section grouping
 - `s` to cycle the task sort
 - `[` and `]` to move by section
 - `{` and `}` to move by project
-- `left` and `right` to scroll columns
-
-Search entry accepts ordinary typing, `backspace`, `enter`, and `esc`.
-The status area now shows a dedicated search line so you can see whether the view is not searching, awaiting input, or filtering by a query.
-The compact hint line always starts with `?`, so the expanded help toggle is always discoverable.
-
-Example:
-
-```toml
-[[bind]]
-key = "j"
-command = "move_down"
-```
 
 ## Running
 

@@ -511,6 +511,53 @@ Implementation notes:
 Acceptance criteria:
 - The behavior and appearance of the application remains unchanged.
 
+## Milestone 8.5: Structural cleanup
+
+Goal:
+
+- eliminate the concrete legibility problems that remain after Milestone 8's manual review
+- target four specific areas: the duplicated fuzzy-match function, the overly long filter input
+  handler, the repeated mode-transition boilerplate, and the implicit task loading state machine
+
+These are all internal refactors. The UI and test behavior must stay identical.
+
+Deliverables:
+
+- a single `fuzzy_match` function in a shared location, removing the duplicate in `task.rs`
+- `handle_filter_field_input` broken into smaller pieces so neither editing-mode nor
+  non-editing-mode logic exceeds ~40 lines
+- the five `set_*_mode` helpers collapsed using a shared setup step so the restore-pane and
+  end-search boilerplate is written once
+- `TaskLoadingState` refactored into an explicit state-machine enum so valid and invalid state
+  combinations are visible at the type level
+
+Implementation notes:
+
+- place `fuzzy_match` where both callers can reach it without a circular dependency; a small
+  `util` module at the crate root is a natural home
+- when splitting `handle_filter_field_input`, keep the two halves (editing vs. browsing) as
+  separate named functions; do not introduce a new struct or trait unless a simpler split still
+  leaves functions too long
+- the guard `matches!(selected_kind, Some(TaskFieldFilterKind::Labels))` appears six times in
+  a row inside the editing branch; extract it into a single check at the top of that branch
+- the shared setup for mode transitions (restore pane if minimized, end project search if
+  active) should live in one `fn prepare_mode_switch(&mut self)` called by each `set_*_mode`
+  helper; keep per-mode differences in each helper
+- for `TaskLoadingState`, a minimal enum with variants `Idle`, `Loading { … }`, and `Ready { … }`
+  is sufficient; `OutOfDate` and `Error` can be added later if they simplify other code
+- do not reorganize the public API of `TaskState` or `App` beyond what is required by the
+  structural changes above; API renaming is out of scope for this milestone
+
+Acceptance criteria:
+
+- `fuzzy_match` is defined once; both the project-list and task filter call the same function
+- `handle_filter_field_input` and each sub-function it calls are ≤ 60 lines each
+- the six repeated label-kind guards in the editing branch are replaced by a single early exit
+- `prepare_mode_switch` (or equivalent) is called instead of repeated inline boilerplate in
+  each `set_*_mode` helper
+- `TaskLoadingState` is an enum; the compiler rejects states that mix loading and ready fields
+- all existing tests pass unchanged
+
 ## Milestone 9: Lazy, filter-aware task loading
 
 Goal:

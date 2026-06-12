@@ -135,6 +135,16 @@ pub enum Action {
     ToggleProjectGrouping,
     ToggleSectionGrouping,
     CycleTaskSort,
+    /// Commit the current filter field edit and return to filter-browse mode.
+    FilterDoneEditing,
+    /// Discard the current filter field edit, close the filter panel, and go to task mode.
+    FilterCancelEditing,
+    FilterMoveLabelLeft,
+    FilterMoveLabelRight,
+    FilterCycleLabelUp,
+    FilterCycleLabelDown,
+    FilterAddLabel,
+    FilterDeleteLabel,
 }
 
 impl Action {
@@ -192,6 +202,14 @@ impl Action {
             "toggle_project_grouping" => Ok(Self::ToggleProjectGrouping),
             "toggle_section_grouping" => Ok(Self::ToggleSectionGrouping),
             "cycle_task_sort" => Ok(Self::CycleTaskSort),
+            "filter_done_editing" => Ok(Self::FilterDoneEditing),
+            "filter_cancel_editing" => Ok(Self::FilterCancelEditing),
+            "filter_move_label_left" => Ok(Self::FilterMoveLabelLeft),
+            "filter_move_label_right" => Ok(Self::FilterMoveLabelRight),
+            "filter_cycle_label_up" => Ok(Self::FilterCycleLabelUp),
+            "filter_cycle_label_down" => Ok(Self::FilterCycleLabelDown),
+            "filter_add_label" => Ok(Self::FilterAddLabel),
+            "filter_delete_label" => Ok(Self::FilterDeleteLabel),
             other => Err(Error::Backend(format!("unsupported command: {other}"))),
         }
     }
@@ -214,6 +232,23 @@ impl Action {
                 | Action::ToggleProjectGrouping
                 | Action::ToggleSectionGrouping
                 | Action::CycleTaskSort
+        )
+    }
+
+    /// Returns `true` for label-navigation actions used in filter-edit mode.
+    ///
+    /// These are context-sensitive: they navigate label columns when a labels field
+    /// is selected, but fall back to pushing the character when on a text field.
+    /// They must be routed to `handle_filter_field_input` rather than `handle_action`.
+    pub fn is_label_filter_action(&self) -> bool {
+        matches!(
+            self,
+            Action::FilterMoveLabelLeft
+                | Action::FilterMoveLabelRight
+                | Action::FilterCycleLabelUp
+                | Action::FilterCycleLabelDown
+                | Action::FilterAddLabel
+                | Action::FilterDeleteLabel
         )
     }
 
@@ -291,6 +326,14 @@ impl Display for Action {
             Action::ToggleProjectGrouping => "toggle_project_grouping",
             Action::ToggleSectionGrouping => "toggle_section_grouping",
             Action::CycleTaskSort => "cycle_task_sort",
+            Action::FilterDoneEditing => "filter_done_editing",
+            Action::FilterCancelEditing => "filter_cancel_editing",
+            Action::FilterMoveLabelLeft => "filter_move_label_left",
+            Action::FilterMoveLabelRight => "filter_move_label_right",
+            Action::FilterCycleLabelUp => "filter_cycle_label_up",
+            Action::FilterCycleLabelDown => "filter_cycle_label_down",
+            Action::FilterAddLabel => "filter_add_label",
+            Action::FilterDeleteLabel => "filter_delete_label",
         };
         f.write_str(name)
     }

@@ -183,13 +183,19 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         &self.panel_size
     }
 
-    fn set_project_mode(&mut self) {
+    /// Shared setup for mode transitions that use the top pane: restores the
+    /// pane if it was minimized and closes any active project search.
+    fn prepare_mode_switch(&mut self) {
         if self.panel_size.is_minimized() {
             self.restore_top_pane();
         }
         if self.projects.search_active() {
             self.projects.end_search();
         }
+    }
+
+    fn set_project_mode(&mut self) {
+        self.prepare_mode_switch();
         if self.tasks.filter_panel_visible() {
             self.tasks.toggle_filter_panel();
         }
@@ -207,12 +213,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     }
 
     fn set_filter_mode(&mut self) {
-        if self.panel_size.is_minimized() {
-            self.restore_top_pane();
-        }
-        if self.projects.search_active() {
-            self.projects.end_search();
-        }
+        self.prepare_mode_switch();
         self.mode = Mode::Filter;
         self.tasks.set_visible(true);
         if !self.tasks.filter_panel_visible() {
@@ -224,12 +225,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     }
 
     fn set_filter_edit_mode(&mut self) {
-        if self.panel_size.is_minimized() {
-            self.restore_top_pane();
-        }
-        if self.projects.search_active() {
-            self.projects.end_search();
-        }
+        self.prepare_mode_switch();
         self.mode = Mode::FilterEdit;
         self.tasks.set_visible(true);
         if !self.tasks.filter_panel_visible() {
@@ -308,213 +304,48 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         }
     }
 
+    /// Handle text input when the filter panel is in edit mode.
+    ///
+    /// `action` is the label-navigation action the keymap resolved for this event,
+    /// if any. On a labels field the action is applied; on any other field the key
+    /// falls back to pushing its character. This lets label-navigation bindings be
+    /// fully configurable while still typing normally on text and date fields.
     fn handle_filter_field_input(
         &mut self,
         event: crossterm::event::KeyEvent,
-        page_size: usize,
+        action: Option<&Action>,
     ) -> Result<bool> {
+        if !self.tasks.filter_panel_editing() {
+            return Ok(false);
+        }
+
         use crossterm::event::{KeyCode, KeyModifiers};
+        use crate::app::task::TaskFieldFilterKind;
 
-        let editing = self.tasks.filter_panel_editing();
-        let is_plain_char = !event
-            .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-        let selected_kind = self.tasks.filter_selected_kind();
+        let is_plain_char = !event.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        let is_labels = matches!(self.tasks.filter_selected_kind(), Some(TaskFieldFilterKind::Labels));
 
-        if editing {
-            match event.code {
-                KeyCode::Esc | KeyCode::Enter => {
-                    self.tasks.filter_edit_done();
-                    if matches!(event.code, KeyCode::Esc) {
-                        self.tasks.toggle_filter_panel();
-                        self.set_task_mode();
-                    } else {
-                        self.set_filter_mode();
-                    }
-                    return Ok(true);
-                }
-                KeyCode::Backspace => {
-                    self.tasks.filter_pop_char();
-                    return Ok(true);
-                }
-                KeyCode::Char('h')
-                    if is_plain_char
-                        && matches!(
-                            selected_kind,
-                            Some(crate::app::task::TaskFieldFilterKind::Labels)
-                        ) =>
-                {
-                    self.tasks.filter_move_label_left();
-                    return Ok(true);
-                }
-                KeyCode::Char('l')
-                    if is_plain_char
-                        && matches!(
-                            selected_kind,
-                            Some(crate::app::task::TaskFieldFilterKind::Labels)
-                        ) =>
-                {
-                    self.tasks.filter_move_label_right();
-                    return Ok(true);
-                }
-                KeyCode::Char('j')
-                    if is_plain_char
-                        && matches!(
-                            selected_kind,
-                            Some(crate::app::task::TaskFieldFilterKind::Labels)
-                        ) =>
-                {
-                    self.tasks.filter_cycle_label_value(1);
-                    return Ok(true);
-                }
-                KeyCode::Char('k')
-                    if is_plain_char
-                        && matches!(
-                            selected_kind,
-                            Some(crate::app::task::TaskFieldFilterKind::Labels)
-                        ) =>
-                {
-                    self.tasks.filter_cycle_label_value(-1);
-                    return Ok(true);
-                }
-                KeyCode::Char('a')
-                    if is_plain_char
-                        && matches!(
-                            selected_kind,
-                            Some(crate::app::task::TaskFieldFilterKind::Labels)
-                        ) =>
-                {
-                    self.tasks.filter_add_label();
-                    return Ok(true);
-                }
-                KeyCode::Char('d')
-                    if is_plain_char
-                        && matches!(
-                            selected_kind,
-                            Some(crate::app::task::TaskFieldFilterKind::Labels)
-                        ) =>
-                {
-                    self.tasks.filter_delete_label();
-                    return Ok(true);
-                }
-                KeyCode::Char('l')
-                    if event
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    self.tasks.filter_clear_current();
-                    return Ok(true);
-                }
-                KeyCode::Char('f')
-                    if event
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    self.tasks
-                        .filter_set_mode(crate::app::task::TaskFieldStringMode::Fuzzy);
-                    return Ok(true);
-                }
-                KeyCode::Char('s')
-                    if event
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    self.tasks
-                        .filter_set_mode(crate::app::task::TaskFieldStringMode::Substring);
-                    return Ok(true);
-                }
-                KeyCode::Char('r')
-                    if event
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    self.tasks
-                        .filter_set_mode(crate::app::task::TaskFieldStringMode::Regex);
-                    return Ok(true);
-                }
-                KeyCode::Char(c) if is_plain_char => {
-                    self.tasks.filter_push_char(c);
-                    return Ok(true);
-                }
+        if let KeyCode::Backspace = event.code {
+            self.tasks.filter_pop_char();
+            return Ok(true);
+        }
+
+        if is_labels {
+            match action {
+                Some(Action::FilterMoveLabelLeft) => { self.tasks.filter_move_label_left(); return Ok(true); }
+                Some(Action::FilterMoveLabelRight) => { self.tasks.filter_move_label_right(); return Ok(true); }
+                Some(Action::FilterCycleLabelDown) => { self.tasks.filter_cycle_label_value(1); return Ok(true); }
+                Some(Action::FilterCycleLabelUp) => { self.tasks.filter_cycle_label_value(-1); return Ok(true); }
+                Some(Action::FilterAddLabel) => { self.tasks.filter_add_label(); return Ok(true); }
+                Some(Action::FilterDeleteLabel) => { self.tasks.filter_delete_label(); return Ok(true); }
                 _ => {}
             }
-        } else {
-            match event.code {
-                KeyCode::Esc => {
-                    self.tasks.toggle_filter_panel();
-                    self.set_task_mode();
-                    return Ok(true);
-                }
-                KeyCode::Enter => {
-                    self.tasks.filter_edit_begin();
-                    self.set_filter_edit_mode();
-                    return Ok(true);
-                }
-                KeyCode::Up | KeyCode::Char('k') if is_plain_char => {
-                    self.tasks.move_filter_up();
-                    return Ok(true);
-                }
-                KeyCode::Down | KeyCode::Char('j') if is_plain_char => {
-                    self.tasks.move_filter_down();
-                    return Ok(true);
-                }
-                KeyCode::PageUp | KeyCode::Char('u')
-                    if event.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
-                    self.tasks.filter_page_up(page_size);
-                    return Ok(true);
-                }
-                KeyCode::PageDown | KeyCode::Char('d')
-                    if event.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
-                    self.tasks.filter_page_down(page_size);
-                    return Ok(true);
-                }
-                KeyCode::Char('f') if is_plain_char => {
-                    self.tasks.toggle_filter_panel();
-                    self.set_task_mode();
-                    return Ok(true);
-                }
-                KeyCode::Char('s') if is_plain_char => {
-                    self.tasks.filter_cycle_mode();
-                    return Ok(true);
-                }
-                KeyCode::Char('l')
-                    if event
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    self.tasks.filter_clear_current();
-                    return Ok(true);
-                }
-                KeyCode::Char('f')
-                    if event
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    self.tasks
-                        .filter_set_mode(crate::app::task::TaskFieldStringMode::Fuzzy);
-                    return Ok(true);
-                }
-                KeyCode::Char('s')
-                    if event
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    self.tasks
-                        .filter_set_mode(crate::app::task::TaskFieldStringMode::Substring);
-                    return Ok(true);
-                }
-                KeyCode::Char('r')
-                    if event
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    self.tasks
-                        .filter_set_mode(crate::app::task::TaskFieldStringMode::Regex);
-                    return Ok(true);
-                }
-                _ => {}
+        }
+
+        if is_plain_char {
+            if let KeyCode::Char(c) = event.code {
+                self.tasks.filter_push_char(c);
+                return Ok(true);
             }
         }
 
@@ -576,6 +407,17 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             Action::BeginFilterEdit => {
                 self.tasks.filter_edit_begin();
                 self.set_filter_edit_mode();
+                return Ok(None);
+            }
+            Action::FilterDoneEditing => {
+                self.tasks.filter_edit_done();
+                self.set_filter_mode();
+                return Ok(None);
+            }
+            Action::FilterCancelEditing => {
+                self.tasks.filter_edit_done();
+                self.tasks.toggle_filter_panel();
+                self.set_task_mode();
                 return Ok(None);
             }
             Action::SetProjectMode => {
@@ -733,13 +575,19 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             debug_log(&format!("resolved binding: {binding:?}"));
             if let Some(action) = keymap.action_for(&binding, self.mode).cloned() {
                 debug_log(&format!("resolved action: {action}"));
+                if action.is_label_filter_action() {
+                    // Context-sensitive: navigate labels when a labels field is selected,
+                    // otherwise fall back to pushing the character.
+                    self.handle_filter_field_input(event, Some(&action))?;
+                    return Ok(None);
+                }
                 return self.handle_action(&action, page_size);
             }
             debug_log("no action for binding");
         }
 
         if self.tasks.filter_panel_visible() {
-            if self.handle_filter_field_input(event, page_size)? {
+            if self.handle_filter_field_input(event, None)? {
                 return Ok(None);
             }
         }

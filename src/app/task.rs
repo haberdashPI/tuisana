@@ -20,6 +20,7 @@ use crate::{
     },
     error::Result,
     input::Action,
+    util::fuzzy_match,
 };
 
 const HORIZONTAL_SCROLL_STEP: usize = 8;
@@ -64,15 +65,52 @@ struct TaskViewState {
     help_details_visible: bool,
 }
 
-/// Task loading state: the cache, dataset, and in-flight load metadata.
+/// Whether a task-data fetch is currently in flight.
+///
+/// Grouping these fields in an enum ensures that in-flight metadata
+/// (spinner start time, target names/IDs) cannot coexist with the Idle
+/// state, making invalid combinations unrepresentable.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum LoadProgress {
+    #[default]
+    Idle,
+    Active {
+        started_at: Instant,
+        target_names: Vec<String>,
+        target_ids: Vec<String>,
+    },
+}
+
+impl LoadProgress {
+    fn started_at(&self) -> Option<Instant> {
+        match self {
+            Self::Active { started_at, .. } => Some(*started_at),
+            Self::Idle => None,
+        }
+    }
+
+    fn target_names(&self) -> &[String] {
+        match self {
+            Self::Active { target_names, .. } => target_names,
+            Self::Idle => &[],
+        }
+    }
+
+    fn target_ids(&self) -> &[String] {
+        match self {
+            Self::Active { target_ids, .. } => target_ids,
+            Self::Idle => &[],
+        }
+    }
+}
+
+/// Task loading state: the cache, dataset, in-flight progress, and scope tracking.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct TaskLoadingState {
     status: TaskStatus,
+    progress: LoadProgress,
     dataset: Option<TaskDataset>,
     cache: TaskCache,
-    loading_started_at: Option<Instant>,
-    loading_targets: Vec<String>,
-    loading_target_ids: Vec<String>,
     loaded_target_ids: Vec<String>,
     loaded_project_scopes: HashMap<String, TaskLoadScope>,
 }
@@ -591,7 +629,7 @@ impl TaskFilterFieldState {
                 .to_ascii_lowercase();
                 let query = self.query.to_ascii_lowercase();
                 match self.string_mode {
-                    TaskFieldStringMode::Fuzzy => task_fuzzy_match(&haystack, &query),
+                    TaskFieldStringMode::Fuzzy => fuzzy_match(&haystack, &query),
                     TaskFieldStringMode::Substring => haystack.contains(&query),
                     TaskFieldStringMode::Regex => regex::RegexBuilder::new(&self.query)
                         .case_insensitive(true)
@@ -838,30 +876,6 @@ fn parse_date_token(token: &str, today: DateParts) -> Option<String> {
     Some(format!("{:04}-{:02}-{:02}", parts.year, parts.month, parts.day))
 }
 
-fn task_fuzzy_match(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-
-    let mut needle_chars = needle.chars();
-    let mut current = needle_chars.next();
-
-    if current.is_none() {
-        return true;
-    }
-
-    for candidate in haystack.chars() {
-        if Some(candidate) == current {
-            current = needle_chars.next();
-            if current.is_none() {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
 impl TaskState {
     pub fn new() -> Self {
         Self::default()
@@ -893,9 +907,11 @@ impl TaskState {
     /// Mark the task pane as loading data for the given projects.
     pub fn begin_loading(&mut self, projects: &[Project]) {
         self.loading.status = TaskStatus::Loading;
-        self.loading.loading_started_at = Some(Instant::now());
-        self.loading.loading_targets = projects.iter().map(|project| project.name.clone()).collect();
-        self.loading.loading_target_ids = projects.iter().map(|project| project.id.clone()).collect();
+        self.loading.progress = LoadProgress::Active {
+            started_at: Instant::now(),
+            target_names: projects.iter().map(|project| project.name.clone()).collect(),
+            target_ids: projects.iter().map(|project| project.id.clone()).collect(),
+        };
     }
 
     /// Replace the visible table with a fully built table model.
@@ -904,15 +920,13 @@ impl TaskState {
         self.view.table = table;
         self.view.horizontal_scroll = 0;
         self.view.selected = self.view.table.first_selectable_row_index();
-        self.loading.loaded_target_ids = self.loading.loading_target_ids.clone();
+        self.loading.loaded_target_ids = self.loading.progress.target_ids().to_vec();
         self.loading.status = if self.view.table.task_count() == 0 {
             TaskStatus::Empty
         } else {
             TaskStatus::Ready
         };
-        self.loading.loading_started_at = None;
-        self.loading.loading_targets.clear();
-        self.loading.loading_target_ids.clear();
+        self.loading.progress = LoadProgress::Idle;
         self.view.task_vertical_scroll = 0;
     }
 
@@ -922,9 +936,9 @@ impl TaskState {
         self.loading.cache.merge_dataset(dataset.clone());
         self.rebuild_visible_dataset();
         let scope = self.desired_load_scope();
-        for project_id in &self.loading.loading_target_ids {
+        for project_id in self.loading.progress.target_ids().to_vec() {
             self.loading.loaded_project_scopes
-                .insert(project_id.clone(), scope);
+                .insert(project_id, scope);
         }
         self.finish_loading_targets();
     }
@@ -950,12 +964,10 @@ impl TaskState {
 
     /// Clear the loading state once all requested projects have been merged.
     pub(crate) fn finish_loading_targets(&mut self) {
-        let loaded_target_ids = self.loading.loading_target_ids.clone();
+        let loaded_target_ids = self.loading.progress.target_ids().to_vec();
         self.view.horizontal_scroll = 0;
         self.view.selected = self.view.table.first_selectable_row_index();
-        self.loading.loading_started_at = None;
-        self.loading.loading_targets.clear();
-        self.loading.loading_target_ids.clear();
+        self.loading.progress = LoadProgress::Idle;
         self.view.task_vertical_scroll = 0;
         self.loading.loaded_target_ids = loaded_target_ids;
         self.loading.status = TaskStatus::Idle;
@@ -1208,9 +1220,7 @@ impl TaskState {
         }
 
         self.loading.status = TaskStatus::OutOfDate(message.into());
-        self.loading.loading_started_at = None;
-        self.loading.loading_targets.clear();
-        self.loading.loading_target_ids.clear();
+        self.loading.progress = LoadProgress::Idle;
         self.view.task_vertical_scroll = 0;
     }
 
@@ -1219,19 +1229,17 @@ impl TaskState {
         self.view.selected = None;
         self.view.table = TaskTableModel::empty();
         self.view.horizontal_scroll = 0;
-        self.loading.loading_started_at = None;
-        self.loading.loading_targets.clear();
-        self.loading.loading_target_ids.clear();
+        self.loading.progress = LoadProgress::Idle;
         self.loading.loaded_target_ids.clear();
         self.view.task_vertical_scroll = 0;
     }
 
     pub fn loading_started_at(&self) -> Option<Instant> {
-        self.loading.loading_started_at
+        self.loading.progress.started_at()
     }
 
     pub fn loading_targets(&self) -> &[String] {
-        &self.loading.loading_targets
+        self.loading.progress.target_names()
     }
 
     pub fn loaded_target_ids(&self) -> &[String] {
@@ -1242,7 +1250,8 @@ impl TaskState {
         const FRAMES: [&str; 4] = ["|", "/", "-", "\\"];
         let elapsed = self
             .loading
-            .loading_started_at
+            .progress
+            .started_at()
             .map(|started| started.elapsed().as_millis())
             .unwrap_or_default();
         let index = ((elapsed / 120) as usize) % FRAMES.len();
@@ -1326,8 +1335,7 @@ impl TaskState {
         let scope = self.desired_load_scope();
         let dataset = Self::build_dataset_for_projects(client, projects, scope)?;
         self.loading.cache.merge_dataset(dataset);
-        self.loading.loading_target_ids = projects.iter().map(|project| project.id.clone()).collect();
-        self.loading.loaded_target_ids = self.loading.loading_target_ids.clone();
+        self.loading.loaded_target_ids = projects.iter().map(|project| project.id.clone()).collect();
         for project in projects {
             self.loading.loaded_project_scopes
                 .insert(project.id.clone(), scope);
@@ -1779,8 +1787,9 @@ impl TaskState {
     }
 
     fn active_target_ids(&self) -> &[String] {
-        if !self.loading.loading_target_ids.is_empty() {
-            &self.loading.loading_target_ids
+        let in_flight = self.loading.progress.target_ids();
+        if !in_flight.is_empty() {
+            in_flight
         } else {
             &self.loading.loaded_target_ids
         }
