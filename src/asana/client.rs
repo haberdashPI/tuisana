@@ -11,7 +11,7 @@ use crate::{
         dto::{
             CollectionResponse, ProjectCustomFieldSettingDto, ProjectDto, SectionDto, TaskDto,
         },
-        AsanaClient, TaskLoadScope,
+        AsanaClient, TaskLoadScope, TaskQuery,
     },
     config::AuthConfig,
     domain::Project,
@@ -121,8 +121,7 @@ impl<T: Transport> HttpAsanaClient<T> {
 
     fn list_tasks_page(
         &self,
-        project_gid: &str,
-        scope: TaskLoadScope,
+        task_query: &TaskQuery,
         offset: Option<&str>,
     ) -> Result<CollectionResponse<TaskDto>> {
         let mut query = vec![
@@ -133,15 +132,21 @@ impl<T: Transport> HttpAsanaClient<T> {
             ),
             ("limit", "100".to_string()),
         ];
-        if matches!(scope, TaskLoadScope::OpenOnly) {
+        if matches!(task_query.scope, TaskLoadScope::OpenOnly) {
             query.push(("completed_since", "now".to_string()));
+        }
+        if let Some(date) = &task_query.due_after {
+            query.push(("due_on.after", date.clone()));
+        }
+        if let Some(date) = &task_query.due_before {
+            query.push(("due_on.before", date.clone()));
         }
         if let Some(offset) = offset {
             query.push(("offset", offset.to_string()));
         }
 
         let json = self.transport.get_json(
-            &format!("projects/{project_gid}/tasks"),
+            &format!("projects/{}/tasks", task_query.project_gid),
             &query,
             &self.personal_access_token,
         )?;
@@ -251,12 +256,12 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
         Ok(projects)
     }
 
-    fn list_tasks(&self, project_gid: &str, scope: TaskLoadScope) -> Result<Vec<TaskDto>> {
+    fn list_tasks(&self, query: &TaskQuery) -> Result<Vec<TaskDto>> {
         let mut tasks = Vec::new();
         let mut offset: Option<String> = None;
 
         loop {
-            let page = self.list_tasks_page(project_gid, scope, offset.as_deref())?;
+            let page = self.list_tasks_page(query, offset.as_deref())?;
             tasks.extend(page.data);
 
             match page.next_page {

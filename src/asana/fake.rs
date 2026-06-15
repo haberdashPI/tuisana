@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::{
     asana::{
         dto::{ProjectCustomFieldSettingDto, SectionDto, TaskDto},
-        AsanaClient, TaskLoadScope,
+        AsanaClient, TaskLoadScope, TaskQuery,
     },
     domain::Project,
     error::Result,
@@ -70,15 +70,40 @@ impl AsanaClient for FakeAsanaClient {
         Ok(self.projects.clone())
     }
 
-    fn list_tasks(&self, project_gid: &str, scope: TaskLoadScope) -> Result<Vec<TaskDto>> {
+    fn list_tasks(&self, query: &TaskQuery) -> Result<Vec<TaskDto>> {
         Ok(self
             .tasks_by_project
-            .get(project_gid)
+            .get(&query.project_gid)
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .filter(|task| matches!(scope, TaskLoadScope::All) || !task.completed)
-            .into_iter()
+            .filter(|task| matches!(query.scope, TaskLoadScope::All) || !task.completed)
+            .filter(|task| {
+                if let Some(after) = &query.due_after {
+                    match &task.due_on {
+                        None => return false,
+                        Some(due) => {
+                            if due < after {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                true
+            })
+            .filter(|task| {
+                if let Some(before) = &query.due_before {
+                    match &task.due_on {
+                        None => return false,
+                        Some(due) => {
+                            if due > before {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                true
+            })
             .map(|mut task| {
                 if let Some(subtasks) = self.subtasks_by_task.get(&task.gid) {
                     task.num_subtasks = subtasks.len();

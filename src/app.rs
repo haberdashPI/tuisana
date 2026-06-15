@@ -1,5 +1,5 @@
 use crate::{
-    asana::{AsanaClient, TaskLoadScope},
+    asana::{AsanaClient, TaskQuery},
     config::{Config, Mode},
     error::Result,
     input::{Action, AppCommand, KeyBinding, KeyMap},
@@ -140,7 +140,7 @@ pub struct App<C> {
 struct TaskDataMessage {
     generation: u64,
     project_id: Option<String>,
-    scope: TaskLoadScope,
+    query: TaskQuery,
     result: Result<crate::app::task::TaskDataset>,
     done: bool,
 }
@@ -264,11 +264,14 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     }
 
     fn task_data_needs_refresh(&self) -> bool {
+        let target_ids = self.task_target_project_ids();
+        let query_template = if target_ids.is_empty() {
+            self.tasks.desired_task_query("")
+        } else {
+            self.tasks.desired_task_query(&target_ids[0])
+        };
         self.task_data_receiver.is_none()
-            && !self.tasks.can_serve_scope_for_targets(
-                &self.task_target_project_ids(),
-                self.tasks.desired_load_scope(),
-            )
+            && !self.tasks.can_serve_query_for_targets(&target_ids, &query_template)
     }
 
     fn ensure_task_data(&mut self) {
@@ -412,6 +415,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             Action::FilterDoneEditing => {
                 self.tasks.filter_edit_done();
                 self.set_filter_mode();
+                self.ensure_task_data();
                 return Ok(None);
             }
             Action::FilterCancelEditing => {
@@ -471,17 +475,6 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 self.restore_top_pane();
                 return Ok(None);
             }
-            Action::ToggleTaskView => {
-                self.tasks.toggle_visible();
-                if !self.tasks.visible() {
-                    self.set_project_mode();
-                }
-                debug_log(&format!(
-                    "toggle_task_view -> visible={}",
-                    self.tasks.visible(),
-                ));
-                return Ok(None);
-            }
             Action::ToggleTaskFilters => {
                 if self.tasks.filter_panel_visible() {
                     self.tasks.toggle_filter_panel();
@@ -504,11 +497,14 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 }
             }
             Action::ToggleCompletedFilter if self.tasks.visible() => {
+                let target_ids = self.task_target_project_ids();
                 self.tasks.cycle_completed_filter_without_refresh();
-                if self.tasks.can_serve_scope_for_targets(
-                    &self.task_target_project_ids(),
-                    self.tasks.desired_load_scope(),
-                ) {
+                let query_template = if target_ids.is_empty() {
+                    self.tasks.desired_task_query("")
+                } else {
+                    self.tasks.desired_task_query(&target_ids[0])
+                };
+                if self.tasks.can_serve_query_for_targets(&target_ids, &query_template) {
                     if self.task_data_receiver.is_some() {
                         self.task_data_generation = self.task_data_generation.wrapping_add(1);
                         self.task_data_receiver = None;
@@ -625,7 +621,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                         match message.result {
                             Ok(dataset) => {
                                 self.tasks
-                                    .ingest_loaded_project(project_id, message.scope, dataset)
+                                    .ingest_loaded_project(project_id, message.query.clone(), dataset)
                             }
                             Err(err) => {
                                 debug_log(&format!("task data error: {err}"));
@@ -674,12 +670,16 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
 
     fn start_task_data_fetch(&mut self) {
         let targets = self.task_target_projects();
-        let scope = self.tasks.desired_load_scope();
-        let projects_to_load = self.tasks.projects_requiring_load(&targets, scope);
+        let query_template = if targets.is_empty() {
+            self.tasks.desired_task_query("")
+        } else {
+            self.tasks.desired_task_query(&targets[0].id)
+        };
+        let projects_to_load = self.tasks.projects_requiring_load(&targets, &query_template);
         debug_log(&format!(
             "start_task_data_fetch: visible={} scope={:?} targets={} data={}",
             self.tasks.visible(),
-            scope,
+            query_template.scope,
             targets
                 .iter()
                 .map(|project| project.id.as_str())
@@ -714,15 +714,16 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
 
         thread::spawn(move || {
             for project in projects_to_load {
+                let query = TaskQuery { project_gid: project.id.clone(), ..query_template.clone() };
                 let result = crate::app::task::TaskState::build_dataset_for_projects(
                     &client,
                     &[project.clone()],
-                    scope,
+                    &query,
                 );
                 let _ = sender.send(TaskDataMessage {
                     generation,
                     project_id: Some(project.id.clone()),
-                    scope,
+                    query: query.clone(),
                     result,
                     done: false,
                 });
@@ -731,7 +732,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             let _ = sender.send(TaskDataMessage {
                 generation,
                 project_id: None,
-                scope,
+                query: query_template,
                 result: Ok(crate::app::task::TaskDataset::default()),
                 done: true,
             });
@@ -848,7 +849,7 @@ mod tests {
         );
         assert_eq!(
             keymap.action_for(&KeyBinding::Char('t'), Mode::Project),
-            Some(&Action::ToggleTaskView)
+            Some(&Action::SetTaskMode)
         );
         assert_eq!(
             keymap.action_for(&KeyBinding::Char('f'), Mode::Project),
@@ -922,6 +923,19 @@ mod tests {
             .expect("switch to filter mode");
         assert!(app.panel_size().is_normal());
         assert_eq!(app.mode(), Mode::Filter);
+    }
+
+    #[test]
+    fn pressing_t_in_project_mode_switches_to_task_mode() {
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]);
+        let mut app = App::new(Config::default(), client);
+        assert_eq!(app.mode(), Mode::Project);
+
+        app.handle_action(&Action::SetTaskMode, 10)
+            .expect("set task mode");
+
+        assert_eq!(app.mode(), Mode::Task);
+        assert!(app.tasks.visible());
     }
 
     #[test]

@@ -307,7 +307,7 @@ fn default_bindings() -> Vec<Bind> {
         Bind::new("right", "scroll_right"),
         Bind::new("f", "set_filter_mode"),
         Bind::new("p", "set_project_mode"),
-        Bind::new("t", "toggle_task_view"),
+        Bind::new("t", "set_task_mode"),
         Bind::new("m", "toggle_task_mode"),
         Bind::new("[", "resize_top_pane_down"),
         Bind::new("]", "resize_top_pane_up"),
@@ -621,7 +621,7 @@ mod tests {
         );
         assert_eq!(
             keymap.action_for(&KeyBinding::Char('t'), Mode::Project),
-            Some(&Action::ToggleTaskView)
+            Some(&Action::SetTaskMode)
         );
         assert_eq!(
             keymap.action_for(&KeyBinding::Char('m'), Mode::Project),

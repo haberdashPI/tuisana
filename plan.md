@@ -560,6 +560,8 @@ Acceptance criteria:
 
 ## Milestone 9: Lazy, filter-aware task loading
 
+UNDER REVIEW!!
+
 Goal:
 
 - avoid loading a large task set eagerly when only a small subset is needed

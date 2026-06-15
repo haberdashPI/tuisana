@@ -737,7 +737,7 @@ fn apply_project_visibility_config(
 #[cfg(test)]
 mod tests {
     use crate::{
-        asana::{fake::FakeAsanaClient, AsanaClient, TaskLoadScope},
+        asana::{fake::FakeAsanaClient, AsanaClient, TaskLoadScope, TaskQuery},
         config::ProjectVisibilityConfig,
         domain::Project,
         error::{Error, Result},
@@ -755,8 +755,7 @@ mod tests {
 
         fn list_tasks(
             &self,
-            _project_gid: &str,
-            _scope: TaskLoadScope,
+            _query: &TaskQuery,
         ) -> Result<Vec<crate::asana::dto::TaskDto>> {
             Err(Error::Backend("backend unavailable".to_string()))
         }
