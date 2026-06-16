@@ -1,10 +1,27 @@
 # Tuisana
 
-Tuisana is a terminal UI for reviewing Asana projects and tasks.
+Tuisana is a terminal UI for reviewing Asana projects and tasks the way "power users" like me like to work with apps: with keyboard shortcuts for everything.
+
+> [!WARNING]
+>
+> This is a early-stage project largely developed with/by AI. I have personally reviewed all
+> of these files, but all code was written by Codex or Claude Code. Documentation is not yet
+> optimized for users at this point. This is not a project I have the time/resources to
+> manually develop by hand that I thought might be a plausible, well-constrained target for
+> an LLM to write. Later milestones may lead to edit abilities, but for now I have focused
+> on read-only features out of an abundance of caution.
+
+## Installation
+
+This is a rust app, you can install it like this:
+
+```sh
+cargo install --path .
+```
 
 ## Configuration
 
-The program reads `tuisana.toml` from the repository root.
+The program reads `tuisana.toml` from the current directory.
 
 Start from [`tuisana.toml.example`](./tuisana.toml.example) and copy it to `tuisana.toml`, then fill in the auth values and any project visibility preferences.
 
@@ -50,39 +67,6 @@ Asana docs:
 
 - https://developers.asana.com/reference/getworkspaces
 - https://developers.asana.com/reference/getworkspace
-
-### Project visibility
-
-The repeated `[[project]]` section lets you pin project-specific visibility preferences by Asana project GID.
-
-Each entry supports:
-
-- `gid`
-- `starred`
-- `hidden`
-
-How it works:
-
-- `starred = true` sorts the project ahead of unstarred projects.
-- `hidden = true` keeps the project in the hidden group.
-- Hidden projects stay available in the list, but they are shown after the visible projects only when you toggle them on.
-- Hidden projects are marked explicitly in the UI so they are easy to spot.
-
-The default toggle for hidden projects is `v`.
-
-Example:
-
-```toml
-[[project]]
-gid = "123"
-starred = true
-hidden = false
-
-[[project]]
-gid = "456"
-starred = false
-hidden = true
-```
 
 ### Key bindings
 
@@ -262,6 +246,38 @@ For fields include a fixed set of labels, the edit keys navigate instead of typi
 - `[` and `]` to move by section
 - `{` and `}` to move by project
 
+### Project visibility
+
+The repeated `[[project]]` section lets you pin project-specific visibility preferences by Asana project GID. It is usually updated when interacting with the app to change project visibility and project stars, rather than modified directly by a user.
+
+Each entry supports:
+
+- `gid`
+- `starred`
+- `hidden`
+
+How it works:
+
+- `starred = true` sorts the project ahead of unstarred projects.
+- `hidden = true` keeps the project in the hidden group.
+- Hidden projects stay available in the list, but they are shown after the visible projects only when you toggle them on.
+- Hidden projects are marked explicitly in the UI so they are easy to spot.
+
+The default toggle for hidden projects is `v`.
+
+Example:
+
+```toml
+[[project]]
+gid = "123"
+starred = true
+hidden = false
+
+[[project]]
+gid = "456"
+starred = false
+hidden = true
+```
 ## Running
 
 Use the project tasks:
@@ -271,7 +287,3 @@ cargo run
 mise test
 mise coverage
 ```
-
-## Notes
-
-The browser-based Asana login flow is planned for a later milestone. For now, the app expects a PAT in config.
