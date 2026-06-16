@@ -144,6 +144,12 @@ pub enum Action {
     FilterCycleLabelDown,
     FilterAddLabel,
     FilterDeleteLabel,
+    ToggleTaskSelection,
+    SelectAllVisibleTasks,
+    InvertTaskSelection,
+    ClearTaskSelection,
+    ClearHiddenTaskSelection,
+    CopyTasksToClipboard,
 }
 
 impl Action {
@@ -208,6 +214,12 @@ impl Action {
             "filter_cycle_label_down" => Ok(Self::FilterCycleLabelDown),
             "filter_add_label" => Ok(Self::FilterAddLabel),
             "filter_delete_label" => Ok(Self::FilterDeleteLabel),
+            "toggle_task_selection" => Ok(Self::ToggleTaskSelection),
+            "select_all_visible_tasks" => Ok(Self::SelectAllVisibleTasks),
+            "invert_task_selection" => Ok(Self::InvertTaskSelection),
+            "clear_task_selection" => Ok(Self::ClearTaskSelection),
+            "clear_hidden_task_selection" => Ok(Self::ClearHiddenTaskSelection),
+            "copy_tasks_to_clipboard" => Ok(Self::CopyTasksToClipboard),
             other => Err(Error::Backend(format!("unsupported command: {other}"))),
         }
     }
@@ -257,6 +269,8 @@ impl Action {
 pub enum AppCommand {
     Quit,
     Refresh,
+    OpenUrl(String),
+    CopyToClipboard(String),
 }
 
 impl Action {
@@ -331,6 +345,12 @@ impl Display for Action {
             Action::FilterCycleLabelDown => "filter_cycle_label_down",
             Action::FilterAddLabel => "filter_add_label",
             Action::FilterDeleteLabel => "filter_delete_label",
+            Action::ToggleTaskSelection => "toggle_task_selection",
+            Action::SelectAllVisibleTasks => "select_all_visible_tasks",
+            Action::InvertTaskSelection => "invert_task_selection",
+            Action::ClearTaskSelection => "clear_task_selection",
+            Action::ClearHiddenTaskSelection => "clear_hidden_task_selection",
+            Action::CopyTasksToClipboard => "copy_tasks_to_clipboard",
         };
         f.write_str(name)
     }

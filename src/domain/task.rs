@@ -934,11 +934,11 @@ fn apply_task_filter(records: Vec<TaskRecord>, filter: &TaskFilter) -> Vec<TaskR
                 };
 
                 if group.iter().any(|record| record_matches(record, filter)) {
-                    if matches!(filter.subtasks, SubtaskVisibility::Hide) {
-                        output.extend(group.into_iter().filter(|record| !record.is_subtask()));
-                    } else {
-                        output.extend(group.into_iter());
-                    }
+                    // Include the group, but always enforce the completed filter
+                    // per-record — a parent matching doesn't bring in completed subtasks.
+                    output.extend(group.into_iter().filter(|record| {
+                        filter.completed.map_or(true, |want| record.completed == want)
+                    }));
                 }
             }
 
@@ -1031,8 +1031,12 @@ fn build_rows(
         let project = record.projects.first().cloned().unwrap_or_default();
         let section = record.sections.first().cloned().unwrap_or_default();
         let has_section = !section.trim().is_empty();
+        let is_subtask = record.subtask_depth > 0;
 
-        if settings.sort.group_by_project && current_project.as_deref() != Some(project.as_str()) {
+        // Subtasks inherit their parent's project/section context — don't emit
+        // new headers for them, which would split a project group or duplicate
+        // a project name when subtasks have a different (or empty) project membership.
+        if !is_subtask && settings.sort.group_by_project && current_project.as_deref() != Some(project.as_str()) {
             let project_label = sanitize_display_text(&project);
             current_project = Some(project.clone());
             current_section = None;
@@ -1040,7 +1044,7 @@ fn build_rows(
             rows.push(TaskRow::project_header(project_label, column_count));
         }
 
-        if settings.sort.group_by_section && has_section && current_section.as_deref() != Some(section.as_str()) {
+        if !is_subtask && settings.sort.group_by_section && has_section && current_section.as_deref() != Some(section.as_str()) {
             rows.push(TaskRow::section_spacer(column_count));
             rows.push(TaskRow::section_header(sanitize_display_text(&section), column_count));
             current_section = Some(section.clone());
@@ -1529,5 +1533,109 @@ mod tests {
 
         assert_eq!(task_rows, vec!["b", "a"]);
         assert!(model.rows.iter().all(|row| row.kind.is_task()));
+    }
+
+    #[test]
+    fn project_header_not_repeated_when_subtask_has_different_project() {
+        // Regression test: subtasks whose project membership differs from their
+        // parent (or is empty) must not trigger a duplicate project header.
+        let mut parent = TaskRecord::new("parent", "Parent task");
+        parent.projects = vec!["Alpha".to_string()];
+        parent.sections = vec!["Today".to_string()];
+
+        // Subtask belongs to a different project than its parent.
+        let mut subtask = TaskRecord::new("sub", "Subtask");
+        subtask.parent_gid = Some("parent".to_string());
+        subtask.projects = vec!["Beta".to_string()];
+        subtask.sections = vec!["Today".to_string()];
+        subtask.subtask_depth = 1;
+
+        // A second task in the original project — should still land under the
+        // same "Alpha" header, not trigger a new one.
+        let mut sibling = TaskRecord::new("sibling", "Sibling task");
+        sibling.projects = vec!["Alpha".to_string()];
+        sibling.sections = vec!["Today".to_string()];
+
+        let settings = TaskTableSettings {
+            filter: TaskFilter {
+                subtasks: SubtaskVisibility::Show,
+                ..TaskFilter::default()
+            },
+            sort: TaskSort {
+                group_by_project: true,
+                group_by_section: false,
+                rules: vec![],
+            },
+        };
+
+        let model = TaskTableModel::from_records_with_settings(
+            vec![parent, subtask, sibling],
+            vec![],
+            &settings,
+        );
+
+        let project_headers: Vec<&str> = model
+            .rows
+            .iter()
+            .filter(|row| row.kind == TaskRowKind::ProjectHeader)
+            .map(|row| row.cells[0].as_str())
+            .collect();
+
+        // "Alpha" must appear exactly once — the subtask with project "Beta"
+        // must not split the Alpha group or trigger a second Alpha header.
+        assert_eq!(project_headers.iter().filter(|&&h| h == "Alpha").count(), 1, "Alpha header appeared more than once");
+    }
+
+    #[test]
+    fn completed_subtask_excluded_when_open_only_filter_with_subtasks_visible() {
+        // Regression test: a completed subtask of an open parent must not appear
+        // when the completed filter is set to open-only with SubtaskVisibility::Show.
+        // Before the fix, the whole group was included whenever the parent matched,
+        // bypassing the per-record completed check for subtasks.
+        let mut parent = TaskRecord::new("parent", "Open parent");
+        parent.completed = false;
+        parent.projects = vec!["Inbox".to_string()];
+        parent.sections = vec!["Today".to_string()];
+
+        let mut done_child = TaskRecord::new("done-child", "Completed subtask");
+        done_child.completed = true;
+        done_child.parent_gid = Some("parent".to_string());
+        done_child.projects = vec!["Inbox".to_string()];
+        done_child.sections = vec!["Today".to_string()];
+
+        let mut open_child = TaskRecord::new("open-child", "Open subtask");
+        open_child.completed = false;
+        open_child.parent_gid = Some("parent".to_string());
+        open_child.projects = vec!["Inbox".to_string()];
+        open_child.sections = vec!["Today".to_string()];
+
+        let settings = TaskTableSettings {
+            filter: TaskFilter {
+                completed: Some(false),
+                subtasks: SubtaskVisibility::Show,
+                ..TaskFilter::default()
+            },
+            sort: TaskSort::default(),
+        };
+
+        let model = TaskTableModel::from_records_with_settings(
+            vec![parent, done_child, open_child],
+            vec![],
+            &settings,
+        );
+
+        let task_gids: Vec<&str> = model
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.as_str())
+            .collect();
+
+        assert!(
+            !task_gids.contains(&"done-child"),
+            "completed subtask should be excluded by open-only filter"
+        );
+        assert!(task_gids.contains(&"parent"), "open parent should be included");
+        assert!(task_gids.contains(&"open-child"), "open subtask should be included");
     }
 }

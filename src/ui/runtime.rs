@@ -345,6 +345,16 @@ where
                             .map_err(|err| io::Error::other(err.to_string()))?;
                         page_size = draw(terminal, app)?;
                     }
+                    Ok(Some(crate::input::AppCommand::OpenUrl(url))) => {
+                        let _ = std::process::Command::new("open").arg(&url).spawn();
+                        page_size = draw(terminal, app)?;
+                    }
+                    Ok(Some(crate::input::AppCommand::CopyToClipboard(text))) => {
+                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                            let _ = clipboard.set_text(text);
+                        }
+                        page_size = draw(terminal, app)?;
+                    }
                     Ok(None) => {
                         page_size = draw(terminal, app)?;
                     }

@@ -560,8 +560,6 @@ Acceptance criteria:
 
 ## Milestone 9: Lazy, filter-aware task loading
 
-UNDER REVIEW!!
-
 Goal:
 
 - avoid loading a large task set eagerly when only a small subset is needed
@@ -588,40 +586,81 @@ Acceptance criteria:
 - unsupported query combinations fall back to the current eager behavior
 - tests cover the query model, lazy loading behavior, and fallback path
 
-## Milestone 10: Edit tasks
+## Milestone 10: Task interaction ✓
 
 Goal:
 
-- edit tasks from the TUI using vim-like commands and modal interactions
+- make basic task interaction possible: opening tasks in Asana and copying task links
 
 Deliverables:
 
-- add new tasks
-- add new subtasks
-- delete tasks
-- field editing
-- section moves
-- subtask conversion
-- dependency updates
-- date editing
+- the currently highlighted task can be opened in the Asana app (default binding `enter`)
+- the user can select tasks for bulk actions
+  - like project selection: select all/none, invert; selections depend on the filtered state
+  - like project selection: a task not currently visible can remain selected
+  - the selection can be cleared of tasks that are not visible
+- a "copy to clipboard" action produces a markdown checklist item for each selected task (default binding `y`):
+  `- [ ] [task title](task link)`
 
 Implementation notes:
 
-- prefer optimistic local updates when they are safe
-- reconcile state after server updates
-- keep mutation commands explicit and validate them before sending to Asana
+- follow the project selection model for task selection state
+- selected tasks not visible in the current filter should remain selected until explicitly cleared
+- the clipboard output should be consistent markdown that renders correctly in common tools
+
+Acceptance criteria:
+
+- the highlighted task can be opened in Asana from the task view
+- tasks can be selected and deselected; selection state persists through filter changes
+- select all, invert, and clear-hidden-selection work on the current filtered task set
+- the clipboard action produces a markdown checklist item for each selected task
+- tests cover selection state transitions and clipboard output format
+
+## Milestone 11: Edit tasks
+
+Goal:
+
+- make it possible to create, edit, and move tasks
+
+Deliverables:
+
+- users can toggle completion of a task
+- user can create new tasks that use default values based on the task they are above
+  - if the task they are above is a subtask, the new task is a subtask
+  - the dates from the task above are used
+- user can change the columns of a task; editing follows the same pattern as filter editing
+  - dates are entered in YYYY-MM-DD, MM-DD, or keyword, and are translated to YYYY-MM-DD
+  - label options can be selected using j/k and deleted using d
+  - titles are typed; backspace and cursor motions are possible; basic vim normal mode
+    support for editing text (h/l, d, y, c, b, w, $, 0, C, D all work as in vim)
+- users can increase the subtask level: the task becomes a subtask of the task directly above it (default keybinding `>`)
+- users can decrease the subtask level of a task (default keybinding `<`)
+- when subtask adjustment (`<`/`>`) is a bulk action, it adjusts subtask level based on
+  the task directly above the first item selected
+- when the sort view is "natural", users can move tasks up and down in the list (`shift+j`, `shift+k`)
+  and into or out of sections (`m [` / `m ]`, `m {`, `m }`)
+- all editing operations can be applied to multiple tasks at once using the selection mechanism from Milestone 10
+- all keybindings are configurable
+
+Implementation notes:
+
+- follow the same edit model as the filter editor for consistent field editing UX
+- use the selection mechanism from Milestone 10 for bulk edits
+- prefer optimistic local updates when safe; reconcile state after server confirmation
 - model edits as domain mutations rather than UI-specific actions
 
 Acceptance criteria:
 
-- tasks can be edited
-- section changes work
-- subtask state can be changed
-- dependency changes work
-- date updates work
-- tests cover parsing, validation, and mutation application
+- task completion can be toggled
+- new tasks can be created with sensible defaults from the adjacent task
+- task fields can be edited inline following the same UX as filter editing
+- subtask level can be increased and decreased
+- tasks can be reordered in natural sort view
+- all editing operations apply to the current selection
+- all keybindings are configurable
+- tests cover field editing, task creation, subtask adjustment, and bulk operations
 
-## Milestone 11: Hardening and polish
+## Milestone 12: Hardening and polish
 
 Goal:
 

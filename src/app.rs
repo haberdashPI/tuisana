@@ -475,6 +475,21 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 self.restore_top_pane();
                 return Ok(None);
             }
+            Action::Open => {
+                let url = if matches!(mode, Mode::Task) {
+                    self.tasks.selected_task_url()
+                } else if matches!(mode, Mode::Project | Mode::ProjectSearch) {
+                    self.projects
+                        .selected_project()
+                        .map(|p| format!("https://app.asana.com/0/{}", p.id))
+                } else {
+                    None
+                };
+                if let Some(url) = url {
+                    return Ok(Some(AppCommand::OpenUrl(url)));
+                }
+                return Ok(None);
+            }
             Action::ToggleTaskFilters => {
                 if self.tasks.filter_panel_visible() {
                     self.tasks.toggle_filter_panel();

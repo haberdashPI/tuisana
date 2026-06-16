@@ -4,7 +4,7 @@
 //! the task filter editor used by the UI.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -15,8 +15,8 @@ use crate::{
         AsanaClient, TaskLoadScope, TaskQuery,
     },
     domain::{
-        merge_task_record, CustomFieldDefinition, Project, TaskRecord, TaskTableModel,
-        TaskTableSettings,
+        merge_task_record, CustomFieldDefinition, Project, TaskRecord, TaskRowKind,
+        TaskTableModel, TaskTableSettings,
     },
     error::Result,
     input::Action,
@@ -63,6 +63,7 @@ struct TaskViewState {
     task_vertical_scroll: usize,
     filter_vertical_scroll: usize,
     help_details_visible: bool,
+    selected_task_ids: HashSet<String>,
 }
 
 /// Whether a task-data fetch is currently in flight.
@@ -1319,6 +1320,13 @@ impl TaskState {
             return;
         };
 
+        // When on the first selectable row, snap to 0 so any project/section
+        // header rows above it are fully revealed.
+        if Some(selected_index) == self.view.table.first_selectable_row_index() {
+            self.view.task_vertical_scroll = 0;
+            return;
+        }
+
         let content_height = viewport_height.max(1);
         let selected_line = selected_index.saturating_add(1);
         let margin = 2usize.min(content_height.saturating_sub(1));
@@ -1349,6 +1357,93 @@ impl TaskState {
 
     pub fn scroll_right(&mut self) {
         self.view.horizontal_scroll = self.view.horizontal_scroll.saturating_add(HORIZONTAL_SCROLL_STEP);
+    }
+
+    pub fn is_task_selected(&self, gid: &str) -> bool {
+        !gid.is_empty() && self.view.selected_task_ids.contains(gid)
+    }
+
+    pub fn selected_task_count(&self) -> usize {
+        self.view.selected_task_ids.len()
+    }
+
+    pub fn selected_task_url(&self) -> Option<String> {
+        let index = self.view.selected?;
+        let row = self.view.table.rows.get(index)?;
+        if row.kind != TaskRowKind::Task {
+            return None;
+        }
+        let task_gid = &row.gid;
+        let dataset = self.loading.dataset.as_ref()?;
+        let record = dataset.records.iter().find(|r| r.gid == *task_gid)?;
+        let project_gid = record.project_gids.first()?;
+        Some(format!("https://app.asana.com/0/{project_gid}/{task_gid}"))
+    }
+
+    fn toggle_task_selection(&mut self) {
+        let Some(index) = self.view.selected else { return; };
+        let Some(row) = self.view.table.rows.get(index) else { return; };
+        if row.kind != TaskRowKind::Task { return; }
+        let gid = row.gid.clone();
+        if self.view.selected_task_ids.contains(&gid) {
+            self.view.selected_task_ids.remove(&gid);
+        } else {
+            self.view.selected_task_ids.insert(gid);
+        }
+        self.move_down();
+    }
+
+    fn select_all_visible_tasks(&mut self) {
+        for row in &self.view.table.rows {
+            if row.kind == TaskRowKind::Task && !row.gid.is_empty() {
+                self.view.selected_task_ids.insert(row.gid.clone());
+            }
+        }
+    }
+
+    fn invert_task_selection(&mut self) {
+        let visible_gids: Vec<String> = self.view.table.rows.iter()
+            .filter(|row| row.kind == TaskRowKind::Task && !row.gid.is_empty())
+            .map(|row| row.gid.clone())
+            .collect();
+        let mut new_selection = HashSet::new();
+        for gid in visible_gids {
+            if !self.view.selected_task_ids.contains(&gid) {
+                new_selection.insert(gid);
+            }
+        }
+        self.view.selected_task_ids = new_selection;
+    }
+
+    fn clear_task_selection(&mut self) {
+        self.view.selected_task_ids.clear();
+    }
+
+    fn clear_hidden_task_selection(&mut self) {
+        let visible_gids: HashSet<String> = self.view.table.rows.iter()
+            .filter(|row| row.kind == TaskRowKind::Task && !row.gid.is_empty())
+            .map(|row| row.gid.clone())
+            .collect();
+        self.view.selected_task_ids.retain(|gid| visible_gids.contains(gid));
+    }
+
+    fn clipboard_markdown(&self) -> String {
+        let Some(dataset) = self.loading.dataset.as_ref() else { return String::new(); };
+        let lines: Vec<String> = self.view.table.rows.iter()
+            .filter(|row| row.kind == TaskRowKind::Task && self.view.selected_task_ids.contains(&row.gid))
+            .filter_map(|row| {
+                let record = dataset.records.iter().find(|r| r.gid == row.gid)?;
+                let project_gid = record.project_gids.first()?;
+                let name = &record.name;
+                let gid = &row.gid;
+                Some(format!("- [ ] [{name}](https://app.asana.com/0/{project_gid}/{gid})"))
+            })
+            .collect();
+        if lines.is_empty() {
+            String::new()
+        } else {
+            lines.join("\n") + "\n"
+        }
     }
 
     /// Load the full task dataset for the given projects, then rebuild the
@@ -1737,6 +1832,34 @@ impl TaskState {
             Action::ToggleTaskFilters => {
                 self.toggle_filter_panel();
                 None
+            }
+            Action::ToggleTaskSelection => {
+                self.toggle_task_selection();
+                None
+            }
+            Action::SelectAllVisibleTasks => {
+                self.select_all_visible_tasks();
+                None
+            }
+            Action::InvertTaskSelection => {
+                self.invert_task_selection();
+                None
+            }
+            Action::ClearTaskSelection => {
+                self.clear_task_selection();
+                None
+            }
+            Action::ClearHiddenTaskSelection => {
+                self.clear_hidden_task_selection();
+                None
+            }
+            Action::CopyTasksToClipboard => {
+                let text = self.clipboard_markdown();
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(crate::input::AppCommand::CopyToClipboard(text))
+                }
             }
             _ => None,
         }
@@ -2213,6 +2336,51 @@ mod tests {
         let selected_line = state.selected_index().unwrap() + 1;
         assert!(selected_line >= state.vertical_scroll());
         assert!(selected_line < state.vertical_scroll() + 3);
+    }
+
+    #[test]
+    fn scrolls_to_row_zero_when_navigating_back_to_first_item() {
+        // When the user scrolls down and then navigates back up to the first
+        // task, ensure_selected_visible must set scroll to 0 so that project
+        // and section header rows above the first task are fully visible.
+        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
+            .with_sections(
+                "p1",
+                vec![SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_tasks(
+                "p1",
+                vec![
+                    task("t1", "Task 1", "p1", "Inbox", "s1", "Today", "cf1", "Priority", "High"),
+                    task("t2", "Task 2", "p1", "Inbox", "s1", "Today", "cf1", "Priority", "High"),
+                    task("t3", "Task 3", "p1", "Inbox", "s1", "Today", "cf1", "Priority", "High"),
+                    task("t4", "Task 4", "p1", "Inbox", "s1", "Today", "cf1", "Priority", "High"),
+                ],
+            );
+
+        let mut state = TaskState::new();
+        state.set_completed_filter(None);
+        state
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .expect("tasks load");
+        state.set_visible(true);
+
+        // Scroll down past the header rows.
+        state.move_down();
+        state.move_down();
+        state.move_down();
+        state.ensure_selected_visible(5);
+        assert!(state.vertical_scroll() > 0, "should be scrolled down after moving down");
+
+        // Move back up to the first item and check that scroll snaps to 0.
+        state.move_up();
+        state.move_up();
+        state.move_up();
+        state.ensure_selected_visible(5);
+        assert_eq!(state.vertical_scroll(), 0, "should snap to row 0 when on first item");
     }
 
     #[test]
@@ -2813,6 +2981,204 @@ mod tests {
         assert_eq!(after.as_deref(), Some(expected_today.as_str()));
         // explicit end date IS pushed
         assert_eq!(before.as_deref(), Some("2026-12-31"));
+    }
+
+    fn sel_task(gid: &str, name: &str, completed: bool) -> TaskDto {
+        TaskDto {
+            gid: gid.to_string(),
+            name: name.to_string(),
+            completed,
+            modified_at: None,
+            due_on: None,
+            start_on: None,
+            assignee: None,
+            num_subtasks: 0,
+            memberships: vec![TaskMembershipDto {
+                project: TaskMembershipProjectDto {
+                    gid: "p1".to_string(),
+                    name: "Inbox".to_string(),
+                },
+                section: Some(TaskMembershipSectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }),
+            }],
+            custom_fields: vec![],
+        }
+    }
+
+    fn loaded_state_with_tasks(tasks: Vec<TaskDto>) -> TaskState {
+        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
+            .with_sections(
+                "p1",
+                vec![SectionDto { gid: "s1".to_string(), name: "Today".to_string() }],
+            )
+            .with_tasks("p1", tasks);
+        let mut state = TaskState::new();
+        state.set_completed_filter(None);
+        state
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .expect("tasks load");
+        state
+    }
+
+    #[test]
+    fn toggle_task_selection_marks_cursor_row_and_advances() {
+        use crate::input::Action;
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task("t1", "Task one", false),
+            sel_task("t2", "Task two", false),
+        ]);
+
+        assert_eq!(state.selected_task_count(), 0);
+
+        let first_index = state.selected_index().expect("cursor set after load");
+        assert_eq!(state.table().rows[first_index].gid, "t1");
+
+        state.apply_action(&Action::ToggleTaskSelection, 10);
+
+        assert_eq!(state.selected_task_count(), 1);
+        assert!(state.is_task_selected("t1"));
+        let second_index = state.selected_index().expect("cursor advanced");
+        assert_eq!(state.table().rows[second_index].gid, "t2");
+
+        state.apply_action(&Action::ToggleTaskSelection, 10);
+        assert_eq!(state.selected_task_count(), 2);
+        assert!(state.is_task_selected("t2"));
+    }
+
+    #[test]
+    fn toggling_a_selected_task_deselects_it() {
+        use crate::input::Action;
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Task one", false)]);
+
+        state.apply_action(&Action::ToggleTaskSelection, 10);
+        assert_eq!(state.selected_task_count(), 1);
+
+        // Move cursor back to t1 and toggle again
+        state.apply_action(&Action::JumpTop, 10);
+        state.apply_action(&Action::ToggleTaskSelection, 10);
+        assert_eq!(state.selected_task_count(), 0);
+        assert!(!state.is_task_selected("t1"));
+    }
+
+    #[test]
+    fn select_all_visible_tasks_selects_every_task_row() {
+        use crate::input::Action;
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task("t1", "Task one", false),
+            sel_task("t2", "Task two", false),
+        ]);
+
+        state.apply_action(&Action::SelectAllVisibleTasks, 10);
+
+        assert_eq!(state.selected_task_count(), 2);
+        assert!(state.is_task_selected("t1"));
+        assert!(state.is_task_selected("t2"));
+    }
+
+    #[test]
+    fn invert_task_selection_flips_selected_and_unselected() {
+        use crate::input::Action;
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task("t1", "Task one", false),
+            sel_task("t2", "Task two", false),
+        ]);
+
+        // Select t1 only
+        state.apply_action(&Action::ToggleTaskSelection, 10);
+        assert!(state.is_task_selected("t1"));
+        assert!(!state.is_task_selected("t2"));
+
+        // Invert: t1 deselected, t2 selected
+        state.apply_action(&Action::InvertTaskSelection, 10);
+        assert!(!state.is_task_selected("t1"));
+        assert!(state.is_task_selected("t2"));
+        assert_eq!(state.selected_task_count(), 1);
+    }
+
+    #[test]
+    fn clear_task_selection_empties_the_selection() {
+        use crate::input::Action;
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task("t1", "Task one", false),
+            sel_task("t2", "Task two", false),
+        ]);
+
+        state.apply_action(&Action::SelectAllVisibleTasks, 10);
+        assert_eq!(state.selected_task_count(), 2);
+
+        state.apply_action(&Action::ClearTaskSelection, 10);
+        assert_eq!(state.selected_task_count(), 0);
+    }
+
+    #[test]
+    fn clear_hidden_task_selection_removes_tasks_not_in_current_view() {
+        use crate::input::Action;
+        // Load one open and one completed task; show all initially
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task("t1", "Open task", false),
+            sel_task("t2", "Done task", true),
+        ]);
+
+        // Both tasks visible — select all
+        assert_eq!(state.table().task_count(), 2);
+        state.apply_action(&Action::SelectAllVisibleTasks, 10);
+        assert_eq!(state.selected_task_count(), 2);
+
+        // Filter to open-only: t2 is now hidden
+        state.toggle_completed_filter();
+        assert_eq!(state.table().task_count(), 1);
+
+        // clear_hidden removes t2 from selection
+        state.apply_action(&Action::ClearHiddenTaskSelection, 10);
+        assert_eq!(state.selected_task_count(), 1);
+        assert!(state.is_task_selected("t1"));
+        assert!(!state.is_task_selected("t2"));
+    }
+
+    #[test]
+    fn copy_tasks_to_clipboard_returns_markdown_checklist() {
+        use crate::input::{Action, AppCommand};
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task("t1", "Ship release", false),
+            sel_task("t2", "Write docs", false),
+        ]);
+
+        state.apply_action(&Action::SelectAllVisibleTasks, 10);
+
+        let result = state.apply_action(&Action::CopyTasksToClipboard, 10);
+        let text = match result {
+            Some(AppCommand::CopyToClipboard(t)) => t,
+            _ => panic!("expected CopyToClipboard command"),
+        };
+
+        assert!(text.contains("- [ ] [Ship release](https://app.asana.com/0/p1/t1)"));
+        assert!(text.contains("- [ ] [Write docs](https://app.asana.com/0/p1/t2)"));
+        assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn copy_tasks_to_clipboard_returns_none_when_nothing_selected() {
+        use crate::input::Action;
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Task one", false)]);
+
+        let result = state.apply_action(&Action::CopyTasksToClipboard, 10);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn selected_task_url_returns_asana_url_for_cursor_task() {
+        let state = loaded_state_with_tasks(vec![sel_task("t1", "Ship release", false)]);
+
+        let url = state.selected_task_url().expect("URL produced for task row");
+        assert_eq!(url, "https://app.asana.com/0/p1/t1");
+    }
+
+    #[test]
+    fn selected_task_url_returns_none_when_no_tasks_loaded() {
+        let state = TaskState::new();
+        assert!(state.selected_task_url().is_none());
     }
 
     #[test]

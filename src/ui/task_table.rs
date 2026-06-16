@@ -1,5 +1,7 @@
 //! Rendering helpers for the task table and filter panel.
 
+use std::collections::HashSet;
+
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
@@ -35,6 +37,8 @@ pub struct TaskTableView {
     pub total_width: usize,
     /// Horizontal scroll offset.
     pub scroll_offset: usize,
+    /// GIDs of tasks the user has selected.
+    pub selected_task_ids: HashSet<String>,
 }
 
 /// Snapshot of the task filter panel used by the UI renderer.
@@ -113,6 +117,11 @@ pub fn render_task_table(
     let scroll = state.horizontal_scroll().min(max_scroll);
     let hint_lines = task_hint_lines(state, scroll, max_scroll);
 
+    let selected_task_ids = state.table().rows.iter()
+        .filter(|row| row.kind == TaskRowKind::Task && state.is_task_selected(&row.gid))
+        .map(|row| row.gid.clone())
+        .collect();
+
     TaskTableView {
         title: match mode {
             Mode::Task => "Task review (task focus)".to_string(),
@@ -131,6 +140,7 @@ pub fn render_task_table(
         column_widths,
         total_width,
         scroll_offset: scroll,
+        selected_task_ids,
     }
 }
 
@@ -184,10 +194,13 @@ pub fn format_task_body(
                 ));
             }
             TaskRowKind::Task => {
-                let style = if Some(index) == selected_index {
-                    Style::default().add_modifier(Modifier::REVERSED)
-                } else {
-                    Style::default()
+                let is_cursor = Some(index) == selected_index;
+                let is_selected = view.selected_task_ids.contains(&row.gid);
+                let style = match (is_cursor, is_selected) {
+                    (true, true) => Style::default().add_modifier(Modifier::REVERSED | Modifier::UNDERLINED),
+                    (true, false) => Style::default().add_modifier(Modifier::REVERSED),
+                    (false, true) => Style::default().add_modifier(Modifier::UNDERLINED),
+                    (false, false) => Style::default(),
                 };
                 lines.push(row_line(
                     row.cells.as_slice(),
@@ -267,14 +280,21 @@ pub(crate) fn format_task_filter_body(
 }
 
 fn task_status(state: &TaskState, suffix: &str) -> String {
+    let selection = state.selected_task_count();
+    let selection_part = if selection > 0 {
+        format!(", {selection} selected")
+    } else {
+        String::new()
+    };
     match state.selected_index() {
         Some(index) => format!(
-            "{} tasks, row {}, {}",
+            "{} tasks, row {}{}, {}",
             state.table().task_count(),
             state.selected_task_position().unwrap_or(index + 1),
+            selection_part,
             suffix
         ),
-        None => format!("{} tasks, {}", state.table().task_count(), suffix),
+        None => format!("{} tasks{}, {}", state.table().task_count(), selection_part, suffix),
     }
 }
 
@@ -300,7 +320,7 @@ fn task_hint_lines(state: &TaskState, scroll: usize, max_scroll: usize) -> Vec<S
             "j/down,k/up: move, ctrl-u/d: page, home/end: top/bottom".to_string(),
             "[]: section jumps, {}: project jumps, s: sort, , project group, . section group"
                 .to_string(),
-            "f: filters, enter: edit, s: mode, c: completed, z: subtasks".to_string(),
+            "enter: open, space: select, a: all, i: invert, x: clear, y: copy, f: filters, c: completed, z: subtasks".to_string(),
             compact_scroll_line,
         ];
     }
@@ -313,7 +333,10 @@ fn task_hint_lines(state: &TaskState, scroll: usize, max_scroll: usize) -> Vec<S
         "grouping/sort: [] section jumps; {} project jumps; , project group; . section group; s sort"
             .to_string(),
         String::new(),
-        "filters: f panel; enter edit; s cycle mode; esc/enter done; c completed; z subtasks"
+        "task interaction: enter open in Asana; space select; a all; i invert; x clear; ctrl-x clear hidden; y copy"
+            .to_string(),
+        String::new(),
+        "filters: f panel; s cycle mode; esc/enter done; c completed; z subtasks"
             .to_string(),
         String::new(),
         "p/f/t: modes, r: refresh, q: quit".to_string(),
@@ -780,7 +803,7 @@ mod tests {
                 "j/down,k/up: move, ctrl-u/d: page, home/end: top/bottom".to_string(),
                 "[]: section jumps, {}: project jumps, s: sort, , project group, . section group"
                     .to_string(),
-                "f: filters, enter: edit, s: mode, c: completed, z: subtasks".to_string(),
+                "enter: open, space: select, a: all, i: invert, x: clear, y: copy, f: filters, c: completed, z: subtasks".to_string(),
                 "left/right: scroll columns, p/f/t: modes, [/]/{}/0: pane size, r: refresh, q: quit"
                     .to_string(),
             ]
@@ -844,7 +867,10 @@ mod tests {
                 "grouping/sort: [] section jumps; {} project jumps; , project group; . section group; s sort"
                     .to_string(),
                 String::new(),
-                "filters: f panel; enter edit; s cycle mode; esc/enter done; c completed; z subtasks"
+                "task interaction: enter open in Asana; space select; a all; i invert; x clear; ctrl-x clear hidden; y copy"
+                    .to_string(),
+                String::new(),
+                "filters: f panel; s cycle mode; esc/enter done; c completed; z subtasks"
                     .to_string(),
                 String::new(),
                 "p/f/t: modes, r: refresh, q: quit".to_string(),

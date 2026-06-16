@@ -362,6 +362,13 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode(",", Mode::Task, "toggle_project_grouping"),
         Bind::with_mode(".", Mode::Task, "toggle_section_grouping"),
         Bind::with_mode("s", Mode::Task, "cycle_task_sort"),
+        Bind::with_mode("enter", Mode::Task, "open"),
+        Bind::with_mode("space", Mode::Task, "toggle_task_selection"),
+        Bind::with_mode("a", Mode::Task, "select_all_visible_tasks"),
+        Bind::with_mode("i", Mode::Task, "invert_task_selection"),
+        Bind::with_mode("x", Mode::Task, "clear_task_selection"),
+        Bind::with_mode("ctrl-x", Mode::Task, "clear_hidden_task_selection"),
+        Bind::with_mode("y", Mode::Task, "copy_tasks_to_clipboard"),
     ]
 }
 
