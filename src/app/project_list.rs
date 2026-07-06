@@ -11,7 +11,7 @@ use regex::RegexBuilder;
 use crate::{
     asana::AsanaClient,
     config::ProjectVisibilityConfig,
-    domain::Project,
+    domain::{Project, ProjectKind},
     error::Result,
     input::{Action, AppCommand},
     util::fuzzy_match,
@@ -114,6 +114,22 @@ impl ProjectListState {
             ProjectListStatus::Ready
         };
         Ok(())
+    }
+
+    /// Ensures the "assigned to me" pseudo-project is present or absent.
+    ///
+    /// Pass `Some(Project::assigned_to_me(gid))` when the client resolved a
+    /// logged-in user, or `None` when it couldn't (e.g. an unauthenticated
+    /// backend). The row always sorts to the top; see `sort_projects`.
+    pub fn set_assigned_to_me(&mut self, project: Option<Project>) {
+        self.all_projects
+            .retain(|project| !matches!(project.kind, ProjectKind::AssignedToMe));
+        if let Some(project) = project {
+            self.all_projects.push(project);
+        }
+        sort_projects(&mut self.all_projects);
+        let cursor_id = self.selected_project().map(|project| project.id.clone());
+        self.rebuild_visible_projects(cursor_id);
     }
 
     pub fn from_projects(projects: Vec<Project>) -> Self {
@@ -554,6 +570,7 @@ impl ProjectListState {
         let mut preferences: Vec<ProjectVisibilityConfig> = self
             .all_projects
             .iter()
+            .filter(|project| !matches!(project.kind, ProjectKind::AssignedToMe))
             .filter(|project| project.starred || !project.hidden)
             .map(|project| ProjectVisibilityConfig {
                 gid: project.id.clone(),
@@ -584,6 +601,9 @@ impl ProjectListState {
         for target_id in target_ids {
             if let Some(project) = self.all_projects.iter_mut().find(|project| project.id == target_id)
             {
+                if matches!(project.kind, ProjectKind::AssignedToMe) {
+                    continue;
+                }
                 match flag {
                     ProjectFlag::Starred => project.starred = !project.starred,
                     ProjectFlag::Hidden => project.hidden = !project.hidden,
@@ -714,8 +734,11 @@ enum ProjectFlag {
 
 fn sort_projects(projects: &mut [Project]) {
     projects.sort_by(|left, right| {
-        left.hidden
-            .cmp(&right.hidden)
+        let left_pinned = matches!(left.kind, ProjectKind::AssignedToMe);
+        let right_pinned = matches!(right.kind, ProjectKind::AssignedToMe);
+        right_pinned
+            .cmp(&left_pinned)
+            .then_with(|| left.hidden.cmp(&right.hidden))
             .then_with(|| right.starred.cmp(&left.starred))
             .then_with(|| left.name.cmp(&right.name))
             .then_with(|| left.id.cmp(&right.id))
@@ -776,6 +799,10 @@ mod tests {
             &self,
             _project_gid: &str,
         ) -> Result<Vec<crate::asana::dto::ProjectCustomFieldSettingDto>> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
+        fn current_user_gid(&self) -> Result<String> {
             Err(Error::Backend("backend unavailable".to_string()))
         }
     }
@@ -1064,5 +1091,64 @@ mod tests {
         state.toggle_hidden_selected();
 
         assert!(state.project_visibility_config().is_empty());
+    }
+
+    #[test]
+    fn assigned_to_me_row_always_sorts_first() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1", "Alpha", true),
+            Project::new("2", "Beta", false),
+        ]);
+
+        state.set_assigned_to_me(Some(Project::assigned_to_me("user_1")));
+
+        let names: Vec<_> = state.items().iter().map(|project| project.name.as_str()).collect();
+        assert_eq!(names, vec!["No Project (Assigned to Me)", "Alpha", "Beta"]);
+    }
+
+    #[test]
+    fn set_assigned_to_me_none_removes_the_row() {
+        let mut state = ProjectListState::from_projects(vec![Project::new("1", "Alpha", false)]);
+        state.set_assigned_to_me(Some(Project::assigned_to_me("user_1")));
+        assert_eq!(state.items().len(), 2);
+
+        state.set_assigned_to_me(None);
+
+        let names: Vec<_> = state.items().iter().map(|project| project.name.as_str()).collect();
+        assert_eq!(names, vec!["Alpha"]);
+    }
+
+    #[test]
+    fn assigned_to_me_row_can_be_selected_like_a_normal_project() {
+        let mut state = ProjectListState::from_projects(vec![Project::new("1", "Alpha", false)]);
+        state.set_assigned_to_me(Some(Project::assigned_to_me("user_1")));
+
+        state.toggle_current_selection();
+
+        assert_eq!(state.selected_count(), 1);
+        assert!(state.is_selected("user_1"));
+        assert_eq!(state.selected_projects()[0].id, "user_1");
+    }
+
+    #[test]
+    fn assigned_to_me_row_cannot_be_starred_or_hidden_or_persisted() {
+        let mut state = ProjectListState::from_projects(vec![Project::new("1", "Alpha", false)]);
+        state.set_assigned_to_me(Some(Project::assigned_to_me("user_1")));
+
+        state.toggle_current_selection();
+        state.toggle_starred_selected();
+        state.toggle_hidden_selected();
+
+        let assigned_to_me = state
+            .items()
+            .into_iter()
+            .find(|project| project.id == "user_1")
+            .expect("assigned-to-me row still present");
+        assert!(!assigned_to_me.starred);
+        assert!(!assigned_to_me.hidden);
+        assert!(state
+            .project_visibility_config()
+            .iter()
+            .all(|project| project.gid != "user_1"));
     }
 }

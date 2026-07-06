@@ -6,6 +6,8 @@ version = 1.0
 # Create a personal access token in Asana's developer console.
 personal_access_token = "your-asana-pat-here"
 # Optional. Leave this out if you want to list projects without narrowing to a workspace.
+# The "No Project (Assigned to Me)" row appears automatically once tuisana can resolve your
+# logged-in user; this field is only needed to load its tasks after you select it.
 workspace_gid = "your-workspace-gid-here"
 
 # Projects not listed here default to hidden.

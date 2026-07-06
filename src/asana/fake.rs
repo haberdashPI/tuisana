@@ -5,10 +5,10 @@ use std::collections::HashMap;
 use crate::{
     asana::{
         dto::{ProjectCustomFieldSettingDto, SectionDto, TaskDto},
-        AsanaClient, TaskLoadScope, TaskQuery,
+        AsanaClient, TaskLoadScope, TaskQuery, TaskTarget,
     },
     domain::Project,
-    error::Result,
+    error::{Error, Result},
 };
 
 /// A simple in-memory `AsanaClient` implementation for tests.
@@ -16,6 +16,8 @@ use crate::{
 pub struct FakeAsanaClient {
     projects: Vec<Project>,
     tasks_by_project: HashMap<String, Vec<TaskDto>>,
+    assigned_to_me_tasks: Vec<TaskDto>,
+    current_user_gid: Option<String>,
     subtasks_by_task: HashMap<String, Vec<TaskDto>>,
     sections_by_project: HashMap<String, Vec<SectionDto>>,
     custom_field_settings_by_project: HashMap<String, Vec<ProjectCustomFieldSettingDto>>,
@@ -38,6 +40,18 @@ impl FakeAsanaClient {
     /// Adds task fixtures for a project.
     pub fn with_tasks(mut self, project_gid: impl Into<String>, tasks: Vec<TaskDto>) -> Self {
         self.tasks_by_project.insert(project_gid.into(), tasks);
+        self
+    }
+
+    /// Adds task fixtures returned for an assigned-to-me query.
+    pub fn with_assigned_to_me_tasks(mut self, tasks: Vec<TaskDto>) -> Self {
+        self.assigned_to_me_tasks = tasks;
+        self
+    }
+
+    /// Sets the gid returned by `current_user_gid`, simulating a logged-in user.
+    pub fn with_current_user_gid(mut self, gid: impl Into<String>) -> Self {
+        self.current_user_gid = Some(gid.into());
         self
     }
 
@@ -71,11 +85,13 @@ impl AsanaClient for FakeAsanaClient {
     }
 
     fn list_tasks(&self, query: &TaskQuery) -> Result<Vec<TaskDto>> {
-        Ok(self
-            .tasks_by_project
-            .get(&query.project_gid)
-            .cloned()
-            .unwrap_or_default()
+        let tasks = match &query.target {
+            TaskTarget::Project(project_gid) => {
+                self.tasks_by_project.get(project_gid).cloned().unwrap_or_default()
+            }
+            TaskTarget::AssignedToMe(_) => self.assigned_to_me_tasks.clone(),
+        };
+        Ok(tasks
             .into_iter()
             .filter(|task| matches!(query.scope, TaskLoadScope::All) || !task.completed)
             .filter(|task| {
@@ -148,5 +164,11 @@ impl AsanaClient for FakeAsanaClient {
             .get(project_gid)
             .cloned()
             .unwrap_or_default())
+    }
+
+    fn current_user_gid(&self) -> Result<String> {
+        self.current_user_gid
+            .clone()
+            .ok_or_else(|| Error::Backend("no fake current user configured".to_string()))
     }
 }

@@ -1,6 +1,7 @@
 use crate::{
-    asana::{AsanaClient, TaskQuery},
+    asana::{AsanaClient, TaskQuery, TaskTarget},
     config::{Config, Mode},
+    domain::{Project, ProjectKind},
     error::Result,
     input::{Action, AppCommand, KeyBinding, KeyMap},
 };
@@ -162,6 +163,18 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     pub fn load_projects(&mut self) -> Result<()> {
         self.projects
             .load_with_visibility(&self.client, &self.config.project_visibility)?;
+        // The "assigned to me" row is best-effort: if the client can't resolve
+        // who's logged in (e.g. the token lacks permission, or a test double
+        // has no fake user configured), just omit the row instead of failing
+        // project loading entirely.
+        let assigned_to_me = match self.client.current_user_gid() {
+            Ok(gid) => Some(Project::assigned_to_me(gid)),
+            Err(err) => {
+                debug_log(&format!("current_user_gid unavailable: {err}"));
+                None
+            }
+        };
+        self.projects.set_assigned_to_me(assigned_to_me);
         Ok(())
     }
 
@@ -264,14 +277,10 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     }
 
     fn task_data_needs_refresh(&self) -> bool {
-        let target_ids = self.task_target_project_ids();
-        let query_template = if target_ids.is_empty() {
-            self.tasks.desired_task_query("")
-        } else {
-            self.tasks.desired_task_query(&target_ids[0])
-        };
+        let targets = self.task_target_projects();
+        let query_template = self.tasks.desired_task_query();
         self.task_data_receiver.is_none()
-            && !self.tasks.can_serve_query_for_targets(&target_ids, &query_template)
+            && !self.tasks.can_serve_query_for_targets(&targets, &query_template)
     }
 
     fn ensure_task_data(&mut self) {
@@ -479,9 +488,10 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 let url = if matches!(mode, Mode::Task) {
                     self.tasks.selected_task_url()
                 } else if matches!(mode, Mode::Project | Mode::ProjectSearch) {
-                    self.projects
-                        .selected_project()
-                        .map(|p| format!("https://app.asana.com/0/{}", p.id))
+                    self.projects.selected_project().and_then(|p| match p.kind {
+                        ProjectKind::Normal => Some(format!("https://app.asana.com/0/{}", p.id)),
+                        ProjectKind::AssignedToMe => None,
+                    })
                 } else {
                     None
                 };
@@ -512,14 +522,10 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 }
             }
             Action::ToggleCompletedFilter if self.tasks.visible() => {
-                let target_ids = self.task_target_project_ids();
+                let targets = self.task_target_projects();
                 self.tasks.cycle_completed_filter_without_refresh();
-                let query_template = if target_ids.is_empty() {
-                    self.tasks.desired_task_query("")
-                } else {
-                    self.tasks.desired_task_query(&target_ids[0])
-                };
-                if self.tasks.can_serve_query_for_targets(&target_ids, &query_template) {
+                let query_template = self.tasks.desired_task_query();
+                if self.tasks.can_serve_query_for_targets(&targets, &query_template) {
                     if self.task_data_receiver.is_some() {
                         self.task_data_generation = self.task_data_generation.wrapping_add(1);
                         self.task_data_receiver = None;
@@ -685,11 +691,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
 
     fn start_task_data_fetch(&mut self) {
         let targets = self.task_target_projects();
-        let query_template = if targets.is_empty() {
-            self.tasks.desired_task_query("")
-        } else {
-            self.tasks.desired_task_query(&targets[0].id)
-        };
+        let query_template = self.tasks.desired_task_query();
         let projects_to_load = self.tasks.projects_requiring_load(&targets, &query_template);
         debug_log(&format!(
             "start_task_data_fetch: visible={} scope={:?} targets={} data={}",
@@ -729,7 +731,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
 
         thread::spawn(move || {
             for project in projects_to_load {
-                let query = TaskQuery { project_gid: project.id.clone(), ..query_template.clone() };
+                let query = TaskQuery { target: TaskTarget::for_project(&project), ..query_template.clone() };
                 let result = crate::app::task::TaskState::build_dataset_for_projects(
                     &client,
                     &[project.clone()],
@@ -1481,6 +1483,56 @@ mod tests {
 
         assert!(!app.tasks.filter_panel_visible());
         assert!(app.tasks.filter_summary().contains("filters 1"));
+        assert_eq!(app.tasks.table().task_count(), 1);
+    }
+
+    #[test]
+    fn load_projects_adds_assigned_to_me_row_only_when_the_client_resolves_a_current_user() {
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]);
+        let mut app = App::new(Config::default(), client.clone());
+        app.load_projects().expect("projects load");
+        assert_eq!(app.projects.items().len(), 1);
+
+        let client = client.with_current_user_gid("user_1");
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+
+        assert_eq!(app.projects.items()[0].id, "user_1");
+        assert_eq!(app.projects.items()[0].name, "No Project (Assigned to Me)");
+    }
+
+    #[test]
+    fn opening_the_assigned_to_me_row_does_not_produce_an_asana_url() {
+        let client = FakeAsanaClient::new(vec![]).with_current_user_gid("user_1");
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+
+        let command = app.handle_action(&Action::Open, 10).expect("open action ok");
+
+        assert_eq!(command, None);
+    }
+
+    #[test]
+    fn selecting_assigned_to_me_loads_tasks_via_the_assignee_scoped_query() {
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)])
+            .with_assigned_to_me_tasks(vec![TaskDto {
+                gid: "t1".to_string(),
+                name: "My task".to_string(),
+                completed: false,
+                modified_at: None,
+                due_on: None,
+                start_on: None,
+                assignee: None,
+                num_subtasks: 0,
+                memberships: vec![],
+                custom_fields: vec![],
+            }]);
+
+        let mut app = App::new(Config::default(), client);
+        app.tasks
+            .load_task_dataset_for_projects(&app.client, &[Project::assigned_to_me("user_1")])
+            .expect("tasks load");
+
         assert_eq!(app.tasks.table().task_count(), 1);
     }
 }

@@ -12,10 +12,10 @@ use crate::{
     app::debug_log,
     asana::{
         dto::{CustomFieldValueDto, TaskDto},
-        AsanaClient, TaskLoadScope, TaskQuery,
+        AsanaClient, TaskLoadScope, TaskQuery, TaskTarget,
     },
     domain::{
-        merge_task_record, CustomFieldDefinition, Project, TaskRecord, TaskRowKind,
+        merge_task_record, CustomFieldDefinition, Project, ProjectKind, TaskRecord, TaskRowKind,
         TaskTableModel, TaskTableSettings,
     },
     error::Result,
@@ -960,9 +960,9 @@ impl TaskState {
     pub(crate) fn finish_loading_dataset(&mut self, dataset: TaskDataset) {
         self.loading.cache.merge_dataset(dataset.clone());
         self.rebuild_visible_dataset();
+        let query = self.desired_task_query();
         for project_id in self.loading.progress.target_ids().to_vec() {
-            let query = self.desired_task_query(&project_id);
-            self.loading.loaded_project_queries.insert(project_id, query);
+            self.loading.loaded_project_queries.insert(project_id, query.clone());
         }
         self.finish_loading_targets();
     }
@@ -1211,19 +1211,22 @@ impl TaskState {
         }
     }
 
-    /// Build the task query for a specific project given the current filter state.
-    pub fn desired_task_query(&self, project_gid: &str) -> TaskQuery {
+    /// Build a task query template from the current filter state.
+    ///
+    /// The template's `target` is a placeholder; callers derive the real
+    /// target per project via `TaskTarget::for_project` before dispatching.
+    pub fn desired_task_query(&self) -> TaskQuery {
         let scope = self.desired_load_scope();
         let (due_after, due_before) = self.view.filter_editor.due_date_range_for_query();
-        TaskQuery { project_gid: project_gid.to_string(), scope, due_after, due_before }
+        TaskQuery { target: TaskTarget::default(), scope, due_after, due_before }
     }
 
     /// Return `true` if the cache already covers every selected target project
     /// for the requested query.
-    pub fn can_serve_query_for_targets(&self, target_ids: &[String], query_template: &TaskQuery) -> bool {
-        target_ids.iter().all(|project_id| {
-            let query = TaskQuery { project_gid: project_id.clone(), ..query_template.clone() };
-            self.loading.loaded_project_queries.get(project_id)
+    pub fn can_serve_query_for_targets(&self, targets: &[Project], query_template: &TaskQuery) -> bool {
+        targets.iter().all(|project| {
+            let query = TaskQuery { target: TaskTarget::for_project(project), ..query_template.clone() };
+            self.loading.loaded_project_queries.get(&project.id)
                 .map_or(false, |cached| cached.covers(&query))
         })
     }
@@ -1237,7 +1240,7 @@ impl TaskState {
         projects
             .iter()
             .filter(|project| {
-                let query = TaskQuery { project_gid: project.id.clone(), ..query_template.clone() };
+                let query = TaskQuery { target: TaskTarget::for_project(project), ..query_template.clone() };
                 self.loading.loaded_project_queries.get(&project.id)
                     .map_or(true, |cached| !cached.covers(&query))
             })
@@ -1454,12 +1457,12 @@ impl TaskState {
         projects: &[Project],
     ) -> Result<()> {
         debug_log(&format!("task data start: project_count={}", projects.len()));
-        let query_template = self.desired_task_query("");
+        let query_template = self.desired_task_query();
         let dataset = Self::build_dataset_for_projects(client, projects, &query_template)?;
         self.loading.cache.merge_dataset(dataset);
         self.loading.loaded_target_ids = projects.iter().map(|project| project.id.clone()).collect();
         for project in projects {
-            let query = TaskQuery { project_gid: project.id.clone(), ..query_template.clone() };
+            let query = TaskQuery { target: TaskTarget::for_project(project), ..query_template.clone() };
             self.loading.loaded_project_queries.insert(project.id.clone(), query);
         }
         self.rebuild_visible_dataset();
@@ -1499,7 +1502,15 @@ impl TaskState {
         let mut natural_order = 0usize;
 
         for project in projects {
-            let sections = client.list_sections(&project.id)?;
+            // The assigned-to-me pseudo-project has no sections or custom fields
+            // of its own; only fetch those for real Asana projects.
+            let is_assigned_to_me = matches!(project.kind, ProjectKind::AssignedToMe);
+
+            let sections = if is_assigned_to_me {
+                Vec::new()
+            } else {
+                client.list_sections(&project.id)?
+            };
             debug_log(&format!(
                 "task data project={} sections={}",
                 project.id,
@@ -1515,17 +1526,19 @@ impl TaskState {
                 .map(|(index, section)| (section.gid, index))
                 .collect::<HashMap<_, _>>();
 
-            for setting in client.list_project_custom_field_settings(&project.id)? {
-                debug_log(&format!(
-                    "task data project={} custom_field={}",
-                    project.id, setting.custom_field.name
-                ));
-                definitions_by_gid
-                    .entry(setting.custom_field.gid.clone())
-                    .or_insert(setting.custom_field.name.clone());
+            if !is_assigned_to_me {
+                for setting in client.list_project_custom_field_settings(&project.id)? {
+                    debug_log(&format!(
+                        "task data project={} custom_field={}",
+                        project.id, setting.custom_field.name
+                    ));
+                    definitions_by_gid
+                        .entry(setting.custom_field.gid.clone())
+                        .or_insert(setting.custom_field.name.clone());
+                }
             }
 
-            let query = TaskQuery { project_gid: project.id.clone(), ..query_template.clone() };
+            let query = TaskQuery { target: TaskTarget::for_project(project), ..query_template.clone() };
             let tasks = client.list_tasks(&query)?;
             debug_log(&format!(
                 "task data project={} tasks={}",
@@ -2914,18 +2927,18 @@ mod tests {
 
     #[test]
     fn task_query_covers_detects_cache_hits_and_misses() {
-        use crate::asana::{TaskLoadScope, TaskQuery};
+        use crate::asana::{TaskLoadScope, TaskQuery, TaskTarget};
 
         let broad = TaskQuery::for_project("1", TaskLoadScope::All);
         let open_only = TaskQuery::for_project("1", TaskLoadScope::OpenOnly);
         let narrow_date = TaskQuery {
-            project_gid: "1".to_string(),
+            target: TaskTarget::Project("1".to_string()),
             scope: TaskLoadScope::OpenOnly,
             due_after: Some("2026-01-01".to_string()),
             due_before: Some("2026-06-30".to_string()),
         };
         let wider_date = TaskQuery {
-            project_gid: "1".to_string(),
+            target: TaskTarget::Project("1".to_string()),
             scope: TaskLoadScope::OpenOnly,
             due_after: Some("2025-01-01".to_string()),
             due_before: Some("2027-12-31".to_string()),
@@ -2943,7 +2956,7 @@ mod tests {
 
         // narrow_date covers a query with even tighter dates
         let tighter = TaskQuery {
-            project_gid: "1".to_string(),
+            target: TaskTarget::Project("1".to_string()),
             scope: TaskLoadScope::OpenOnly,
             due_after: Some("2026-02-01".to_string()),
             due_before: Some("2026-05-31".to_string()),
@@ -3239,7 +3252,7 @@ mod tests {
         // the filter editor state — but that's hard to access directly.
         // Instead, test via the query model directly.
         let query = crate::asana::TaskQuery {
-            project_gid: "1".to_string(),
+            target: crate::asana::TaskTarget::Project("1".to_string()),
             scope: TaskLoadScope::OpenOnly,
             due_after: Some("2026-03-01".to_string()),
             due_before: Some("2026-12-31".to_string()),

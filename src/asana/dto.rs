@@ -12,6 +12,13 @@ pub struct CollectionResponse<T> {
     pub next_page: Option<Page>,
 }
 
+/// A single-resource Asana response, as opposed to a paginated collection.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResourceResponse<T> {
+    /// The single resource returned.
+    pub data: T,
+}
+
 /// Pagination cursor for a collection response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Page {

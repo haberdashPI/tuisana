@@ -1,6 +1,9 @@
 //! Rendering helpers for the project list pane.
 
-use crate::app::project_list::{ProjectListState, ProjectListStatus};
+use crate::{
+    app::project_list::{ProjectListState, ProjectListStatus},
+    domain::ProjectKind,
+};
 
 /// Snapshot of the project list used by the UI renderer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +31,9 @@ pub fn render_project_list(state: &ProjectListState) -> ProjectListView {
         .iter()
         .map(|project| {
             let selected = if state.is_selected(&project.id) { "[x]" } else { "[ ]" };
+            if matches!(project.kind, ProjectKind::AssignedToMe) {
+                return format!("{selected} {}", project.name);
+            }
             let starred = if project.starred { "[*] " } else { "[ ] " };
             let hidden = if project.hidden { "[hidden] " } else { "" };
             format!("{selected} {starred}{hidden}{}", project.name)
@@ -79,6 +85,16 @@ mod tests {
         assert_eq!(view.search_line, "Search: not searching (substring)");
         assert_eq!(view.hint_lines, vec!["?: more hints, j/k: move, space: select+down, /: search (project), p/f/t: modes, r: refresh, q: quit"]);
         assert!(view.rows.is_empty());
+    }
+
+    #[test]
+    fn renders_assigned_to_me_row_without_star_or_hidden_markers() {
+        let mut state = ProjectListState::from_projects(vec![Project::new("1", "Inbox", true)]);
+        state.set_assigned_to_me(Some(Project::assigned_to_me("user_1")));
+
+        let view = render_project_list(&state);
+
+        assert_eq!(view.rows, vec!["[ ] No Project (Assigned to Me)", "[ ] [*] Inbox"]);
     }
 
     #[test]

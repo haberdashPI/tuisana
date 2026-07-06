@@ -9,9 +9,10 @@ use serde_json::Value;
 use crate::{
     asana::{
         dto::{
-            CollectionResponse, ProjectCustomFieldSettingDto, ProjectDto, SectionDto, TaskDto,
+            CollectionResponse, ProjectCustomFieldSettingDto, ProjectDto, ResourceResponse,
+            SectionDto, TaskDto, UserDto,
         },
-        AsanaClient, TaskLoadScope, TaskQuery,
+        AsanaClient, TaskLoadScope, TaskQuery, TaskTarget,
     },
     config::AuthConfig,
     domain::Project,
@@ -141,15 +142,27 @@ impl<T: Transport> HttpAsanaClient<T> {
         if let Some(date) = &task_query.due_before {
             query.push(("due_on.before", date.clone()));
         }
+
+        let path = match &task_query.target {
+            TaskTarget::Project(project_gid) => format!("projects/{project_gid}/tasks"),
+            TaskTarget::AssignedToMe(user_gid) => {
+                let workspace = self.workspace_gid.as_deref().ok_or_else(|| {
+                    Error::Backend(
+                        "auth.workspace_gid must be set to fetch assigned-to-me tasks".to_string(),
+                    )
+                })?;
+                query.push(("assignee", user_gid.clone()));
+                query.push(("workspace", workspace.to_string()));
+                "tasks".to_string()
+            }
+        };
         if let Some(offset) = offset {
             query.push(("offset", offset.to_string()));
         }
 
-        let json = self.transport.get_json(
-            &format!("projects/{}/tasks", task_query.project_gid),
-            &query,
-            &self.personal_access_token,
-        )?;
+        let json = self
+            .transport
+            .get_json(&path, &query, &self.personal_access_token)?;
 
         serde_json::from_value(json)
             .map_err(|err| Error::Backend(format!("failed to decode task list: {err}")))
@@ -326,6 +339,18 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
 
         Ok(settings)
     }
+
+    fn current_user_gid(&self) -> Result<String> {
+        let json = self.transport.get_json(
+            "users/me",
+            &[("opt_fields", "gid".to_string())],
+            &self.personal_access_token,
+        )?;
+
+        let response: ResourceResponse<UserDto> = serde_json::from_value(json)
+            .map_err(|err| Error::Backend(format!("failed to decode current user: {err}")))?;
+        Ok(response.data.gid)
+    }
 }
 
 #[cfg(test)]
@@ -335,8 +360,8 @@ mod tests {
     use serde_json::json;
 
     use super::{HttpAsanaClient, Transport};
-    use crate::asana::AsanaClient;
-    use crate::error::Result;
+    use crate::asana::{AsanaClient, TaskLoadScope, TaskQuery};
+    use crate::error::{Error, Result};
 
     struct MockTransport {
         requests: RefCell<Vec<(String, Vec<(String, String)>, String)>>,
@@ -386,5 +411,49 @@ mod tests {
 
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "Inbox");
+    }
+
+    #[test]
+    fn assigned_to_me_query_hits_the_tasks_endpoint_with_assignee_and_workspace() {
+        let transport = MockTransport::new(vec![json!({ "data": [], "next_page": null })]);
+        let client =
+            HttpAsanaClient::with_transport(transport, "pat_123", Some("ws_42".to_string()));
+
+        let tasks = client
+            .list_tasks(&TaskQuery::for_assigned_to_me("user_1", TaskLoadScope::All))
+            .expect("tasks load");
+        assert!(tasks.is_empty());
+
+        let requests = client.transport.requests.borrow();
+        let (path, query, _) = &requests[0];
+        assert_eq!(path, "tasks");
+        assert!(query.contains(&("assignee".to_string(), "user_1".to_string())));
+        assert!(query.contains(&("workspace".to_string(), "ws_42".to_string())));
+    }
+
+    #[test]
+    fn assigned_to_me_query_fails_without_workspace_gid() {
+        let transport = MockTransport::new(vec![]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        let err = client
+            .list_tasks(&TaskQuery::for_assigned_to_me("user_1", TaskLoadScope::All))
+            .expect_err("missing workspace_gid should fail");
+
+        assert!(matches!(err, Error::Backend(message) if message.contains("workspace_gid")));
+    }
+
+    #[test]
+    fn current_user_gid_resolves_the_logged_in_user_via_users_me() {
+        let transport = MockTransport::new(vec![json!({
+            "data": { "gid": "user_1", "name": "Alex" }
+        })]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        let gid = client.current_user_gid().expect("current user resolves");
+
+        assert_eq!(gid, "user_1");
+        let requests = client.transport.requests.borrow();
+        assert_eq!(requests[0].0, "users/me");
     }
 }
