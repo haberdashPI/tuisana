@@ -1,566 +1,802 @@
-//! Rendering helpers for the task table and filter panel.
+//! Rendering for the task table.
+//!
+//! The table is built in two passes. [`render_task_table`] resolves every cell
+//! to display text plus a semantic tone — relative dates, state glyphs, empty
+//! placeholders — and only then measures column widths, so the widths always
+//! match what is actually drawn. The line builders below turn that snapshot
+//! into styled lines, one line per row.
+//!
+//! One line per row is a hard invariant: the app's selection index, vertical
+//! scroll, and "keep the cursor visible" logic all address rows by position, so
+//! a row that rendered as zero or two lines would desynchronize them.
 
 use std::collections::HashSet;
 
-use ratatui::{
-    style::{Modifier, Style},
-    text::{Line, Span},
-};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use ratatui::text::{Line, Span};
 
 use crate::{
-    app::task::{TaskFilterPanelEntry, TaskState, TaskStatus},
-    config::Mode,
-    domain::{TaskRow, TaskRowKind},
+    app::task::{TaskState, TaskStatus},
+    domain::{TaskRowKind, TaskSortField},
+    ui::{
+        chrome::{Chip, PaneMessage, Tone},
+        date::{self, Urgency},
+        text::{
+            fill, pad_cell, pad_cell_centered, pad_cell_right_aligned, pad_spans, slice_spans,
+            spans_width, visible_width,
+        },
+        theme::Theme,
+    },
 };
 
-const COLUMN_SEPARATOR: &str = " | ";
+/// Width of the marker gutter: cursor glyph, selection glyph, gap.
+pub const GUTTER_WIDTH: usize = 3;
+/// Cells consumed by the rule drawn between two columns.
 const COLUMN_SEPARATOR_WIDTH: usize = 3;
-const DEFAULT_OTHER_COLUMN_CAP: usize = 18;
+/// Share of the viewport the title column may occupy.
+const TITLE_SHARE: f64 = 0.6;
+
+/// Horizontal alignment of a cell within its column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Right,
+    Center,
+}
+
+/// What a column means. Drives width limits, alignment, and formatting.
+///
+/// Built-in columns are identified by position because the model always emits
+/// them in a fixed order and appends custom fields after them. Matching on the
+/// label would misfire on a custom field named "Due".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColumnRole {
+    Title,
+    Assignee,
+    Due,
+    Start,
+    State,
+    Projects,
+    Custom,
+}
+
+impl ColumnRole {
+    fn for_index(index: usize) -> Self {
+        match index {
+            0 => Self::Title,
+            1 => Self::Assignee,
+            2 => Self::Due,
+            3 => Self::Start,
+            4 => Self::State,
+            5 => Self::Projects,
+            _ => Self::Custom,
+        }
+    }
+
+    /// The header text shown for this column.
+    fn header(self, label: &str) -> String {
+        match self {
+            // The state column is a single glyph, so its header shrinks to match.
+            Self::State => "St".to_string(),
+            _ => label.to_string(),
+        }
+    }
+
+    fn align(self) -> Align {
+        match self {
+            Self::Due | Self::Start => Align::Right,
+            Self::State => Align::Center,
+            _ => Align::Left,
+        }
+    }
+
+    /// The smallest and largest useful width for this column.
+    ///
+    /// A minimum matters as much as a maximum: without one, `Priority` was
+    /// clipped to `Prior` with no ellipsis and read as a different word.
+    fn width_bounds(self) -> (usize, usize) {
+        match self {
+            Self::Title => (12, usize::MAX),
+            Self::Assignee => (6, 16),
+            Self::Due | Self::Start => (5, 10),
+            Self::State => (2, 2),
+            Self::Projects => (7, 20),
+            Self::Custom => (6, 16),
+        }
+    }
+
+    /// The sort field that orders by this column, if any.
+    fn sort_field(self) -> Option<TaskSortField> {
+        match self {
+            Self::Title => Some(TaskSortField::Title),
+            Self::Assignee => Some(TaskSortField::Assignee),
+            Self::Due => Some(TaskSortField::Date),
+            _ => None,
+        }
+    }
+}
+
+/// One resolved cell: the text to draw and how to draw it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenderCell {
+    /// The display text.
+    pub text: String,
+    /// A dimmed prefix drawn before the text, used for the subtask marker.
+    pub prefix: String,
+    /// Which semantic role colors it.
+    pub tone: Tone,
+}
+
+impl RenderCell {
+    fn new(text: impl Into<String>, tone: Tone) -> Self {
+        Self {
+            text: text.into(),
+            prefix: String::new(),
+            tone,
+        }
+    }
+
+    fn width(&self) -> usize {
+        visible_width(&self.prefix) + visible_width(&self.text)
+    }
+}
+
+/// One resolved row, ready to draw.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenderRow {
+    /// The row kind, which decides how the line is drawn.
+    pub kind: TaskRowKind,
+    /// The task id, empty for headers and spacers.
+    pub gid: String,
+    /// The group label, for header rows.
+    pub label: String,
+    /// Whether this task is complete.
+    pub completed: bool,
+    /// How deeply the task is nested under a parent.
+    pub subtask_depth: usize,
+    /// One entry per column, for task rows.
+    pub cells: Vec<RenderCell>,
+}
 
 /// Snapshot of the task table used by the UI renderer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskTableView {
     /// The pane title.
     pub title: String,
-    /// The one-line task status summary.
-    pub status_line: String,
-    /// Help text for the task pane.
-    pub hint_lines: Vec<String>,
-    /// Visible column labels.
-    pub columns: Vec<String>,
-    /// The rendered table rows.
-    pub rows: Vec<TaskRow>,
-    /// Calculated column widths for rendering.
+    /// Header labels, including the sort indicator.
+    pub headers: Vec<String>,
+    /// Per-column alignment.
+    pub aligns: Vec<Align>,
+    /// Resolved rows, one per model row.
+    pub rows: Vec<RenderRow>,
+    /// Resolved column widths.
     pub column_widths: Vec<usize>,
-    /// The full rendered width of the table.
+    /// Full rendered width of all columns.
     pub total_width: usize,
-    /// Horizontal scroll offset.
+    /// Horizontal scroll offset, clamped to what is scrollable.
     pub scroll_offset: usize,
-    /// GIDs of tasks the user has selected.
+    /// How far the table can scroll horizontally.
+    pub max_scroll: usize,
+    /// GIDs of tasks in the multi-select set.
     pub selected_task_ids: HashSet<String>,
+    /// Counts shown on the right of the pane border.
+    pub counts: Vec<Chip>,
+    /// Set when there are no rows, explaining why.
+    pub message: Option<PaneMessage>,
 }
 
-/// Snapshot of the task filter panel used by the UI renderer.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TaskFilterPanelView {
-    /// The pane title.
-    pub title: String,
-    /// The filter rows shown in the panel.
-    pub(crate) rows: Vec<TaskFilterPanelEntry>,
-    /// Whether any filters are active.
-    pub has_active_filters: bool,
-    /// Whether the filter editor is in edit mode.
-    pub editing: bool,
-    /// Help text specific to the filter panel.
-    pub help_lines: Vec<String>,
+impl TaskTableView {
+    /// Whether the table has any content to draw.
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// Adds a scroll-position chip when columns extend past the pane.
+    ///
+    /// Columns clipped at the pane edge are otherwise invisible, so the border
+    /// says how far right there is still to go.
+    fn with_scroll_count(mut self) -> Self {
+        if self.max_scroll > 0 {
+            self.counts.push(Chip::toned(
+                format!("columns {}/{}", self.scroll_offset, self.max_scroll),
+                Tone::Info,
+            ));
+        }
+        self
+    }
 }
 
-/// Renders the task table state into a UI-friendly snapshot.
+/// Resolves the task state into a drawable snapshot.
+///
+/// `columns_width` is the space available to the columns themselves, i.e. the
+/// pane's inner width minus [`GUTTER_WIDTH`].
 pub fn render_task_table(
     state: &TaskState,
-    viewport_width: usize,
-    mode: Mode,
+    columns_width: usize,
+    theme: &Theme,
 ) -> TaskTableView {
-    let status_line = match state.status() {
-        TaskStatus::Idle => "Tasks idle".to_string(),
-        TaskStatus::Loading => {
-            let targets = if state.loading_targets().is_empty() {
-                String::new()
-            } else {
-                format!(" for {}", state.loading_targets().join(", "))
-            };
-            format!("Loading tasks{} {}", targets, state.loading_spinner())
-        }
-        TaskStatus::Ready => {
-            task_status(state, &format!("ready, {}", state.filter_summary()))
-        }
-        TaskStatus::OutOfDate(message) => task_status(
-            state,
-            &format!("stale: {message}, {}", state.filter_summary()),
-        ),
-        TaskStatus::Empty => "No tasks available".to_string(),
-        TaskStatus::Error(message) => format!("Error: {message}"),
-    };
+    let model = state.table();
+    let today = date::today();
+    let sort_field = primary_sort_field(state);
+    let ascending = primary_sort_ascending(state);
 
-    let columns = state.table().columns.clone();
-    let rows = state.table().rows.clone();
-    let task_rows = rows
-        .iter()
-        .filter(|row| row.kind == TaskRowKind::Task)
-        .map(|row| row.cells.clone())
-        .collect::<Vec<_>>();
-    let mut column_widths = natural_column_widths(&columns, &task_rows);
-
-    for (index, width) in column_widths.iter_mut().enumerate().skip(1) {
-        *width = (*width).min(column_cap(index));
-    }
-
-    let other_width_total = column_widths.iter().skip(1).copied().sum::<usize>()
-        + COLUMN_SEPARATOR_WIDTH * column_widths.len().saturating_sub(1);
-    let widest_other = column_widths.iter().skip(1).copied().max().unwrap_or(0);
-    let title_cap = ((viewport_width as f64) * 0.6).floor() as usize;
-    let title_width = column_widths
-        .first()
-        .copied()
-        .unwrap_or(0)
-        .max(widest_other)
-        .max(viewport_width.saturating_sub(other_width_total))
-        .min(title_cap.max(1));
-
-    if let Some(title) = column_widths.first_mut() {
-        *title = title_width;
-    }
-
-    let total_width = title_width + other_width_total;
-    let max_scroll = total_width.saturating_sub(viewport_width);
-    let scroll = state.horizontal_scroll().min(max_scroll);
-    let hint_lines = task_hint_lines(state, scroll, max_scroll);
-
-    let selected_task_ids = state.table().rows.iter()
-        .filter(|row| row.kind == TaskRowKind::Task && state.is_task_selected(&row.gid))
-        .map(|row| row.gid.clone())
-        .collect();
-
-    TaskTableView {
-        title: match mode {
-            Mode::Task => "Task review (task focus)".to_string(),
-            Mode::Project
-            | Mode::ProjectSearch
-            | Mode::Filter
-            | Mode::FilterEdit => {
-                "Task review (project focus)".to_string()
-            }
-            Mode::Any => "Task review".to_string(),
-        },
-        status_line,
-        hint_lines,
-        columns,
-        rows,
-        column_widths,
-        total_width,
-        scroll_offset: scroll,
-        selected_task_ids,
-    }
-}
-
-/// Renders the header row for the task table.
-pub fn format_task_header_line(view: &TaskTableView, viewport_width: usize) -> Line<'static> {
-    let spans = row_spans(&view.columns, &view.column_widths, true);
-    Line::from(slice_spans(&spans, view.scroll_offset, viewport_width))
-}
-
-/// Renders the task body rows for the task table.
-pub fn format_task_body(
-    view: &TaskTableView,
-    selected_index: Option<usize>,
-    viewport_width: usize,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::with_capacity(view.rows.len());
-
-    for (index, row) in view.rows.iter().enumerate() {
-        match row.kind {
-            TaskRowKind::ProjectSeparator => {
-                lines.push(Line::from(separator_line(viewport_width)));
-            }
-            TaskRowKind::ProjectHeader => {
-                lines.push(row_line(
-                    row.cells.as_slice(),
-                    &view.column_widths,
-                    view.scroll_offset,
-                    viewport_width,
-                    true,
-                    None,
-                ));
-            }
-            TaskRowKind::SectionSpacer => {
-                lines.push(row_line(
-                    row.cells.as_slice(),
-                    &view.column_widths,
-                    view.scroll_offset,
-                    viewport_width,
-                    false,
-                    None,
-                ));
-            }
-            TaskRowKind::SectionHeader => {
-                lines.push(row_line(
-                    row.cells.as_slice(),
-                    &view.column_widths,
-                    view.scroll_offset,
-                    viewport_width,
-                    true,
-                    None,
-                ));
-            }
-            TaskRowKind::Task => {
-                let is_cursor = Some(index) == selected_index;
-                let is_selected = view.selected_task_ids.contains(&row.gid);
-                let style = match (is_cursor, is_selected) {
-                    (true, true) => Style::default().add_modifier(Modifier::REVERSED | Modifier::UNDERLINED),
-                    (true, false) => Style::default().add_modifier(Modifier::REVERSED),
-                    (false, true) => Style::default().add_modifier(Modifier::UNDERLINED),
-                    (false, false) => Style::default(),
-                };
-                lines.push(row_line(
-                    row.cells.as_slice(),
-                    &view.column_widths,
-                    view.scroll_offset,
-                    viewport_width,
-                    false,
-                    Some(style),
-                ));
-            }
-        }
-    }
-
-    lines
-}
-
-/// Renders the header plus body rows for the task table.
-pub fn format_task_lines(
-    view: &TaskTableView,
-    selected_index: Option<usize>,
-    viewport_width: usize,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::with_capacity(view.rows.len().saturating_add(1));
-    lines.push(format_task_header_line(view, viewport_width));
-    lines.extend(format_task_body(view, selected_index, viewport_width));
-    lines
-}
-
-/// Renders the task filter panel body.
-pub(crate) fn format_task_filter_body(
-    view: &TaskFilterPanelView,
-    viewport_width: usize,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    let mut title = view.title.clone();
-    if view.has_active_filters {
-        title.push_str(" (active)");
-    }
-    if view.editing {
-        title.push_str(" (editing)");
-    }
-    lines.push(Line::from(vec![Span::styled(
-        pad_cell(&title, viewport_width),
-        Style::default().add_modifier(Modifier::BOLD),
-    )]));
-
-    for row in &view.rows {
-        let marker = if row.selected { ">" } else { " " };
-        let prefix = format!("{marker} {} [{}]: ", row.label, row.kind);
-        if row.kind == "labels" && !row.label_values.is_empty() {
-            let mut spans = vec![Span::raw(prefix)];
-            for (index, label) in row.label_values.iter().enumerate() {
-                if index > 0 {
-                    spans.push(Span::raw(" | "));
-                }
-                let style = if row.selected && row.label_cursor == Some(index) {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-                spans.push(Span::styled(label.clone(), style));
-            }
-            lines.push(Line::from(spans));
-        } else if row.kind == "labels" {
-            lines.push(Line::from(vec![Span::raw(format!("{prefix}<none>"))]));
-        } else {
-            let mut content = prefix;
-            content.push_str(&row.query);
-            lines.push(Line::from(vec![Span::raw(truncate_to_width(
-                &content,
-                viewport_width,
-            ))]));
-        }
-    }
-
-    lines
-}
-
-fn task_status(state: &TaskState, suffix: &str) -> String {
-    let selection = state.selected_task_count();
-    let selection_part = if selection > 0 {
-        format!(", {selection} selected")
-    } else {
-        String::new()
-    };
-    match state.selected_index() {
-        Some(index) => format!(
-            "{} tasks, row {}{}, {}",
-            state.table().task_count(),
-            state.selected_task_position().unwrap_or(index + 1),
-            selection_part,
-            suffix
-        ),
-        None => format!("{} tasks{}, {}", state.table().task_count(), selection_part, suffix),
-    }
-}
-
-fn task_hint_lines(state: &TaskState, scroll: usize, max_scroll: usize) -> Vec<String> {
-    let compact_scroll_line = if max_scroll > 0 {
-        format!(
-            "left/right: scroll columns ({}/{}), p/f/t: modes, [/]/{{}}/0: pane size, r: refresh, q: quit",
-            scroll, max_scroll
-        )
-    } else {
-        "left/right: scroll columns, p/f/t: modes, [/]/{}/0: pane size, r: refresh, q: quit"
-            .to_string()
-    };
-    let expanded_scroll_line = if max_scroll > 0 {
-        format!("scroll: left/right columns ({}/{})", scroll, max_scroll)
-    } else {
-        "scroll: left/right columns".to_string()
-    };
-
-    if !state.help_details_visible() {
-        return vec![
-            "?: more hints".to_string(),
-            "j/down,k/up: move, ctrl-u/d: page, home/end: top/bottom".to_string(),
-            "[]: section jumps, {}: project jumps, s: sort, , project group, . section group"
-                .to_string(),
-            "enter: open, space: select, a: all, i: invert, x: clear, y: copy, f: filters, c: completed, z: subtasks".to_string(),
-            compact_scroll_line,
-        ];
-    }
-
-    vec![
-        "?: fewer hints".to_string(),
-        "navigation: j/down,k/up move; ctrl-u/d page; home/end top/bottom".to_string(),
-        expanded_scroll_line,
-        String::new(),
-        "grouping/sort: [] section jumps; {} project jumps; , project group; . section group; s sort"
-            .to_string(),
-        String::new(),
-        "task interaction: enter open in Asana; space select; a all; i invert; x clear; ctrl-x clear hidden; y copy"
-            .to_string(),
-        String::new(),
-        "filters: f panel; s cycle mode; esc/enter done; c completed; z subtasks"
-            .to_string(),
-        String::new(),
-        "p/f/t: modes, r: refresh, q: quit".to_string(),
-    ]
-}
-
-/// Renders the filter panel snapshot from task state, if the panel is visible.
-pub(crate) fn render_task_filter_panel(state: &TaskState) -> Option<TaskFilterPanelView> {
-    if !state.filter_panel_visible() {
-        return None;
-    }
-
-    let rows = state.filter_panel_entries();
-    let has_active_filters = rows.iter().any(|row| !row.query.trim().is_empty());
-
-    Some(TaskFilterPanelView {
-        title: "Task filters".to_string(),
-        rows,
-        has_active_filters,
-        editing: state.filter_panel_editing(),
-        help_lines: state.filter_panel_help_lines(),
-    })
-}
-
-fn natural_column_widths(columns: &[String], rows: &[Vec<String>]) -> Vec<usize> {
-    columns
+    let headers = model
+        .columns
         .iter()
         .enumerate()
-        .map(|(index, column)| {
-            rows.iter()
-                .filter_map(|row| row.get(index))
-                .map(|value| visible_width(value))
-                .chain(std::iter::once(visible_width(column)))
-                .max()
-                .unwrap_or(0)
+        .map(|(index, label)| {
+            let role = ColumnRole::for_index(index);
+            let mut header = role.header(label);
+            if role.sort_field() == Some(sort_field) {
+                header.push_str(if ascending {
+                    theme.glyphs.sort_asc
+                } else {
+                    theme.glyphs.sort_desc
+                });
+            }
+            header
         })
-        .collect()
-}
+        .collect::<Vec<_>>();
 
-fn column_cap(index: usize) -> usize {
-    match index {
-        1 => 18,
-        2 | 3 => 16,
-        4 => 8,
-        5 => 18,
-        _ => DEFAULT_OTHER_COLUMN_CAP,
+    let rows = model
+        .rows
+        .iter()
+        .map(|row| resolve_row(row, today, theme))
+        .collect::<Vec<_>>();
+
+    let column_widths = column_widths(&headers, &rows, columns_width);
+    let total_width = total_width(&column_widths);
+    let max_scroll = total_width.saturating_sub(columns_width);
+
+    TaskTableView {
+        title: "Tasks".to_string(),
+        aligns: (0..headers.len())
+            .map(|index| ColumnRole::for_index(index).align())
+            .collect(),
+        headers,
+        column_widths,
+        total_width,
+        scroll_offset: state.horizontal_scroll().min(max_scroll),
+        max_scroll,
+        selected_task_ids: model
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task() && state.is_task_selected(&row.gid))
+            .map(|row| row.gid.clone())
+            .collect(),
+        counts: counts(state, theme),
+        message: message(state, rows.is_empty()),
+        rows,
     }
+    .with_scroll_count()
 }
 
-fn row_line(
-    values: &[String],
-    widths: &[usize],
-    scroll_offset: usize,
-    viewport_width: usize,
-    bold_first_cell: bool,
-    style: Option<Style>,
+/// Renders the header row: bold, underlined, and marked with the sort column.
+pub fn task_header_line(view: &TaskTableView, theme: &Theme, width: usize) -> Line<'static> {
+    let columns_width = width.saturating_sub(GUTTER_WIDTH);
+    let mut spans = vec![Span::styled(" ".repeat(GUTTER_WIDTH), theme.header)];
+
+    let header_cells = view
+        .headers
+        .iter()
+        .map(|header| RenderCell::new(header.clone(), Tone::Text))
+        .collect::<Vec<_>>();
+
+    let cells = cell_spans(&header_cells, view, theme, true);
+    spans.extend(slice_spans(&cells, view.scroll_offset, columns_width));
+
+    Line::from(spans).style(theme.header)
+}
+
+/// Renders the table body, one line per row.
+pub fn task_body_lines(
+    view: &TaskTableView,
+    cursor_index: Option<usize>,
+    theme: &Theme,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let columns_width = width.saturating_sub(GUTTER_WIDTH);
+    let mut lines = Vec::with_capacity(view.rows.len());
+    let mut task_ordinal = 0usize;
+
+    for (index, row) in view.rows.iter().enumerate() {
+        let line = match row.kind {
+            // Spacers exist to give the eye a break between groups; drawing
+            // column rules through them defeats that.
+            TaskRowKind::ProjectSeparator | TaskRowKind::SectionSpacer => {
+                Line::from(Span::raw(" ".repeat(width)))
+            }
+            TaskRowKind::ProjectHeader => group_header_line(&row.label, theme, width, true),
+            TaskRowKind::SectionHeader => group_header_line(&row.label, theme, width, false),
+            TaskRowKind::Task => {
+                let is_cursor = Some(index) == cursor_index;
+                let is_selected = view.selected_task_ids.contains(&row.gid);
+                let line = task_line(row, view, theme, columns_width, is_cursor, is_selected);
+                task_ordinal += 1;
+                decorate_task_line(line, theme, is_cursor, task_ordinal)
+            }
+        };
+        lines.push(line);
+    }
+
+    lines
+}
+
+fn task_line(
+    row: &RenderRow,
+    view: &TaskTableView,
+    theme: &Theme,
+    columns_width: usize,
+    is_cursor: bool,
+    is_selected: bool,
 ) -> Line<'static> {
-    let spans = row_spans(values, widths, bold_first_cell);
-    let mut line = Line::from(slice_spans(&spans, scroll_offset, viewport_width));
-    if let Some(style) = style {
-        line = line.style(style);
-    }
-    line
+    let glyphs = &theme.glyphs;
+    let mut spans = vec![
+        Span::styled(
+            if is_cursor { glyphs.cursor } else { " " }.to_string(),
+            theme.marker,
+        ),
+        Span::styled(
+            if is_selected { glyphs.selected } else { " " }.to_string(),
+            theme.marker,
+        ),
+        Span::raw(" "),
+    ];
+
+    let cells = cell_spans(&row.cells, view, theme, false);
+    spans.extend(slice_spans(&cells, view.scroll_offset, columns_width));
+
+    Line::from(spans)
 }
 
-fn row_spans(values: &[String], widths: &[usize], bold_first_cell: bool) -> Vec<Span<'static>> {
-    let mut spans = Vec::with_capacity(widths.len().saturating_mul(2).saturating_sub(1));
+fn decorate_task_line(
+    line: Line<'static>,
+    theme: &Theme,
+    is_cursor: bool,
+    task_ordinal: usize,
+) -> Line<'static> {
+    if is_cursor {
+        return line.style(theme.cursor);
+    }
+    match theme.zebra {
+        Some(zebra) if task_ordinal.is_multiple_of(2) => line.style(zebra),
+        _ => line,
+    }
+}
 
-    for (index, (value, width)) in values.iter().zip(widths.iter()).enumerate() {
-        let cell = if index == 0 {
-            pad_title_cell(value, *width)
-        } else {
-            pad_cell(value, *width)
-        };
-        let cell_style = if index == 0 && bold_first_cell {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        spans.push(Span::styled(cell, cell_style));
-        if index + 1 != widths.len() {
-            spans.push(Span::raw(COLUMN_SEPARATOR));
+/// Renders a project or section group heading as a labeled rule.
+fn group_header_line(
+    label: &str,
+    theme: &Theme,
+    width: usize,
+    is_project: bool,
+) -> Line<'static> {
+    let glyphs = &theme.glyphs;
+
+    let (indent, bar, label_style, rule, rule_style) = if is_project {
+        (
+            0,
+            Some(glyphs.group_bar),
+            theme.title,
+            glyphs.rule,
+            theme.border,
+        )
+    } else {
+        (
+            GUTTER_WIDTH,
+            None,
+            theme.subtitle,
+            glyphs.section_rule,
+            theme.muted,
+        )
+    };
+
+    let mut spans = vec![Span::raw(" ".repeat(indent))];
+    if let Some(bar) = bar {
+        spans.push(Span::styled(bar.to_string(), theme.accent));
+    }
+
+    let used = spans_width(&spans);
+    let label_width = width.saturating_sub(used + 2).max(1);
+    spans.push(Span::styled(
+        crate::ui::text::truncate_with_ellipsis(label, label_width, glyphs.ellipsis),
+        label_style,
+    ));
+    spans.push(Span::raw(" "));
+
+    let remaining = width.saturating_sub(spans_width(&spans));
+    spans.push(Span::styled(fill(rule, remaining), rule_style));
+
+    Line::from(pad_spans(spans, width))
+}
+
+/// Renders a row of cells with column rules between them.
+fn cell_spans(
+    cells: &[RenderCell],
+    view: &TaskTableView,
+    theme: &Theme,
+    is_header: bool,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::with_capacity(cells.len() * 4);
+
+    for (index, (cell, width)) in cells.iter().zip(view.column_widths.iter()).enumerate() {
+        if index > 0 {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                theme.glyphs.column_rule.to_string(),
+                if is_header { theme.header } else { theme.border },
+            ));
+            spans.push(Span::raw(" "));
         }
+
+        let align = view.aligns.get(index).copied().unwrap_or(Align::Left);
+        let prefix_width = visible_width(&cell.prefix);
+        if prefix_width > 0 {
+            spans.push(Span::styled(cell.prefix.clone(), theme.muted));
+        }
+
+        let text_width = width.saturating_sub(prefix_width);
+        let padded = match align {
+            Align::Left => pad_cell(&cell.text, text_width, theme.glyphs.ellipsis),
+            Align::Right => pad_cell_right_aligned(&cell.text, text_width, theme.glyphs.ellipsis),
+            Align::Center => pad_cell_centered(&cell.text, text_width, theme.glyphs.ellipsis),
+        };
+        spans.push(Span::styled(padded, cell.tone.style(theme)));
     }
 
     spans
 }
 
-fn slice_spans(spans: &[Span<'static>], offset: usize, width: usize) -> Vec<Span<'static>> {
-    if width == 0 {
-        return Vec::new();
+/// Resolves one model row into display text and tones.
+fn resolve_row(
+    row: &crate::domain::TaskRow,
+    today: date::CivilDate,
+    theme: &Theme,
+) -> RenderRow {
+    if !row.kind.is_task() {
+        return RenderRow {
+            kind: row.kind.clone(),
+            gid: row.gid.clone(),
+            label: row.cells.first().cloned().unwrap_or_default(),
+            completed: false,
+            subtask_depth: 0,
+            cells: Vec::new(),
+        };
     }
 
-    let mut cursor = 0usize;
-    let end = offset.saturating_add(width);
-    let mut out = Vec::new();
-
-    for span in spans {
-        let mut segment = String::new();
-        let style = span.style;
-
-        for ch in span.content.chars() {
-            let char_width = ch.width().unwrap_or(0);
-            let next_cursor = cursor + char_width;
-            if next_cursor > offset && cursor < end {
-                segment.push(ch);
-            }
-            cursor = next_cursor;
-            if cursor >= end {
-                break;
-            }
-        }
-
-        if !segment.is_empty() {
-            out.push(Span::styled(segment, style));
-        }
-
-        if cursor >= end {
-            break;
-        }
-    }
-
-    let current_width = out
+    let completed = row.cells.get(4).map(String::as_str) == Some("done");
+    let cells = row
+        .cells
         .iter()
-        .map(|span| visible_width(span.content.as_ref()))
-        .sum::<usize>();
-    if current_width < width {
-        out.push(Span::raw(" ".repeat(width - current_width)));
-    }
+        .enumerate()
+        .map(|(index, value)| {
+            resolve_cell(
+                ColumnRole::for_index(index),
+                value,
+                completed,
+                row.subtask_depth,
+                today,
+                theme,
+            )
+        })
+        .collect();
 
-    out
+    RenderRow {
+        kind: row.kind.clone(),
+        gid: row.gid.clone(),
+        label: String::new(),
+        completed,
+        subtask_depth: row.subtask_depth,
+        cells,
+    }
 }
 
-fn pad_title_cell(value: &str, width: usize) -> String {
-    let truncated = truncate_title_to_width(value, width);
-    let padding = width.saturating_sub(visible_width(&truncated));
-    format!("{truncated}{}", " ".repeat(padding))
-}
-
-fn pad_cell(value: &str, width: usize) -> String {
-    let truncated = truncate_to_width(value, width);
-    let padding = width.saturating_sub(visible_width(&truncated));
-    format!("{truncated}{}", " ".repeat(padding))
-}
-
-fn truncate_title_to_width(value: &str, width: usize) -> String {
-    if visible_width(value) <= width {
-        return value.to_string();
-    }
-
-    if width == 0 {
-        return String::new();
-    }
-
-    if width == 1 {
-        return "…".to_string();
-    }
-
-    let mut result = String::new();
-    let mut current_width = 0usize;
-    let target_width = width - 1;
-
-    for ch in value.chars() {
-        let char_width = ch.width().unwrap_or(0);
-        if current_width + char_width > target_width {
-            break;
+fn resolve_cell(
+    role: ColumnRole,
+    value: &str,
+    completed: bool,
+    subtask_depth: usize,
+    today: date::CivilDate,
+    theme: &Theme,
+) -> RenderCell {
+    match role {
+        ColumnRole::Title => {
+            let mut cell = RenderCell::new(
+                value,
+                if completed { Tone::Muted } else { Tone::Text },
+            );
+            if subtask_depth > 0 {
+                // Two cells per level: indentation for the outer levels, then a
+                // marker the renderer dims so the title stays the brightest
+                // thing on the line.
+                cell.prefix = format!(
+                    "{}{} ",
+                    "  ".repeat(subtask_depth - 1),
+                    theme.glyphs.subtask
+                );
+            }
+            cell
         }
-        result.push(ch);
-        current_width += char_width;
-    }
-
-    result.push('…');
-    result
-}
-
-fn truncate_to_width(value: &str, width: usize) -> String {
-    if visible_width(value) <= width {
-        return value.to_string();
-    }
-
-    let mut result = String::new();
-    let mut current_width = 0usize;
-
-    for ch in value.chars() {
-        let char_width = ch.width().unwrap_or(0);
-        if current_width + char_width > width {
-            break;
+        ColumnRole::State => RenderCell::new(
+            if completed {
+                theme.glyphs.done
+            } else {
+                theme.glyphs.open
+            },
+            if completed { Tone::Ok } else { Tone::Muted },
+        ),
+        ColumnRole::Due | ColumnRole::Start if !value.trim().is_empty() => {
+            let rendered = date::format_relative(value, today);
+            // A completed task's date is history, and a start date is context;
+            // neither is an emergency, so only an open due date is graded.
+            if completed || matches!(role, ColumnRole::Start) {
+                return RenderCell::new(rendered.text, Tone::Muted);
+            }
+            match rendered.urgency {
+                // Overdue is marked as well as colored, so it survives a
+                // monochrome terminal.
+                Urgency::Overdue => RenderCell::new(
+                    format!("{}{}", theme.glyphs.overdue, rendered.text),
+                    Tone::Danger,
+                ),
+                Urgency::Today => RenderCell::new(rendered.text, Tone::Warn),
+                Urgency::Soon => RenderCell::new(rendered.text, Tone::Accent),
+                Urgency::Later => RenderCell::new(rendered.text, Tone::Text),
+            }
         }
-        result.push(ch);
-        current_width += char_width;
+        _ if value.trim().is_empty() => RenderCell::new(theme.glyphs.empty, Tone::Muted),
+        _ => RenderCell::new(
+            value,
+            if completed { Tone::Muted } else { Tone::Text },
+        ),
+    }
+}
+
+/// Chips describing settings that differ from their defaults.
+///
+/// A fresh session shows none of these. Listing `off` for every switch, as the
+/// old status line did, buried the one setting that had been changed.
+pub fn settings_chips(state: &TaskState) -> Vec<Chip> {
+    let settings = state.task_settings();
+    let mut chips = Vec::new();
+
+    match (settings.sort.group_by_project, settings.sort.group_by_section) {
+        (true, true) => {}
+        (false, false) => chips.push(Chip::toned("ungrouped", Tone::Accent)),
+        (true, false) => chips.push(Chip::toned("group by project", Tone::Accent)),
+        (false, true) => chips.push(Chip::toned("group by section", Tone::Accent)),
     }
 
-    result
+    match settings.filter.completed {
+        Some(false) => {}
+        Some(true) => chips.push(Chip::toned("done only", Tone::Warn)),
+        None => chips.push(Chip::toned("open + done", Tone::Accent)),
+    }
+
+    if matches!(
+        settings.filter.subtasks,
+        crate::domain::SubtaskVisibility::Hide
+    ) {
+        chips.push(Chip::toned("no subtasks", Tone::Accent));
+    }
+
+    if primary_sort_field(state) != TaskSortField::Date {
+        chips.push(Chip::toned(
+            format!("sort {}", settings.sort.primary_field_label()),
+            Tone::Accent,
+        ));
+    }
+
+    let filters = state.active_filter_count();
+    if filters > 0 {
+        chips.push(Chip::toned(
+            format!("{filters} filter{}", if filters == 1 { "" } else { "s" }),
+            Tone::Accent,
+        ));
+    }
+
+    chips
 }
 
-fn visible_width(value: &str) -> usize {
-    value.width()
+fn counts(state: &TaskState, theme: &Theme) -> Vec<Chip> {
+    let mut chips = Vec::new();
+
+    if let TaskStatus::Loading = state.status() {
+        let frame = loading_frame(state, theme).unwrap_or(theme.glyphs.active);
+        chips.push(Chip::toned(format!("{frame} loading"), Tone::Info));
+    }
+    if let TaskStatus::OutOfDate(_) = state.status() {
+        chips.push(Chip::toned("stale", Tone::Warn));
+    }
+
+    let task_count = state.table().task_count();
+    if task_count == 0 {
+        return chips;
+    }
+
+    chips.push(Chip::new(format!("{task_count} tasks")));
+    if let Some(position) = state.selected_task_position() {
+        chips.push(Chip::new(format!("row {position}")));
+    }
+    if state.selected_task_count() > 0 {
+        chips.push(Chip::toned(
+            format!("{} selected", state.selected_task_count()),
+            Tone::Accent,
+        ));
+    }
+
+    chips
 }
 
-fn separator_line(width: usize) -> String {
-    "─".repeat(width)
+fn message(state: &TaskState, no_rows: bool) -> Option<PaneMessage> {
+    // A message replaces the grid only when there is nothing to show. Partial
+    // results that arrive during a load stay visible.
+    match state.status() {
+        TaskStatus::Error(error) => Some(
+            PaneMessage::new(format!("Could not load tasks: {error}"), Tone::Danger)
+                .with_hint("r to retry"),
+        ),
+        _ if !no_rows => None,
+        TaskStatus::Loading => Some(PaneMessage::new(
+            loading_text(state),
+            Tone::Muted,
+        )),
+        // Idle covers both "nothing selected" and "selected but never
+        // requested", so the message names the action that resolves either.
+        TaskStatus::Idle => Some(
+            PaneMessage::new("No tasks loaded", Tone::Muted)
+                .with_hint("select projects, then press t"),
+        ),
+        TaskStatus::OutOfDate(message) => {
+            Some(PaneMessage::new(message.clone(), Tone::Warn).with_hint("r to refresh"))
+        }
+        _ => Some(PaneMessage::new("No tasks match", Tone::Muted).with_hint("f to edit filters")),
+    }
+}
+
+fn loading_text(state: &TaskState) -> String {
+    let targets = state.loading_targets();
+    if targets.is_empty() {
+        "Loading tasks".to_string()
+    } else {
+        format!("Loading {}", targets.join(", "))
+    }
+}
+
+/// The spinner frame for the current instant, or `None` when not loading.
+pub fn loading_frame(state: &TaskState, theme: &Theme) -> Option<&'static str> {
+    let started = state.loading_started_at()?;
+    let elapsed = started.elapsed().as_millis() as usize;
+    Some(theme.glyphs.spinner_frame(elapsed / 120))
+}
+
+fn primary_sort_field(state: &TaskState) -> TaskSortField {
+    state
+        .task_settings()
+        .sort
+        .rules
+        .first()
+        .map(|rule| rule.field)
+        .unwrap_or(TaskSortField::Date)
+}
+
+fn primary_sort_ascending(state: &TaskState) -> bool {
+    state
+        .task_settings()
+        .sort
+        .rules
+        .first()
+        .map(|rule| matches!(rule.direction, crate::domain::SortDirection::Asc))
+        .unwrap_or(true)
+}
+
+/// Measures each column, clamped to its role's bounds, then gives the title
+/// column whatever is left over.
+fn column_widths(headers: &[String], rows: &[RenderRow], viewport: usize) -> Vec<usize> {
+    let mut widths = headers
+        .iter()
+        .enumerate()
+        .map(|(index, header)| {
+            let role = ColumnRole::for_index(index);
+            let (min, max) = role.width_bounds();
+            let natural = rows
+                .iter()
+                .filter(|row| row.kind.is_task())
+                .filter_map(|row| row.cells.get(index))
+                .map(RenderCell::width)
+                .chain(std::iter::once(visible_width(header)))
+                .max()
+                .unwrap_or(0);
+            natural.clamp(min.min(max), max)
+        })
+        .collect::<Vec<_>>();
+
+    let others: usize = widths.iter().skip(1).copied().sum();
+    let separators = COLUMN_SEPARATOR_WIDTH * widths.len().saturating_sub(1);
+    let widest_other = widths.iter().skip(1).copied().max().unwrap_or(0);
+    let title_cap = ((viewport as f64) * TITLE_SHARE).floor() as usize;
+
+    if let Some(title) = widths.first_mut() {
+        *title = (*title)
+            .max(widest_other)
+            .max(viewport.saturating_sub(others + separators))
+            .min(title_cap.max(1));
+    }
+
+    widths
+}
+
+fn total_width(widths: &[usize]) -> usize {
+    widths.iter().sum::<usize>() + COLUMN_SEPARATOR_WIDTH * widths.len().saturating_sub(1)
 }
 
 #[cfg(test)]
 mod tests {
-    use ratatui::style::Modifier;
-
+    use super::{
+        render_task_table, settings_chips, task_body_lines, task_header_line, Align, ColumnRole,
+        GUTTER_WIDTH,
+    };
     use crate::{
         app::task::TaskState,
-        config::Mode,
         asana::{
             dto::{
                 CustomFieldDto, CustomFieldValueDto, ProjectCustomFieldSettingDto, SectionDto,
-                TaskDto,
+                TaskDto, TaskMembershipDto, TaskMembershipProjectDto, TaskMembershipSectionDto,
+                UserDto,
             },
             fake::FakeAsanaClient,
         },
         domain::{Project, TaskRowKind},
+        ui::{chrome::Tone, text::visible_width, theme::Theme},
     };
 
-    use super::{format_task_body, format_task_header_line, format_task_lines, render_task_table};
+    /// The display column of the first column rule, measured in cells rather
+    /// than bytes so multi-byte glyphs earlier in the line do not skew it.
+    fn rule_column(line: &str, rule: &str) -> Option<usize> {
+        let marker = rule.chars().next()?;
+        let mut column = 0usize;
+        for ch in line.chars() {
+            if ch == marker {
+                return Some(column);
+            }
+            column += unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        }
+        None
+    }
 
-    #[test]
-    fn renders_task_table_columns_and_rows() {
+    fn task(gid: &str, name: &str, due: Option<&str>, done: bool) -> TaskDto {
+        TaskDto {
+            gid: gid.to_string(),
+            name: name.to_string(),
+            completed: done,
+            modified_at: None,
+            due_on: due.map(str::to_string),
+            start_on: Some("2026-06-01".to_string()),
+            assignee: Some(UserDto {
+                gid: "u1".to_string(),
+                name: Some("Alex Chen".to_string()),
+                display_name: Some("Alex Chen".to_string()),
+            }),
+            num_subtasks: 0,
+            memberships: vec![TaskMembershipDto {
+                project: TaskMembershipProjectDto {
+                    gid: "p1".to_string(),
+                    name: "Inbox".to_string(),
+                },
+                section: Some(TaskMembershipSectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }),
+            }],
+            custom_fields: vec![CustomFieldValueDto {
+                gid: "cf1".to_string(),
+                name: "Priority".to_string(),
+                display_value: Some("High".to_string()),
+                enum_value: None,
+            }],
+        }
+    }
+
+    fn state_with(tasks: Vec<TaskDto>) -> TaskState {
         let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
             .with_sections(
                 "p1",
@@ -579,727 +815,213 @@ mod tests {
                     },
                 }],
             )
-            .with_tasks(
-                "p1",
-                vec![TaskDto {
-                    gid: "t1".to_string(),
-                    name: "Ship".to_string(),
-                    completed: false,
-                    modified_at: None,
-                    due_on: Some("2026-06-10".to_string()),
-                    start_on: Some("2026-06-01".to_string()),
-                    assignee: None,
-                    num_subtasks: 0,
-                    memberships: vec![crate::asana::dto::TaskMembershipDto {
-                        project: crate::asana::dto::TaskMembershipProjectDto {
-                            gid: "p1".to_string(),
-                            name: "Inbox".to_string(),
-                        },
-                        section: Some(crate::asana::dto::TaskMembershipSectionDto {
-                            gid: "s1".to_string(),
-                            name: "Today".to_string(),
-                        }),
-                    }],
-                    custom_fields: vec![CustomFieldValueDto {
-                        gid: "cf1".to_string(),
-                        name: "Priority".to_string(),
-                        display_value: Some("High".to_string()),
-                        enum_value: None,
-                    }],
-                }],
-            );
-
-        let mut state = TaskState::new();
-        state
-            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
-            .expect("tasks load");
-        state.set_visible(true);
-
-        let view = render_task_table(&state, 120, Mode::Project);
-
-        assert_eq!(view.title, "Task review (project focus)");
-        assert!(view.status_line.contains("1 tasks"));
-        assert_eq!(view.columns[0], "Task");
-        assert!(view.column_widths[0] >= view.column_widths[1]);
-        assert_eq!(view.rows[0].kind, TaskRowKind::ProjectSeparator);
-        assert_eq!(view.rows[1].kind, TaskRowKind::ProjectHeader);
-        assert_eq!(view.rows[1].cells[0], "Inbox");
-        assert_eq!(view.rows[2].kind, TaskRowKind::SectionSpacer);
-        assert_eq!(view.rows[3].kind, TaskRowKind::SectionHeader);
-        assert_eq!(view.rows[3].cells[0], "Today");
-        assert_eq!(view.rows[4].kind, TaskRowKind::Task);
-        assert_eq!(view.rows[4].cells[0], "Ship");
-        assert_eq!(view.rows[4].cells[2], "2026-06-10");
-        assert!(view.total_width <= 120);
-
-        let lines = format_task_lines(&view, state.selected_index(), 120);
-        assert!(lines[0].to_string().contains("Task"));
-        assert!(lines[2].to_string().contains("Inbox"));
-        assert!(format_task_header_line(&view, 120)
-            .to_string()
-            .contains("Assignee"));
-        let body_lines = format_task_body(&view, state.selected_index(), 120);
-        assert!(body_lines[2].to_string().contains(" | "));
-        assert!(body_lines[3].to_string().contains(" | "));
-    }
-
-    #[test]
-    fn bolds_project_and_section_labels_without_bolding_separators() {
-        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
-            .with_sections(
-                "p1",
-                vec![SectionDto {
-                    gid: "s1".to_string(),
-                    name: "Today".to_string(),
-                }],
-            )
-            .with_tasks(
-                "p1",
-                vec![TaskDto {
-                    gid: "t1".to_string(),
-                    name: "Ship".to_string(),
-                    completed: false,
-                    modified_at: None,
-                    due_on: Some("2026-06-10".to_string()),
-                    start_on: Some("2026-06-01".to_string()),
-                    assignee: None,
-                    num_subtasks: 0,
-                    memberships: vec![crate::asana::dto::TaskMembershipDto {
-                        project: crate::asana::dto::TaskMembershipProjectDto {
-                            gid: "p1".to_string(),
-                            name: "Inbox".to_string(),
-                        },
-                        section: Some(crate::asana::dto::TaskMembershipSectionDto {
-                            gid: "s1".to_string(),
-                            name: "Today".to_string(),
-                        }),
-                    }],
-                    custom_fields: vec![],
-                }],
-            );
-
-        let mut state = TaskState::new();
-        state
-            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
-            .expect("tasks load");
-
-        let view = render_task_table(&state, 120, Mode::Project);
-        let body_lines = format_task_body(&view, state.selected_index(), 120);
-
-        assert!(body_lines[1].spans[0]
-            .style
-            .add_modifier
-            .contains(Modifier::BOLD));
-        assert!(body_lines[3].spans[0]
-            .style
-            .add_modifier
-            .contains(Modifier::BOLD));
-        assert!(!body_lines[0].spans[0]
-            .style
-            .add_modifier
-            .contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn renders_loading_state_with_spinner_and_targets() {
-        let mut state = TaskState::new();
-        state.begin_loading(&[Project::new("p1", "Inbox", true)]);
-
-        let view = render_task_table(&state, 80, Mode::Project);
-
-        assert!(view.status_line.contains("Loading tasks"));
-        assert!(view.status_line.contains("Inbox"));
-        assert!(view.hint_lines.first().unwrap().contains("more hints"));
-    }
-
-    #[test]
-    fn renders_out_of_date_status_with_refresh_hint() {
-        let mut state = TaskState::new();
-        state.begin_loading(&[Project::new("p1", "Inbox", true)]);
-        state.finish_loading(crate::domain::TaskTableModel::empty());
-        state.mark_out_of_date("selected projects changed; switch to task view to refresh");
-
-        let view = render_task_table(&state, 80, Mode::Project);
-
-        assert!(view.status_line.contains("stale"));
-        assert!(view.status_line.contains("switch to task view"));
-    }
-
-    #[test]
-    fn renders_task_filter_and_sort_hints() {
-        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
-            .with_sections(
-                "p1",
-                vec![crate::asana::dto::SectionDto {
-                    gid: "s1".to_string(),
-                    name: "Today".to_string(),
-                }],
-            )
-            .with_tasks(
-                "p1",
-                vec![
-                    crate::asana::dto::TaskDto {
-                        gid: "t1".to_string(),
-                        name: "Ship".to_string(),
-                        completed: false,
-                        modified_at: None,
-                        due_on: Some("2026-06-10".to_string()),
-                        start_on: Some("2026-06-01".to_string()),
-                        assignee: None,
-                        num_subtasks: 0,
-                        memberships: vec![crate::asana::dto::TaskMembershipDto {
-                            project: crate::asana::dto::TaskMembershipProjectDto {
-                                gid: "p1".to_string(),
-                                name: "Inbox".to_string(),
-                            },
-                            section: Some(crate::asana::dto::TaskMembershipSectionDto {
-                                gid: "s1".to_string(),
-                                name: "Today".to_string(),
-                            }),
-                        }],
-                        custom_fields: vec![],
-                    },
-                    crate::asana::dto::TaskDto {
-                        gid: "t2".to_string(),
-                        name: "Done".to_string(),
-                        completed: true,
-                        modified_at: None,
-                        due_on: Some("2026-06-11".to_string()),
-                        start_on: Some("2026-06-02".to_string()),
-                        assignee: None,
-                        num_subtasks: 0,
-                        memberships: vec![crate::asana::dto::TaskMembershipDto {
-                            project: crate::asana::dto::TaskMembershipProjectDto {
-                                gid: "p1".to_string(),
-                                name: "Inbox".to_string(),
-                            },
-                            section: Some(crate::asana::dto::TaskMembershipSectionDto {
-                                gid: "s1".to_string(),
-                                name: "Today".to_string(),
-                            }),
-                        }],
-                        custom_fields: vec![],
-                    },
-                ],
-            );
+            .with_tasks("p1", tasks);
 
         let mut state = TaskState::new();
         state.set_completed_filter(None);
         state
             .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
-        state.toggle_completed_filter();
-        state.toggle_subtask_visibility();
-        state.toggle_project_grouping();
-        state.toggle_section_grouping();
-        state.cycle_sort_field();
-
-        let view = render_task_table(&state, 80, Mode::Project);
-
-        assert_eq!(
-            view.hint_lines,
-            vec![
-                "?: more hints".to_string(),
-                "j/down,k/up: move, ctrl-u/d: page, home/end: top/bottom".to_string(),
-                "[]: section jumps, {}: project jumps, s: sort, , project group, . section group"
-                    .to_string(),
-                "enter: open, space: select, a: all, i: invert, x: clear, y: copy, f: filters, c: completed, z: subtasks".to_string(),
-                "left/right: scroll columns, p/f/t: modes, [/]/{}/0: pane size, r: refresh, q: quit"
-                    .to_string(),
-            ]
-        );
-        assert!(view.status_line.contains("grp p:off s:off"));
-        assert!(view.status_line.contains("comp open"));
-        assert!(view.status_line.contains("sub hide"));
-        assert!(view.status_line.contains("sort title"));
-    }
-
-    #[test]
-    fn renders_expanded_task_help_details() {
-        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
-            .with_sections(
-                "p1",
-                vec![crate::asana::dto::SectionDto {
-                    gid: "s1".to_string(),
-                    name: "Today".to_string(),
-                }],
-            )
-            .with_tasks(
-                "p1",
-                vec![crate::asana::dto::TaskDto {
-                    gid: "t1".to_string(),
-                    name: "Ship".to_string(),
-                    completed: false,
-                    modified_at: None,
-                    due_on: Some("2026-06-10".to_string()),
-                    start_on: Some("2026-06-01".to_string()),
-                    assignee: None,
-                    num_subtasks: 0,
-                    memberships: vec![crate::asana::dto::TaskMembershipDto {
-                        project: crate::asana::dto::TaskMembershipProjectDto {
-                            gid: "p1".to_string(),
-                            name: "Inbox".to_string(),
-                        },
-                        section: Some(crate::asana::dto::TaskMembershipSectionDto {
-                            gid: "s1".to_string(),
-                            name: "Today".to_string(),
-                        }),
-                    }],
-                    custom_fields: vec![],
-                }],
-            );
-
-        let mut state = TaskState::new();
-        state
-            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
-            .expect("tasks load");
-        state.toggle_help_details();
-
-        let view = render_task_table(&state, 80, Mode::Project);
-
-        assert_eq!(
-            view.hint_lines,
-            vec![
-                "?: fewer hints".to_string(),
-                "navigation: j/down,k/up move; ctrl-u/d page; home/end top/bottom".to_string(),
-                "scroll: left/right columns".to_string(),
-                String::new(),
-                "grouping/sort: [] section jumps; {} project jumps; , project group; . section group; s sort"
-                    .to_string(),
-                String::new(),
-                "task interaction: enter open in Asana; space select; a all; i invert; x clear; ctrl-x clear hidden; y copy"
-                    .to_string(),
-                String::new(),
-                "filters: f panel; s cycle mode; esc/enter done; c completed; z subtasks"
-                    .to_string(),
-                String::new(),
-                "p/f/t: modes, r: refresh, q: quit".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn keeps_column_markers_aligned_for_varied_lengths() {
-        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
-            .with_sections(
-                "p1",
-                vec![
-                    SectionDto {
-                        gid: "s1".to_string(),
-                        name: "Today".to_string(),
-                    },
-                    SectionDto {
-                        gid: "s2".to_string(),
-                        name: "A much longer section name".to_string(),
-                    },
-                ],
-            )
-            .with_custom_field_settings(
-                "p1",
-                vec![ProjectCustomFieldSettingDto {
-                    gid: "cfs1".to_string(),
-                    custom_field: CustomFieldDto {
-                        gid: "cf1".to_string(),
-                        name: "Priority".to_string(),
-                    },
-                }],
-            )
-            .with_tasks(
-                "p1",
-                vec![
-                    TaskDto {
-                        gid: "t1".to_string(),
-                        name: "Short".to_string(),
-                        completed: false,
-                        modified_at: None,
-                        due_on: Some("2026-06-10".to_string()),
-                        start_on: Some("2026-06-01".to_string()),
-                        assignee: Some(crate::asana::dto::UserDto {
-                            gid: "u1".to_string(),
-                            name: Some("Al".to_string()),
-                            display_name: Some("Al".to_string()),
-                        }),
-                        num_subtasks: 0,
-                        memberships: vec![crate::asana::dto::TaskMembershipDto {
-                            project: crate::asana::dto::TaskMembershipProjectDto {
-                                gid: "p1".to_string(),
-                                name: "Inbox".to_string(),
-                            },
-                            section: Some(crate::asana::dto::TaskMembershipSectionDto {
-                                gid: "s1".to_string(),
-                                name: "Today".to_string(),
-                            }),
-                        }],
-                        custom_fields: vec![CustomFieldValueDto {
-                            gid: "cf1".to_string(),
-                            name: "Priority".to_string(),
-                            display_value: Some("High".to_string()),
-                            enum_value: None,
-                        }],
-                    },
-                    TaskDto {
-                        gid: "t2".to_string(),
-                        name: "A title that is intentionally far longer than the others to force width allocation".to_string(),
-                        completed: false,
-                        modified_at: None,
-                        due_on: Some("2026-06-11".to_string()),
-                        start_on: Some("2026-06-02".to_string()),
-                        assignee: Some(crate::asana::dto::UserDto {
-                            gid: "u2".to_string(),
-                            name: Some("A very very long assignee name".to_string()),
-                            display_name: Some("A very very long assignee name".to_string()),
-                        }),
-                        num_subtasks: 0,
-                        memberships: vec![crate::asana::dto::TaskMembershipDto {
-                            project: crate::asana::dto::TaskMembershipProjectDto {
-                                gid: "p1".to_string(),
-                                name: "Inbox".to_string(),
-                            },
-                            section: Some(crate::asana::dto::TaskMembershipSectionDto {
-                                gid: "s2".to_string(),
-                                name: "A much longer section name".to_string(),
-                            }),
-                        }],
-                        custom_fields: vec![CustomFieldValueDto {
-                            gid: "cf1".to_string(),
-                            name: "Priority".to_string(),
-                            display_value: Some("Urgent".to_string()),
-                            enum_value: None,
-                        }],
-                    },
-                ],
-            );
-
-        let mut state = TaskState::new();
-        state
-            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
-            .expect("tasks load");
         state.set_visible(true);
-
-        let view = render_task_table(&state, 200, Mode::Project);
-        let lines = format_task_lines(&view, state.selected_index(), 200);
-
-        let separator_positions = lines
-            .iter()
-            .filter_map(|line| line.to_string().find(" | "))
-            .collect::<Vec<_>>();
-
-        assert!(!separator_positions.is_empty());
-        assert!(separator_positions
-            .windows(2)
-            .all(|pair| pair[0] == pair[1]));
+        state
     }
 
     #[test]
-    fn inserts_project_headers_and_section_spacers() {
-        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
-            .with_sections(
-                "p1",
-                vec![
-                    SectionDto {
-                        gid: "s1".to_string(),
-                        name: "Alpha".to_string(),
-                    },
-                    SectionDto {
-                        gid: "s2".to_string(),
-                        name: "Beta".to_string(),
-                    },
-                ],
-            )
-            .with_tasks(
-                "p1",
-                vec![
-                    TaskDto {
-                        gid: "t1".to_string(),
-                        name: "First".to_string(),
-                        completed: false,
-                        modified_at: None,
-                        due_on: Some("2026-06-01".to_string()),
-                        start_on: None,
-                        assignee: None,
-                        num_subtasks: 0,
-                        memberships: vec![crate::asana::dto::TaskMembershipDto {
-                            project: crate::asana::dto::TaskMembershipProjectDto {
-                                gid: "p1".to_string(),
-                                name: "Inbox".to_string(),
-                            },
-                            section: Some(crate::asana::dto::TaskMembershipSectionDto {
-                                gid: "s1".to_string(),
-                                name: "Alpha".to_string(),
-                            }),
-                        }],
-                        custom_fields: vec![],
-                    },
-                    TaskDto {
-                        gid: "t2".to_string(),
-                        name: "Second".to_string(),
-                        completed: false,
-                        modified_at: None,
-                        due_on: Some("2026-06-02".to_string()),
-                        start_on: None,
-                        assignee: None,
-                        num_subtasks: 0,
-                        memberships: vec![crate::asana::dto::TaskMembershipDto {
-                            project: crate::asana::dto::TaskMembershipProjectDto {
-                                gid: "p1".to_string(),
-                                name: "Inbox".to_string(),
-                            },
-                            section: Some(crate::asana::dto::TaskMembershipSectionDto {
-                                gid: "s2".to_string(),
-                                name: "Beta".to_string(),
-                            }),
-                        }],
-                        custom_fields: vec![],
-                    },
-                ],
-            );
+    fn resolves_columns_headers_and_group_rows() {
+        let theme = Theme::default();
+        let state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
 
-        let mut state = TaskState::new();
-        state
-            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
-            .expect("tasks load");
+        let view = render_task_table(&state, 120, &theme);
 
-        let view = render_task_table(&state, 120, Mode::Project);
+        assert_eq!(view.title, "Tasks");
+        assert_eq!(view.headers[0], "Task");
+        assert_eq!(view.headers[4], "St");
+        assert!(view.headers[2].starts_with("Due"), "due column marks the sort");
+        assert_eq!(view.aligns[2], Align::Right);
+        assert_eq!(view.aligns[4], Align::Center);
         assert_eq!(view.rows[0].kind, TaskRowKind::ProjectSeparator);
         assert_eq!(view.rows[1].kind, TaskRowKind::ProjectHeader);
-        assert_eq!(view.rows[2].kind, TaskRowKind::SectionSpacer);
+        assert_eq!(view.rows[1].label, "Inbox");
         assert_eq!(view.rows[3].kind, TaskRowKind::SectionHeader);
+        assert_eq!(view.rows[3].label, "Today");
         assert_eq!(view.rows[4].kind, TaskRowKind::Task);
-        assert_eq!(view.rows[5].kind, TaskRowKind::SectionSpacer);
-        assert_eq!(view.rows[6].kind, TaskRowKind::SectionHeader);
-        assert_eq!(view.rows[7].kind, TaskRowKind::Task);
+        assert_eq!(view.rows[4].cells[0].text, "Ship release");
     }
 
     #[test]
-    fn keeps_column_markers_aligned_when_scrolled_horizontally() {
-        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
-            .with_sections(
-                "p1",
-                vec![SectionDto {
-                    gid: "s1".to_string(),
-                    name: "Today".to_string(),
-                }],
-            )
-            .with_custom_field_settings(
-                "p1",
-                vec![ProjectCustomFieldSettingDto {
-                    gid: "cfs1".to_string(),
-                    custom_field: CustomFieldDto {
-                        gid: "cf1".to_string(),
-                        name: "Priority".to_string(),
-                    },
-                }],
-            )
-            .with_tasks(
-                "p1",
-                vec![
-                    TaskDto {
-                        gid: "t1".to_string(),
-                        name: "Short".to_string(),
-                        completed: false,
-                        modified_at: None,
-                        due_on: Some("2026-06-10".to_string()),
-                        start_on: Some("2026-06-01".to_string()),
-                        assignee: Some(crate::asana::dto::UserDto {
-                            gid: "u1".to_string(),
-                            name: Some("Al".to_string()),
-                            display_name: Some("Al".to_string()),
-                        }),
-                        num_subtasks: 0,
-                        memberships: vec![crate::asana::dto::TaskMembershipDto {
-                            project: crate::asana::dto::TaskMembershipProjectDto {
-                                gid: "p1".to_string(),
-                                name: "Inbox".to_string(),
-                            },
-                            section: Some(crate::asana::dto::TaskMembershipSectionDto {
-                                gid: "s1".to_string(),
-                                name: "Today".to_string(),
-                            }),
-                        }],
-                        custom_fields: vec![CustomFieldValueDto {
-                            gid: "cf1".to_string(),
-                            name: "Priority".to_string(),
-                            display_value: Some("High".to_string()),
-                            enum_value: None,
-                        }],
-                    },
-                    TaskDto {
-                        gid: "t2".to_string(),
-                        name: "A title that is intentionally far longer than the others to force width allocation".to_string(),
-                        completed: false,
-                        modified_at: None,
-                        due_on: Some("2026-06-11".to_string()),
-                        start_on: Some("2026-06-02".to_string()),
-                        assignee: Some(crate::asana::dto::UserDto {
-                            gid: "u2".to_string(),
-                            name: Some("A very very long assignee name".to_string()),
-                            display_name: Some("A very very long assignee name".to_string()),
-                        }),
-                        num_subtasks: 0,
-                        memberships: vec![crate::asana::dto::TaskMembershipDto {
-                            project: crate::asana::dto::TaskMembershipProjectDto {
-                                gid: "p1".to_string(),
-                                name: "Inbox".to_string(),
-                            },
-                            section: Some(crate::asana::dto::TaskMembershipSectionDto {
-                                gid: "s1".to_string(),
-                                name: "Today".to_string(),
-                            }),
-                        }],
-                        custom_fields: vec![CustomFieldValueDto {
-                            gid: "cf1".to_string(),
-                            name: "Priority".to_string(),
-                            display_value: Some("Urgent".to_string()),
-                            enum_value: None,
-                        }],
-                    },
-                ],
-            );
+    fn every_line_is_exactly_the_pane_width() {
+        let state = state_with(vec![
+            task("t1", "Ship release", Some("2026-06-10"), false),
+            task(
+                "t2",
+                "A title that is intentionally far longer than the pane can show",
+                Some("2026-06-11"),
+                true,
+            ),
+        ]);
 
-        let mut state = TaskState::new();
-        state
-            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
-            .expect("tasks load");
-        state.set_visible(true);
-        for _ in 0..12 {
-            state.scroll_right();
+        let theme = Theme::default();
+        for width in [40usize, 80, 120, 200] {
+            let view = render_task_table(&state, width.saturating_sub(GUTTER_WIDTH), &theme);
+
+            assert_eq!(
+                visible_width(&task_header_line(&view, &theme, width).to_string()),
+                width
+            );
+            for line in task_body_lines(&view, state.selected_index(), &theme, width) {
+                assert_eq!(
+                    visible_width(&line.to_string()),
+                    width,
+                    "a body line was not {width} cells wide"
+                );
+            }
         }
-
-        let view = render_task_table(&state, 60, Mode::Project);
-        assert!(view.scroll_offset > 0);
-        let lines = format_task_lines(&view, state.selected_index(), 60);
-        let separator_positions = lines
-            .iter()
-            .filter_map(|line| line.to_string().find(" | "))
-            .collect::<Vec<_>>();
-
-        assert!(!separator_positions.is_empty());
-        assert!(separator_positions
-            .windows(2)
-            .all(|pair| pair[0] == pair[1]));
     }
 
     #[test]
-    fn scroll_hint_reflects_overflowing_view() {
-        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
-            .with_sections(
-                "p1",
-                vec![SectionDto {
-                    gid: "s1".to_string(),
-                    name: "Today".to_string(),
-                }],
-            )
-            .with_custom_field_settings(
-                "p1",
-                vec![ProjectCustomFieldSettingDto {
-                    gid: "cfs1".to_string(),
-                    custom_field: CustomFieldDto {
-                        gid: "cf1".to_string(),
-                        name: "Priority".to_string(),
-                    },
-                }],
-            )
-            .with_tasks(
-                "p1",
-                vec![TaskDto {
-                    gid: "t1".to_string(),
-                    name: "Ship release with a very long title that should force scrolling"
-                        .to_string(),
-                    completed: false,
-                    modified_at: None,
-                    due_on: Some("2026-06-10".to_string()),
-                    start_on: Some("2026-06-01".to_string()),
-                    assignee: Some(crate::asana::dto::UserDto {
-                        gid: "u1".to_string(),
-                        name: Some("Alex".to_string()),
-                        display_name: Some("Alex".to_string()),
-                    }),
-                    num_subtasks: 0,
-                    memberships: vec![],
-                    custom_fields: vec![CustomFieldValueDto {
-                        gid: "cf1".to_string(),
-                        name: "Priority".to_string(),
-                        display_value: Some("High".to_string()),
-                        enum_value: None,
-                    }],
-                }],
+    fn column_rules_stay_aligned_across_rows_and_while_scrolled() {
+        let state = state_with(vec![
+            task("t1", "Short", Some("2026-06-10"), false),
+            task(
+                "t2",
+                "A much longer title to force the width allocation to move",
+                Some("2026-06-11"),
+                false,
+            ),
+        ]);
+        let theme = Theme::default();
+
+        for scroll in [0usize, 6, 14] {
+            let mut view = render_task_table(&state, 80 - GUTTER_WIDTH, &theme);
+            view.scroll_offset = scroll.min(view.max_scroll);
+
+            let mut lines = vec![task_header_line(&view, &theme, 80)];
+            lines.extend(task_body_lines(&view, None, &theme, 80));
+
+            let positions = lines
+                .iter()
+                .map(|line| line.to_string())
+                .filter_map(|line| rule_column(&line, theme.glyphs.column_rule))
+                .collect::<Vec<_>>();
+
+            assert!(positions.len() >= 2);
+            assert!(
+                positions.windows(2).all(|pair| pair[0] == pair[1]),
+                "rules misaligned at scroll {scroll}: {positions:?}"
             );
-
-        let mut state = TaskState::new();
-        state
-            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
-            .expect("tasks load");
-
-        let view = render_task_table(&state, 40, Mode::Project);
-
-        assert!(view.total_width > 40);
-        assert!(view
-            .hint_lines
-            .iter()
-            .any(|line| line.contains("p/f/t: modes")));
+        }
     }
 
     #[test]
-    fn truncates_the_title_column_with_an_ellipsis_when_it_exceeds_the_view() {
-        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
-            .with_sections(
-                "p1",
-                vec![SectionDto {
-                    gid: "s1".to_string(),
-                    name: "Today".to_string(),
-                }],
-            )
-            .with_tasks(
-                "p1",
-                vec![TaskDto {
-                    gid: "t1".to_string(),
-                    name: "A task title that is intentionally far longer than sixty percent of the viewport width".to_string(),
-                    completed: false,
-                    modified_at: None,
-                    due_on: Some("2026-06-10".to_string()),
-                    start_on: Some("2026-06-01".to_string()),
-                    assignee: Some(crate::asana::dto::UserDto {
-                        gid: "u1".to_string(),
-                        name: Some("Alex".to_string()),
-                        display_name: Some("Alex".to_string()),
-                    }),
-                    num_subtasks: 0,
-                    memberships: vec![crate::asana::dto::TaskMembershipDto {
-                        project: crate::asana::dto::TaskMembershipProjectDto {
-                            gid: "p1".to_string(),
-                            name: "Inbox".to_string(),
-                        },
-                        section: Some(crate::asana::dto::TaskMembershipSectionDto {
-                            gid: "s1".to_string(),
-                            name: "Today".to_string(),
-                        }),
-                    }],
-                    custom_fields: vec![],
-                }],
+    fn group_headers_draw_no_column_rules_or_empty_cells() {
+        let state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
+        let theme = Theme::default();
+        let view = render_task_table(&state, 120 - GUTTER_WIDTH, &theme);
+
+        let lines = task_body_lines(&view, None, &theme, 120);
+        let project_header = lines[1].to_string();
+        let section_header = lines[3].to_string();
+
+        assert!(project_header.contains("Inbox"));
+        assert!(!project_header.contains(theme.glyphs.column_rule));
+        assert!(project_header.contains(theme.glyphs.rule));
+        assert!(section_header.contains("Today"));
+        assert!(!section_header.contains(theme.glyphs.column_rule));
+        assert!(lines[0].to_string().trim().is_empty(), "separator is blank");
+        assert!(lines[2].to_string().trim().is_empty(), "spacer is blank");
+    }
+
+    #[test]
+    fn dates_render_relatively_and_carry_urgency() {
+        std::env::set_var("TUISANA_TODAY", "2026-06-10");
+        let theme = Theme::default();
+        let state = state_with(vec![
+            task("t1", "Due today", Some("2026-06-10"), false),
+            task("t2", "Overdue", Some("2026-06-01"), false),
+            task("t3", "Later", Some("2026-09-30"), false),
+        ]);
+
+        let view = render_task_table(&state, 120, &theme);
+        let by_title = |title: &str| {
+            view.rows
+                .iter()
+                .find(|row| row.cells.first().is_some_and(|cell| cell.text == title))
+                .expect("row exists")
+                .clone()
+        };
+
+        assert_eq!(by_title("Due today").cells[2].text, "Today");
+        assert_eq!(by_title("Due today").cells[2].tone, Tone::Warn);
+        assert_eq!(by_title("Overdue").cells[2].tone, Tone::Danger);
+        assert!(
+            by_title("Overdue").cells[2].text.starts_with(theme.glyphs.overdue),
+            "an overdue date is marked as well as colored"
+        );
+        assert_eq!(by_title("Later").cells[2].text, "Sep 30");
+        assert_eq!(by_title("Later").cells[2].tone, Tone::Text);
+        std::env::remove_var("TUISANA_TODAY");
+    }
+
+    #[test]
+    fn completed_tasks_are_dimmed_and_marked_done() {
+        let state = state_with(vec![task("t1", "Closed", Some("2026-01-01"), true)]);
+        let theme = Theme::default();
+        let view = render_task_table(&state, 120, &theme);
+
+        let row = view
+            .rows
+            .iter()
+            .find(|row| row.kind.is_task())
+            .expect("a task row");
+
+        assert!(row.completed);
+        assert_eq!(row.cells[0].tone, Tone::Muted);
+        assert_eq!(row.cells[4].text, theme.glyphs.done);
+        // An overdue date on a completed task is not an emergency.
+        assert_eq!(row.cells[2].tone, Tone::Muted);
+    }
+
+    #[test]
+    fn empty_cells_show_a_placeholder_rather_than_blank_space() {
+        let mut dto = task("t1", "No assignee", None, false);
+        dto.assignee = None;
+        dto.custom_fields = vec![];
+        let state = state_with(vec![dto]);
+        let theme = Theme::default();
+        let view = render_task_table(&state, 120, &theme);
+
+        let row = view
+            .rows
+            .iter()
+            .find(|row| row.kind.is_task())
+            .expect("a task row");
+
+        assert_eq!(row.cells[1].text, theme.glyphs.empty);
+        assert_eq!(row.cells[2].text, theme.glyphs.empty);
+    }
+
+    #[test]
+    fn no_header_is_cut_mid_word_at_eighty_columns() {
+        let state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
+        let theme = Theme::default();
+        let view = render_task_table(&state, 80 - GUTTER_WIDTH, &theme);
+
+        for (index, header) in view.headers.iter().enumerate() {
+            let width = view.column_widths[index];
+            assert!(
+                visible_width(header) <= width || width >= 4,
+                "header {header} has no room at all"
             );
-
-        let mut state = TaskState::new();
-        state
-            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
-            .expect("tasks load");
-
-        let view = render_task_table(&state, 50, Mode::Project);
-        let lines = format_task_lines(&view, state.selected_index(), 50);
-        let rendered = lines
-            .iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>();
-
-        assert!(view.column_widths[0] <= 30);
-        assert!(rendered.iter().any(|line| line.contains('…')));
+        }
+        assert!(view.column_widths[5] >= 7, "Projects keeps a minimum width");
+        assert!(view.column_widths[6] >= 6, "Priority keeps a minimum width");
     }
 
     #[test]
-    fn renders_subtasks_with_an_indent_marker() {
+    fn subtasks_are_indented_with_a_dimmed_marker() {
         let mut parent = crate::domain::TaskRecord::new("p1", "Parent task");
         parent.projects = vec!["Inbox".to_string()];
         parent.sections = vec!["Today".to_string()];
-
         let mut child = crate::domain::TaskRecord::new("p2", "Child task");
         child.parent_gid = Some("p1".to_string());
         child.subtask_depth = 1;
@@ -1311,14 +1033,111 @@ mod tests {
             vec![],
             &crate::domain::TaskTableSettings::default(),
         );
+        let mut state = TaskState::new();
+        state.finish_loading(model);
+        let theme = Theme::default();
+        let view = render_task_table(&state, 120, &theme);
 
-        let task_titles = model
+        let titles = view
             .rows
             .iter()
             .filter(|row| row.kind.is_task())
-            .map(|row| row.cells[0].clone())
+            .map(|row| (row.cells[0].prefix.clone(), row.cells[0].text.clone()))
             .collect::<Vec<_>>();
 
-        assert_eq!(task_titles, vec!["Parent task", "  L Child task"]);
+        assert_eq!(
+            titles,
+            vec![
+                (String::new(), "Parent task".to_string()),
+                (format!("{} ", theme.glyphs.subtask), "Child task".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn counts_report_totals_position_and_selection() {
+        let theme = Theme::default();
+        let mut state = state_with(vec![
+            task("t1", "One", Some("2026-06-10"), false),
+            task("t2", "Two", Some("2026-06-11"), false),
+        ]);
+
+        let view = render_task_table(&state, 120, &theme);
+        let texts = |view: &super::TaskTableView| {
+            view.counts
+                .iter()
+                .map(|chip| chip.text.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(texts(&view), vec!["2 tasks".to_string(), "row 1".to_string()]);
+
+        let _ = state.apply_action(&crate::input::Action::ToggleTaskSelection, 10);
+        assert!(texts(&render_task_table(&state, 120, &theme))
+            .iter()
+            .any(|text| text == "1 selected"));
+    }
+
+    #[test]
+    fn settings_chips_report_only_what_differs_from_the_defaults() {
+        let mut state = state_with(vec![task("t1", "One", Some("2026-06-10"), false)]);
+        state.set_completed_filter(Some(false));
+
+        assert!(settings_chips(&state).is_empty());
+
+        state.toggle_project_grouping();
+        state.toggle_subtask_visibility();
+        state.cycle_sort_field();
+
+        let chips = settings_chips(&state)
+            .iter()
+            .map(|chip| chip.text.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            chips,
+            vec![
+                "group by section".to_string(),
+                "no subtasks".to_string(),
+                "sort title".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_table_explains_itself() {
+        let theme = Theme::default();
+        let mut state = TaskState::new();
+        state.set_visible(true);
+        let idle = render_task_table(&state, 80, &theme);
+        assert!(idle
+            .message
+            .expect("idle explains itself")
+            .text
+            .contains("No tasks loaded"));
+
+        state.begin_loading(&[Project::new("p1", "Inbox", true)]);
+        let loading = render_task_table(&state, 80, &theme);
+        assert!(loading
+            .message
+            .expect("loading explains itself")
+            .text
+            .contains("Inbox"));
+
+        state.finish_loading(crate::domain::TaskTableModel::empty());
+        state.set_error("token expired".to_string());
+        let error = render_task_table(&state, 80, &theme);
+        let message = error.message.expect("errors explain themselves");
+        assert!(message.text.contains("token expired"));
+        assert_eq!(message.tone, Tone::Danger);
+    }
+
+    #[test]
+    fn column_roles_map_built_ins_by_position_and_the_rest_to_custom() {
+        assert_eq!(ColumnRole::for_index(0), ColumnRole::Title);
+        assert_eq!(ColumnRole::for_index(4), ColumnRole::State);
+        assert_eq!(ColumnRole::for_index(5), ColumnRole::Projects);
+        assert_eq!(ColumnRole::for_index(6), ColumnRole::Custom);
+        assert_eq!(ColumnRole::for_index(20), ColumnRole::Custom);
     }
 }

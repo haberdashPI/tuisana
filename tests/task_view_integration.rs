@@ -134,8 +134,11 @@ fn pressing_m_displays_the_task_view() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(text.contains("Task review"));
+    // The pane title lives in its border and the active mode in the status bar,
+    // instead of each getting a line of its own above the pane.
     assert!(text.contains("Tasks"));
+    assert!(text.contains("TASK"));
+    assert!(text.contains("TUISANA"));
 }
 
 #[test]
@@ -277,5 +280,6 @@ fn changing_the_completed_filter_updates_the_visible_task_rows() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(text.contains("Task review"));
+    assert!(text.contains("Tasks"));
+    assert!(text.contains("TASK"));
 }

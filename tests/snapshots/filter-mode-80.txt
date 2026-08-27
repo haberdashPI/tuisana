@@ -1,0 +1,30 @@
+ TUISANA  ▸ 1 project ▸ 4 tasks
+┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃▍   Title     fuzzy     —                                                     ┃
+┃    Assignee  contains  —                                                     ┃
+┃    Due       date      —                                                     ┃
+┃    Start     date      —                                                     ┃
+┃    State     labels    —                                                     ┃
+┃    Projects  contains  —                                                     ┃
+┃    Priority  labels    —                                                     ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌ Tasks ─────────────────────────────────────── 4 tasks · row 1 · columns 0/40 ┐
+│   Task                                          │ Assignee     │    Due▲ │ St│
+│                                                                              │
+│▌Northwind BTX 4412 ──────────────────────────────────────────────────────────│
+│                                                                              │
+│   Study Kit Design ··························································│
+│▍  Review shipment requirements doc              │ Morgan Ellis │ !Aug 19 │ Au│
+│   Ship release candidate to the study team      │ Alex Chen    │   Today │ Au│
+│   Confirm carrier pickup window with the vendor │ —            │     Wed │ Au│
+│                                                                              │
+│   Shipment ··································································│
+│   Close out packaging vendor contract           │ Alex Chen    │  Nov 14 │ Au│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+⏎ edit   j/k field   s match mode   ^l clear   f close        r refresh   q quit
+ FILTER

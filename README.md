@@ -68,6 +68,51 @@ Asana docs:
 - https://developers.asana.com/reference/getworkspaces
 - https://developers.asana.com/reference/getworkspace
 
+### Appearance
+
+The optional `[theme]` section controls colors and glyphs. Every value has a
+sensible default, so the section can be omitted entirely.
+
+```toml
+[theme]
+variant = "ansi"     # "ansi" | "truecolor" | "mono"
+glyphs = "unicode"   # "unicode" | "ascii"
+accent = "cyan"      # black, red, green, yellow, blue, magenta, cyan, white, gray
+zebra = false        # stripe alternating task rows (requires variant = "truecolor")
+```
+
+- `variant = "ansi"` (the default) draws with the terminal's own 16-color
+  palette, so the UI inherits whatever scheme you already use.
+- `variant = "truecolor"` additionally uses indexed shades for subtle
+  backgrounds, and is required for `zebra`.
+- `variant = "mono"` emits no color at all and relies on bold, dim, and reverse
+  video. Setting the `NO_COLOR` environment variable forces this, together with
+  the ASCII glyph set.
+- `glyphs = "ascii"` replaces every box-drawing and marker glyph with an ASCII
+  equivalent, for terminals whose fonts render ambiguous-width characters as
+  two cells.
+
+Reading the screen:
+
+- The **focused pane** has a thick border, tinted with the current mode's color.
+  The mode badge at the bottom left uses the same color.
+- The **header bar** names the app and the current project/task context. The
+  **hint bar** above the mode badge lists the most useful keys for the current
+  mode, resolved from your actual key bindings. The **status bar** lists only
+  the settings that differ from their defaults, so an untouched session shows
+  nothing there.
+- Pane titles and counts live in the pane's own border.
+- `?` opens a grouped help overlay for the current mode. It draws over the panes
+  without moving them; press `?` again to dismiss it.
+- Due dates render relatively (`Today`, `Tomorrow`, `Wed`, `Nov 14`). An overdue
+  date is prefixed with `!` and colored red, one due today is yellow, and one
+  within three days takes the accent color.
+- In the task table the left gutter carries two markers: the cursor (`▍`) and
+  multi-selection (`●`). An empty cell shows `—`.
+
+`TUISANA_TODAY=YYYY-MM-DD` pins the date relative due dates are measured
+against, which is mostly useful for tests and screenshots.
+
 ### Key bindings
 
 The `[[bind]]` section maps keyboard input to command names.
@@ -182,7 +227,7 @@ The top window is shared between the project list and the filter view. When the 
 
 **Global shortcuts** (active in all modes unless overridden):
 
-- `?` to toggle compact vs expanded hint display
+- `?` to open or close the help overlay for the current mode
 - `j`/`down` to move down, `k`/`up` to move up
 - `ctrl-u` and `ctrl-d` to page through the list
 - `home` and `end` to jump to the top or bottom

@@ -1,0 +1,30 @@
+ TUISANA  ▸ Northwind BTX 4412
+┏ Projects ━━━━━━━━━━━━━━┏ Help · project mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓━━━━━━━━━━━━━━━ 3 shown ┓
+┃▍   ★ Northwind BTX 4412┃Select                              Move                            ┃                        ┃
+┃    ★ Platform Infrastru┃␣         select, then move down    j/k       down / up             ┃                        ┃
+┃    ☆ Backlog           ┃a         select all visible        ^d/^u     page down / up        ┃                        ┃
+┃                        ┃!         select starred            home/end  top / bottom          ┃                        ┃
+┃                        ┃@         select non-hidden                                         ┃                        ┃
+┃                        ┃i         invert                    Modes                           ┃                        ┃
+┃                        ┃c         clear                     p         projects              ┃                        ┃
+┃                        ┃u         undo                      f         filters               ┃                        ┃
+┃                        ┃^y        redo                      t         tasks                 ┃                        ┃
+┃                        ┃                                    m         toggle tasks          ┃                        ┃
+┃                        ┃Projects                                                            ┃                        ┃
+┃                        ┃⏎         open in Asana             Panes                           ┃                        ┃
+┃                        ┃*         star selected             [/]       shrink / grow         ┃                        ┃
+┃                        ┃h         hide selected             {         minimize              ┃                        ┃
+┃                        ┃v         show hidden               }         maximize              ┃                        ┃
+┃                        ┃o         only selected             0         restore               ┃                        ┃
+┃                        ┃                                                                    ┃                        ┃
+┃                        ┃Search                              App                             ┃                        ┃
+┃                        ┃/         start                     r         refresh               ┃                        ┃
+┃                        ┃^f        fuzzy                     q ^c      quit                  ┃                        ┃
+┃                        ┃^s        contains                  ?         close this help       ┃                        ┃
+┃                        ┃^r        regex                                                     ┃                        ┃
+┃                        ┃                                                                    ┃                        ┃
+┃                        ┃                                                          ? to close┃                        ┃
+┃                        ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                        ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+j/k move   ␣ select   t tasks   / search   v show hidden   ? help                                     r refresh   q quit
+ PROJECT

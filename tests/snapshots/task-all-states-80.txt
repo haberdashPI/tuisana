@@ -1,0 +1,30 @@
+ TUISANA  ▸ 1 project ▸ 5 tasks
+┌ Projects ────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                      │
+│▍   ★ Platform Infrastructure                                                 │
+│    ☆ Backlog                                                                 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5 tasks · row 4 · columns 0/40 ┓
+┃   Task                                          │ Assignee     │    Due▲ │ St┃
+┃                                                                              ┃
+┃▌Northwind BTX 4412 ──────────────────────────────────────────────────────────┃
+┃                                                                              ┃
+┃   Study Kit Design ··························································┃
+┃   Review shipment requirements doc              │ Morgan Ellis │ !Aug 19 │ Au┃
+┃   Ship release candidate to the study team      │ Alex Chen    │   Today │ Au┃
+┃   Confirm carrier pickup window with the vendor │ —            │     Wed │ Au┃
+┃                                                                              ┃
+┃   Shipment ··································································┃
+┃▍  Archive the pilot batch records               │ Jo Park      │       — │ Au┃
+┃   Close out packaging vendor contract           │ Alex Chen    │  Nov 14 │ Au┃
+┃                                                                              ┃
+┃                                                                              ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+j/k move   ⏎ open   ␣ select   f filters   s sort             r refresh   q quit
+ TASK                                                                open + done

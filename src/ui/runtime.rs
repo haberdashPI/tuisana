@@ -1,28 +1,33 @@
-//! Terminal runtime for drawing the app and processing input.
+//! Terminal runtime: the event loop and the per-frame draw.
+//!
+//! `draw` is deliberately thin. It asks [`layout`] where things go, asks each
+//! content module for a snapshot, and hands the snapshot to that module's line
+//! builders. All geometry lives in `layout`, all styling in `theme`, and all
+//! text formatting in the content modules — this file only wires them together
+//! and owns the loop.
 
 use std::{io, io::Stdout, time::Duration};
 
 use crossterm::event::{self, Event, KeyEvent};
 use ratatui::{
     backend::{Backend, CrosstermBackend},
-    prelude::*,
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
-    Terminal,
+    layout::Rect,
+    widgets::{List, ListItem, ListState, Paragraph},
+    Frame, Terminal,
 };
 
 use crate::{
     app::App,
     asana::AsanaClient,
     config::Mode,
-    ui::project_list::render_project_list,
-    ui::task_table::{
-        format_task_body, format_task_filter_body, format_task_header_line,
-        render_task_filter_panel, render_task_table,
+    input::KeyMap,
+    ui::{
+        chrome::{self, Chip, Tone},
+        filter_panel, help_overlay, hints, layout, project_list,
+        task_table::{self, TaskTableView, GUTTER_WIDTH},
+        theme::Theme,
     },
 };
-
-#[cfg(test)]
-const PROJECT_VISIBLE_ROWS: usize = 4;
 
 /// A single event observed by the UI runtime.
 ///
@@ -58,247 +63,320 @@ impl KeySource for CrosstermKeySource {
             return Ok(InputEvent::Tick);
         }
 
+        // Resize and mouse events are not part of the app's input model, so
+        // keep reading until a key arrives.
         loop {
-            match event::read()? {
-                Event::Key(key_event) => return Ok(InputEvent::Key(key_event)),
-                _ => {}
+            if let Event::Key(key_event) = event::read()? {
+                return Ok(InputEvent::Key(key_event));
             }
         }
     }
+}
+
+/// Which pane the active mode is driving.
+///
+/// Focus decides the thick border and the mode-colored title, so the answer to
+/// "where do my keys go" is visible at both ends of the screen.
+fn focused_pane(mode: Mode) -> FocusedPane {
+    match mode {
+        Mode::Task => FocusedPane::Task,
+        Mode::Project | Mode::ProjectSearch | Mode::Filter | Mode::FilterEdit | Mode::Any => {
+            FocusedPane::Top
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FocusedPane {
+    Top,
+    Task,
 }
 
 fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
     terminal: &mut Terminal<B>,
     app: &mut App<C>,
+    keymap: &KeyMap,
 ) -> io::Result<usize> {
     let mut page_size = 1usize;
     app.poll_task_data();
+    let theme = Theme::new(&app.config.theme);
+
     terminal
         .draw(|frame| {
-            let size = frame.area();
-            // The mode line is the one-line status strip at the top of the UI.
-            let mode_line = format_mode_line(
-                app.mode(),
-                app.tasks.visible(),
-                app.tasks.filter_panel_visible(),
+            let mode = app.mode();
+            let tasks_visible = app.tasks.visible();
+            let regions = layout::regions(frame.area(), tasks_visible, app.panel_size());
+            let focus = focused_pane(mode);
+
+            render_header(frame, regions.header, app, &theme);
+
+            if let Some(area) = regions.top_pane {
+                let focused = focus == FocusedPane::Top;
+                page_size = match mode {
+                    Mode::Filter | Mode::FilterEdit => {
+                        render_filter_pane(frame, area, app, &theme, mode, focused)
+                    }
+                    _ => render_project_pane(frame, area, app, &theme, mode, focused),
+                };
+            }
+
+            // Resolved before drawing so the hint bar can tell whether there
+            // are columns off-screen worth mentioning.
+            let task_view = regions.task_pane.map(|area| {
+                task_table::render_task_table(
+                    &app.tasks,
+                    (pane_inner(area).width as usize).saturating_sub(GUTTER_WIDTH),
+                    &theme,
+                )
+            });
+
+            if let (Some(area), Some(view)) = (regions.task_pane, task_view.as_ref()) {
+                let focused = focus == FocusedPane::Task;
+                page_size = render_task_pane(frame, area, app, &theme, mode, focused, view);
+            }
+
+            render_hint_bar(
+                frame,
+                regions.hint,
+                app,
+                &theme,
+                keymap,
+                mode,
+                task_view.as_ref(),
             );
-            frame.render_widget(
-                Paragraph::new(mode_line)
-                    .style(Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)),
-                Rect::new(size.x, size.y, size.width, 1),
+            chrome::render_status(
+                frame,
+                regions.status,
+                &theme,
+                mode,
+                &task_table::settings_chips(&app.tasks),
             );
 
-            // The top body shows either the project list or the filter panel.
-            let content_area = Rect::new(
-                size.x,
-                size.y + 1,
-                size.width,
-                size.height.saturating_sub(1),
-            );
-            let (help_lines, top_body_mode) = match app.mode() {
-                Mode::Filter | Mode::FilterEdit => {
-                    let filter_view = render_task_filter_panel(&app.tasks);
-                    let lines = filter_view
-                        .as_ref()
-                        .map(|view| view.help_lines.clone())
-                        .unwrap_or_default();
-                    (lines, app.mode())
-                }
-                Mode::Task => {
-                    // The task pane help mirrors the task list shown below.
-                    let lines = render_task_table(
-                        &app.tasks,
-                        content_area.width.saturating_sub(2) as usize,
-                        app.mode(),
-                    )
-                    .hint_lines;
-                    (lines, Mode::Task)
-                }
-                _ => {
-                    let lines = render_project_list(&app.projects).hint_lines;
-                    (lines, Mode::Project)
-                }
-            };
-
-            // Help text explains the keys the user can press.
-            let help_height = help_lines.len().max(1) as u16;
-            let help_area = Rect::new(
-                content_area.x,
-                content_area.y,
-                content_area.width,
-                help_height,
-            );
-            frame.render_widget(Paragraph::new(help_lines.join("\n")), help_area);
-
-            // The body can show just the project list, just the filter panel,
-            // or the project/filter pane stacked above the task pane.
-            let body_area = Rect::new(
-                content_area.x,
-                content_area.y + help_height,
-                content_area.width,
-                content_area.height.saturating_sub(help_height),
-            );
-            let top_height = if app.tasks.visible() {
-                app.panel_size()
-                    .actual_height(body_area.height, 6)
-                    .min(body_area.height)
-            } else {
-                body_area.height
-            };
-            // The top area holds the project list or filter panel.
-            let top_area = Rect::new(body_area.x, body_area.y, body_area.width, top_height);
-            // The bottom area holds the task pane.
-            let bottom_area = Rect::new(
-                body_area.x,
-                body_area.y + top_height,
-                body_area.width,
-                body_area.height.saturating_sub(top_height),
-            );
-
-            page_size = render_top_content::<C>(frame, app, top_area, top_body_mode);
-
-            if app.tasks.visible() {
-                page_size = render_task_content(frame, app, bottom_area);
+            // Drawn last so it sits over the panes; the layout underneath is
+            // unchanged, which is the whole point of an overlay.
+            if help_visible(app, mode) {
+                help_overlay::render(frame, regions.body, &theme, keymap, mode);
             }
         })
         .map(|_| page_size)
 }
 
-fn render_top_content<C: AsanaClient + Clone + Send + 'static>(
+/// Whether the help overlay is showing, using the same per-pane toggle the
+/// inline help used before.
+fn help_visible<C: AsanaClient + Clone + Send + 'static>(app: &App<C>, mode: Mode) -> bool {
+    match mode {
+        Mode::Task | Mode::Filter | Mode::FilterEdit => app.tasks.help_details_visible(),
+        Mode::Project | Mode::ProjectSearch | Mode::Any => app.projects.help_details_visible(),
+    }
+}
+
+fn render_header<C: AsanaClient + Clone + Send + 'static>(
     frame: &mut Frame<'_>,
-    app: &mut App<C>,
-    top_area: Rect,
-    top_body_mode: Mode,
-) -> usize {
-    match top_body_mode {
-        Mode::Filter | Mode::FilterEdit => {
-            if let Some(filter_view) = render_task_filter_panel(&app.tasks) {
-                app.tasks
-                    .ensure_filter_visible(top_area.height.saturating_sub(1) as usize);
-                let filter_lines = format_task_filter_body(
-                    &filter_view,
-                    top_area.width.saturating_sub(2) as usize,
-                );
-                let rendered = Paragraph::new(filter_lines)
-                    .scroll((app.tasks.filter_panel_scroll() as u16, 0));
-                frame.render_widget(rendered, top_area);
-            }
-            1
-        }
-        _ => {
-            let view = render_project_list(&app.projects);
-            let items: Vec<ListItem> = view.rows.iter().cloned().map(ListItem::new).collect();
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title("Asana Projects"),
-                )
-                .highlight_symbol("> ");
-            let mut state = list_state(app.projects.selected_index());
-            let title = Paragraph::new(view.title.as_str());
-            let status = Paragraph::new(view.status_line.as_str());
-            let search = Paragraph::new(view.search_line.as_str());
+    area: Rect,
+    app: &App<C>,
+    theme: &Theme,
+) {
+    let mut crumbs = Vec::new();
+    let selected = app.projects.selected_count();
+    crumbs.push(match selected {
+        0 => match app.projects.selected_project() {
+            Some(project) => project.name.clone(),
+            None => "no project".to_string(),
+        },
+        1 => "1 project".to_string(),
+        count => format!("{count} projects"),
+    });
 
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                    Constraint::Min(1),
-                ])
-                .split(top_area);
-            let page_size = chunks[3].height.saturating_sub(2).max(1) as usize;
-
-            frame.render_widget(title, chunks[0]);
-            frame.render_widget(status, chunks[1]);
-            frame.render_widget(search, chunks[2]);
-            frame.render_stateful_widget(list, chunks[3], &mut state);
-
-            page_size
-        }
+    if app.tasks.visible() {
+        let count = app.tasks.table().task_count();
+        crumbs.push(format!("{count} task{}", if count == 1 { "" } else { "s" }));
     }
+
+    // When the task pane is hidden nothing else can report that the loaded
+    // task data no longer matches the project selection, so the header does.
+    let right = match app.tasks.status() {
+        crate::app::task::TaskStatus::OutOfDate(_) if !app.tasks.visible() => {
+            chrome::chip_spans(&[Chip::toned("tasks stale", Tone::Warn)], theme)
+        }
+        _ => Vec::new(),
+    };
+
+    chrome::render_header(frame, area, theme, &crumbs, right);
 }
 
-fn render_task_content<C: AsanaClient + Clone + Send + 'static>(
+fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
     frame: &mut Frame<'_>,
+    area: Rect,
+    app: &App<C>,
+    theme: &Theme,
+    keymap: &KeyMap,
+    mode: Mode,
+    task_view: Option<&TaskTableView>,
+) {
+    let context = hints::HintContext {
+        searching: app.projects.search_active() || !app.projects.search_query().is_empty(),
+        has_selection: match mode {
+            Mode::Task => app.tasks.selected_task_count() > 0,
+            Mode::Filter | Mode::FilterEdit => false,
+            _ => app.projects.selected_count() > 0,
+        },
+        can_scroll: task_view.is_some_and(|view| view.max_scroll > 0),
+        on_label_filter: app.tasks.filter_selected_is_labels(),
+    };
+
+    let line = hints::hint_line(
+        &hints::hints_for(mode, context),
+        keymap,
+        mode,
+        theme,
+        area.width as usize,
+    );
+    chrome::render_bar(frame, area, line);
+}
+
+fn render_project_pane<C: AsanaClient + Clone + Send + 'static>(
+    frame: &mut Frame<'_>,
+    area: Rect,
     app: &mut App<C>,
-    bottom_area: Rect,
+    theme: &Theme,
+    mode: Mode,
+    focused: bool,
 ) -> usize {
-    let task_view = render_task_table(&app.tasks, bottom_area.width.saturating_sub(2) as usize, app.mode());
-    let task_title = Paragraph::new(task_view.title.as_str());
-    let task_status = Paragraph::new(task_view.status_line.as_str());
-    let task_block = Block::default().borders(Borders::ALL).title("Tasks");
+    let view = project_list::render_project_list(&app.projects);
+    let mut block = chrome::pane_block(theme, focused, mode, &view.title, &view.counts);
+    if let Some(search) = &view.search {
+        block = block.title_bottom(project_list::search_footer_line(search, theme).left_aligned());
+    }
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    let task_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
-        .split(bottom_area);
-    frame.render_widget(task_title, task_chunks[0]);
-    frame.render_widget(task_status, task_chunks[1]);
-    frame.render_widget(task_block.clone(), task_chunks[2]);
-
-    let task_inner = task_block.inner(task_chunks[2]);
-    let task_body_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .split(task_inner);
-    let task_body_height = task_body_chunks[1].height as usize;
-    app.tasks.ensure_selected_visible(task_body_height);
-
-    let task_header = Paragraph::new(format_task_header_line(
-        &task_view,
-        task_body_chunks[0].width as usize,
-    ));
-    frame.render_widget(task_header, task_body_chunks[0]);
-
-    let body = Paragraph::new(format_task_body(
-        &task_view,
-        app.tasks.selected_index(),
-        task_body_chunks[1].width as usize,
-    ))
-    .scroll((app.tasks.vertical_scroll() as u16, 0));
-    frame.render_widget(body, task_body_chunks[1]);
-
-    task_body_height.max(1)
-}
-
-fn format_mode_line(mode: Mode, tasks_visible: bool, filter_visible: bool) -> String {
-    let active = mode.label();
-    let mut parts = vec![
-        format!("mode: {active}"),
-        "p: project".to_string(),
-        "f: filter".to_string(),
-        "t: task".to_string(),
-    ];
-
-    if tasks_visible {
-        parts.push("tasks: visible".to_string());
-    } else {
-        parts.push("tasks: hidden".to_string());
+    if let Some(message) = &view.message {
+        chrome::render_pane_message(frame, inner, theme, message);
+        return inner.height.max(1) as usize;
     }
 
-    if filter_visible {
-        parts.push("filters: open".to_string());
-    }
+    // `highlight_symbol` reserves its width on every row, so it doubles as the
+    // cursor gutter and keeps the names aligned.
+    let cursor_symbol = format!("{} ", theme.glyphs.cursor);
+    let row_width = (inner.width as usize)
+        .saturating_sub(crate::ui::text::visible_width(&cursor_symbol));
+    let items = view
+        .rows
+        .iter()
+        .map(|row| ListItem::new(project_list::project_row_line(row, theme, row_width)))
+        .collect::<Vec<_>>();
 
-    parts.join("  ")
+    let list = List::new(items)
+        .highlight_symbol(&cursor_symbol)
+        .highlight_style(theme.cursor);
+    let mut state = list_state(app.projects.selected_index());
+    frame.render_stateful_widget(list, inner, &mut state);
+
+    inner.height.max(1) as usize
 }
 
-#[cfg(test)]
-fn project_panel_height(total_height: u16, hint_height: u16, row_count: usize) -> u16 {
-    let visible_rows = row_count.max(3).min(PROJECT_VISIBLE_ROWS) as u16;
-    let desired_height = 3u16
-        .saturating_add(hint_height)
-        .saturating_add(2)
-        .saturating_add(visible_rows);
+fn render_filter_pane<C: AsanaClient + Clone + Send + 'static>(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &mut App<C>,
+    theme: &Theme,
+    mode: Mode,
+    focused: bool,
+) -> usize {
+    let Some(view) = filter_panel::render_filter_panel(&app.tasks) else {
+        return 1;
+    };
 
-    desired_height.min(total_height.max(1))
+    let block = chrome::pane_block(theme, focused, mode, &view.title, &view.counts);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if let Some(message) = &view.message {
+        chrome::render_pane_message(frame, inner, theme, message);
+        return 1;
+    }
+
+    app.tasks.ensure_filter_visible(inner.height as usize);
+    let lines = filter_panel::filter_panel_lines(&view, theme, inner.width as usize);
+    frame.render_widget(
+        Paragraph::new(lines).scroll((app.tasks.filter_panel_scroll() as u16, 0)),
+        inner,
+    );
+
+    inner.height.max(1) as usize
+}
+
+fn render_task_pane<C: AsanaClient + Clone + Send + 'static>(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &mut App<C>,
+    theme: &Theme,
+    mode: Mode,
+    focused: bool,
+    view: &TaskTableView,
+) -> usize {
+    let block = chrome::pane_block(theme, focused, mode, &view.title, &view.counts);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if let Some(message) = &view.message {
+        chrome::render_pane_message(frame, inner, theme, message);
+        return inner.height.max(1) as usize;
+    }
+
+    let (header_area, body_area) = split_header(inner);
+    frame.render_widget(
+        Paragraph::new(task_table::task_header_line(
+            view,
+            theme,
+            header_area.width as usize,
+        )),
+        header_area,
+    );
+
+    let body_height = body_area.height as usize;
+    app.tasks.ensure_selected_visible(body_height);
+    frame.render_widget(
+        Paragraph::new(task_table::task_body_lines(
+            view,
+            app.tasks.selected_index(),
+            theme,
+            body_area.width as usize,
+        ))
+        .scroll((app.tasks.vertical_scroll() as u16, 0)),
+        body_area,
+    );
+
+    body_height.max(1)
+}
+
+/// The interior of a pane frame, which always has a one-cell border all round.
+///
+/// Computed rather than taken from `Block::inner` so the task table's column
+/// widths can be resolved before the block that will hold them is built.
+fn pane_inner(area: Rect) -> Rect {
+    Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    }
+}
+
+/// Splits a pane's interior into a one-line column header and the body below.
+fn split_header(inner: Rect) -> (Rect, Rect) {
+    let header_height = 1u16.min(inner.height);
+    (
+        Rect {
+            height: header_height,
+            ..inner
+        },
+        Rect {
+            y: inner.y + header_height,
+            height: inner.height - header_height,
+            ..inner
+        },
+    )
 }
 
 fn list_state(selected: Option<usize>) -> ListState {
@@ -330,10 +408,10 @@ where
 {
     const TICK_RATE: Duration = Duration::from_millis(100);
 
-    let mut page_size = draw(terminal, app)?;
     let keymap = app
         .keymap()
         .map_err(|err| io::Error::other(err.to_string()))?;
+    let mut page_size = draw(terminal, app, &keymap)?;
 
     loop {
         match source.next_event(TICK_RATE)? {
@@ -343,20 +421,20 @@ where
                     Ok(Some(crate::input::AppCommand::Refresh)) => {
                         app.load_projects()
                             .map_err(|err| io::Error::other(err.to_string()))?;
-                        page_size = draw(terminal, app)?;
+                        page_size = draw(terminal, app, &keymap)?;
                     }
                     Ok(Some(crate::input::AppCommand::OpenUrl(url))) => {
                         let _ = std::process::Command::new("open").arg(&url).spawn();
-                        page_size = draw(terminal, app)?;
+                        page_size = draw(terminal, app, &keymap)?;
                     }
                     Ok(Some(crate::input::AppCommand::CopyToClipboard(text))) => {
                         if let Ok(mut clipboard) = arboard::Clipboard::new() {
                             let _ = clipboard.set_text(text);
                         }
-                        page_size = draw(terminal, app)?;
+                        page_size = draw(terminal, app, &keymap)?;
                     }
                     Ok(None) => {
-                        page_size = draw(terminal, app)?;
+                        page_size = draw(terminal, app, &keymap)?;
                     }
                     Err(err) => {
                         return Err(io::Error::other(err.to_string()));
@@ -364,7 +442,7 @@ where
                 }
             }
             InputEvent::Tick => {
-                page_size = draw(terminal, app)?;
+                page_size = draw(terminal, app, &keymap)?;
             }
             InputEvent::Closed => break,
         }
@@ -418,6 +496,15 @@ mod tests {
         }
     }
 
+    fn screen(terminal: &mut Terminal<TestBackend>) -> Vec<String> {
+        let buffer = terminal.backend_mut().buffer().clone();
+        buffer
+            .content
+            .chunks(buffer.area.width as usize)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect()
+    }
+
     #[test]
     fn moves_selection_until_quit() {
         let client = FakeAsanaClient::new(vec![
@@ -433,27 +520,57 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
             ],
         };
-        let backend = TestBackend::new(60, 10);
+        let backend = TestBackend::new(80, 12);
         let mut terminal = Terminal::new(backend).expect("terminal");
 
         run_session(&mut app, &mut source, &mut terminal).expect("session runs");
 
         assert_eq!(app.projects.selected_index(), Some(1));
-        let buffer = terminal.backend_mut().buffer().clone();
-        let lines: Vec<String> = buffer
-            .content
-            .chunks(buffer.area.width as usize)
-            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-            .collect();
-
+        let lines = screen(&mut terminal);
         assert!(lines.iter().any(|line| line.contains("Projects")));
         assert!(lines.iter().any(|line| line.contains("Backlog")));
     }
 
     #[test]
-    fn project_panel_keeps_space_for_rows_when_tasks_are_visible() {
-        assert_eq!(super::project_panel_height(40, 1, 20), 10);
-        assert_eq!(super::project_panel_height(40, 2, 1), 10);
-        assert_eq!(super::project_panel_height(8, 1, 20), 8);
+    fn chrome_occupies_the_first_and_last_two_lines() {
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]);
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+
+        let mut source = ScriptedSource { keys: Vec::new() };
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+
+        let lines = screen(&mut terminal);
+        assert!(lines[0].contains("TUISANA"));
+        assert!(lines[10].contains("quit"), "hint bar: {:?}", lines[10]);
+        assert!(lines[11].contains("PROJECT"), "status bar: {:?}", lines[11]);
+    }
+
+    #[test]
+    fn toggling_help_does_not_move_the_panes() {
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]);
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut source = ScriptedSource { keys: Vec::new() };
+        run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+        let before = screen(&mut terminal);
+
+        let mut source = ScriptedSource {
+            keys: vec![KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)],
+        };
+        run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+        let with_help = screen(&mut terminal);
+
+        assert!(app.projects.help_details_visible());
+        assert!(with_help.iter().any(|line| line.contains("Help")));
+        // The header, hint bar, and status bar are untouched by the overlay.
+        assert_eq!(before[0], with_help[0]);
+        assert_eq!(before[22], with_help[22]);
+        assert_eq!(before[23], with_help[23]);
     }
 }

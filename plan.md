@@ -745,6 +745,436 @@ Acceptance criteria:
   selection/visibility-config exclusion, the assignee-scoped Asana request built from
   `TaskTarget::AssignedToMe`, and that section/custom-field requests are skipped for that target
 
+## Milestone 11.5: Visual redesign ✓
+
+Delivered. Three deliberate deviations from the plan below, each because the
+planned version would have changed behavior:
+
+1. **The filter panel is not grouped by kind.** Grouping into Text / Dates /
+   Labels / Custom fields would either reorder the fields — making `j`/`k`
+   appear to skip around, since they walk the list in index order — or repeat a
+   heading when the kinds interleave (Title, Assignee, Due, Start, State,
+   Projects). The match-mode chip in the second column carries the same
+   information without touching navigation order, and keeping one line per
+   field means the panel's scroll offset stays a plain field index.
+2. **The help overlay does not scroll and does not close on `esc`.** Both would
+   require capturing `j`/`k`/`esc` while it is open, which changes what those
+   keys do. `?` toggles it, exactly as it toggled the inline help. The two
+   columns are balanced to minimize the taller one so the overlay fits without
+   scrolling.
+3. **The `State` cell keeps `open`/`done` in the domain model.** The `State`
+   label filter matches on those literal values, so only the *glyph* moved to
+   the renderer. The subtask indent did move out of the domain, as planned:
+   `TaskRow` now carries `subtask_depth` and the renderer draws the marker.
+
+Also shipped beyond the plan: an ASCII border set so `glyphs = "ascii"` produces
+an entirely ASCII screen, and a `columns n/m` chip in the task pane border so
+horizontally clipped columns announce themselves.
+
+Goal:
+
+- replace the current flat, monochrome, text-dump presentation with a coherent visual design that is
+  denser where it matters, quieter where it doesn't, and legible at a glance
+- introduce one shared theme/glyph vocabulary instead of ad-hoc `Style::default()` calls scattered
+  across the render functions
+- move all long-form help out of the main layout and behind a `?` overlay
+- **behavior must not change**: same keys, same actions, same modes, same row/selection indexing,
+  same filter/sort/load semantics. This milestone only changes what is drawn and where.
+
+### Current state (measured, 120x40 terminal)
+
+Rendered snapshots of the three modes show the concrete problems this milestone fixes:
+
+Project mode:
+
+```
+mode: project  p: project  f: filter  t: task  tasks: hidden
+?: more hints, j/k: move, space: select+down, /: search (project), p/f/t: modes, r: refresh, q: quit
+Projects
+3 visible, 0 selected, 3 hidden
+Search: not searching (substring)
+┌Asana Projects──────────────────────────────────────────────────┐
+│> [ ] [*] [hidden] Northwind BTX 4412                           │
+│  [ ] [*] [hidden] Platform Infra                               │
+│  [ ] [ ] [hidden] Backlog                                      │
+│                          (28 blank lines of bordered nothing)  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+Task mode (expanded help):
+
+```
+mode: task  p: project  f: filter  t: task  tasks: visible
+?: fewer hints
+navigation: j/down,k/up move; ctrl-u/d page; home/end top/bottom
+scroll: left/right columns (0/3)
+
+grouping/sort: [] section jumps; {} project jumps; , project group; . section group; s sort
+
+task interaction: enter open in Asana; space select; a all; i invert; x clear; ctrl-x clear hidden; y copy
+
+filters: f panel; s cycle mode; esc/enter done; c completed; z subtasks
+
+p/f/t: modes, r: refresh, q: quit
+Projects
+3 visible, 1 selected, 3 hidden
+Search: not searching (substring)
+┌Asana Projects──────────────────────────────────────────────────┐
+│  [x] [*] [hidden] Northwind BTX 4412                           │
+└────────────────────────────────────────────────────────────────┘
+Task review (task focus)
+2 tasks, row 1, ready, grp p:on s:on; comp open; sub show; sort date; filters off
+┌Tasks───────────────────────────────────────────────────────────┐
+│Task                        | Assignee     | Due        | State │
+│────────────────────────────────────────────────────────────────│
+│Northwind BTX 4412          |              |            |       │
+│                            |              |            |       │
+│Study Kit Design            |              |            |       │
+│Review shipment requirements| Morgan Ellis | 2026-06-10 | open  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+Specific defects:
+
+1. **No color anywhere.** Every span is `Style::default()` plus `BOLD`/`REVERSED`/`UNDERLINED`.
+2. **Help dominates the layout.** Expanded help costs 11 lines at the top of the screen and pushes
+   all content down; the layout reflows every time `?` is pressed.
+3. **Triple-redundant pane chrome.** Each pane spends 3 unstyled lines (title, status, search) above
+   a bordered block that repeats the title (`Projects` above `┌Asana Projects┐`, `Task review (task
+   focus)` above `┌Tasks┐`).
+4. **Mode line is noise.** `mode: project  p: project  f: filter  t: task  tasks: hidden` says
+   "project" twice and spends most of its width on bindings that belong in the hint bar.
+5. **Bracket soup in project rows.** `[ ] [*] [hidden] Name` is three ASCII markers before the only
+   thing the user is reading.
+6. **Pipes on empty rows.** `ProjectHeader`, `SectionHeader`, and `SectionSpacer` rows are padded to
+   the full column grid, so group headings render as a name followed by a trail of empty `|` cells.
+7. **Cryptic status line.** `grp p:on s:on; comp open; sub show; sort date; filters off` mixes commas
+   and semicolons, abbreviates everything, and shows five facts that are usually at their defaults.
+8. **Dates burn 22 columns.** `Due` and `Start` both render full `YYYY-MM-DD` with no indication that
+   something is overdue or due today.
+9. **Cursor vs. selection is hard to read.** Cursor is `REVERSED`, multi-select is `UNDERLINED`, and
+   a row that is both is `REVERSED | UNDERLINED`.
+10. **Truncation is inconsistent.** Only the title column gets an `…`; other columns are cut
+    mid-word (`Priority` renders as `Prior`).
+11. **Filter panel is unaligned.** `> Title [string:fuzzy]:` with no column alignment, no grouping,
+    no indication of which filters are actually doing anything.
+12. **Dead space.** A three-project list still draws a 30-line empty bordered box.
+
+### Target design
+
+Header bar (1 line, top), panes in the middle, hint bar and status bar (2 lines, bottom). The help
+block disappears from the flow entirely. Focus is shown by a **heavy border** on the active pane so
+the cue survives in monochrome terminals, reinforced by an accent-colored border and title.
+
+Task mode:
+
+```
+ TUISANA  ▸ 2 projects  ▸ 14 tasks                              1 filter · sort due ▲ · open only
+┌─ Projects ─────────────────────────────────────── 3 shown · 1 selected · 2 hidden ─────────────┐
+│ ▍ ✓  ★  Northwind BTX 4412                                                                     │
+│      ☆  Platform Infra                                                                         │
+│      ☆  Backlog                                                                       hidden   │
+└────────────────────────────────────────────────────────────────────────────────────────────────┘
+┏━ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 14 tasks · row 3 · 2 selected ━━━━━━━━━━━━━━━┓
+┃    Task                                    Assignee       Due ▲    Start   St  Priority        ┃
+┃ ▌Northwind BTX 4412 ───────────────────────────────────────────────────────────────────────    ┃
+┃   Study Kit Design ·····                                                                       ┃
+┃ ▍ ○ Ship release candidate to the study …  Alex Chen       Jun 10   Jun 1    ○  High           ┃
+┃ ● ○ Review shipment requirements doc       Morgan Ellis    Today    Jun 1    ○  High           ┃
+┃   ✓ Close out packaging vendor contract    Alex Chen       Jun 3    May 28   ✓  Low            ┃
+┃     ↳ Confirm carrier pickup window        Alex Chen       —        —        ○  —              ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+ TASK   j/k move   ⏎ open   ␣ select   f filters   s sort   ? help              r refresh   q quit
+```
+
+Filter mode (the filter pane replaces the project pane in the shared top window, as today):
+
+```
+ TUISANA  ▸ 2 projects  ▸ 14 tasks                              1 filter · sort due ▲ · open only
+┏━ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1 active ━━━━━━━━━━━━━━━━━━┓
+┃  Text                                                                                          ┃
+┃ ▍ Title       fuzzy      ship▏                                                                 ┃
+┃   Assignee    contains   —                                                                     ┃
+┃   Projects    contains   —                                                                     ┃
+┃  Dates                                                                                         ┃
+┃   Due         date       —                                                                     ┃
+┃   Start       date       —                                                                     ┃
+┃  Labels                                                                                        ┃
+┃ ● State       labels     open  ·  done                                                         ┃
+┃  Custom fields                                                                                 ┃
+┃   Priority    labels     —                                                                     ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌─ Tasks ─────────────────────────────────────────── 3 tasks · row 1 ────────────────────────────┐
+...
+ FILTER  ⏎ edit   j/k field   s mode   ctrl-l clear   f close   ? help                   q quit
+```
+
+Help overlay (`?`, centered modal, scrollable, `?`/`esc` closes):
+
+```
+        ┌─ Help ─ task mode ──────────────────────────────────────────────────┐
+        │                                                                     │
+        │  Move                            Select                             │
+        │   j / ↓      down                 ␣      select, then down          │
+        │   k / ↑      up                   a      select all                  │
+        │   ctrl-d     page down            i      invert                      │
+        │   ctrl-u     page up              x      clear                       │
+        │   home/end   top / bottom         ctrl-x clear hidden                │
+        │                                                                     │
+        │  Group & sort                    Task                               │
+        │   [ ]        prev/next section    ⏎      open in Asana              │
+        │   { }        prev/next project    y      copy link                   │
+        │   ,          group by project                                        │
+        │   .          group by section    View                               │
+        │   s          cycle sort           c      completed filter            │
+        │                                   z      subtasks                    │
+        │  Panes                            f      filter panel                │
+        │   [ ] { } 0  size                 ← →    scroll columns (0/3)        │
+        │                                                                     │
+        │  Modes: p project   f filter   t task            r refresh   q quit  │
+        │                                                    esc / ? to close  │
+        └─────────────────────────────────────────────────────────────────────┘
+```
+
+Design rules:
+
+- **Never rely on color alone.** Every color-coded state also carries a glyph or a modifier: overdue
+  is red *and* prefixed, completed is dim *and* `✓`, cursor is accent-background *and* `▍`.
+- **Show deviations, not defaults.** The status bar lists only settings that differ from their
+  defaults, so a fresh session reads `14 tasks · row 3` instead of five `off` chips.
+- **One line per row stays invariant.** The task body renders exactly one terminal line per
+  `TaskRow`, including `SectionSpacer`, so selection indexing, `vertical_scroll`, and
+  `ensure_selected_visible` keep working unchanged.
+- **Fixed chrome height.** Header 1 + hint 1 + status 1; toggling help no longer reflows the layout.
+- **Every glyph is width 1.** Validate the glyph set against `unicode-width` in a test; ship an ASCII
+  fallback set for terminals with ambiguous-width fonts.
+
+### Deliverables
+
+Theme and glyph system (`src/ui/theme.rs`):
+
+- a `Theme` with semantic roles, not raw colors: `border`, `border_focus`, `title`, `subtitle`,
+  `muted`, `accent`, `cursor_bg`, `marker`, `star`, `hidden`, `ok`, `warn`, `danger`, `info`,
+  `header_bg`, `key`
+- default palette built from the 16 indexed ANSI colors so it inherits the user's terminal theme;
+  an opt-in truecolor palette and a `mono` variant that resolves every role to modifiers only
+- `GlyphSet` with `unicode` (default) and `ascii` variants covering: cursor `▍`/`>`, selected
+  `●`/`*`, star `★ ☆`/`* -`, open `○`/`o`, done `✓`/`x`, subtask `↳`/`\`, rule `─`/`-`,
+  section dots `·`/`.`, chip separator `·`/`|`, spinner `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`/`|/-\`
+- `NO_COLOR` env var and a `--no-color` flag select the `mono` + `ascii` combination
+- a `[theme]` config section: `variant = "ansi" | "truecolor" | "mono"`, `glyphs = "unicode" |
+  "ascii"`, `accent = "cyan"`, `zebra = false`
+
+Layout and chrome (`src/ui/layout.rs`, `src/ui/chrome.rs`):
+
+- `layout.rs` owns all geometry: one function maps the frame `Rect` to named regions
+  (`header`, `top_pane`, `task_pane`, `hint`, `status`, `overlay`) and returns the page size, so
+  geometry math lives in one place instead of inline `Rect::new` arithmetic in `draw`
+- `chrome.rs` renders the header bar, hint bar, status bar, and the pane `Block` factory that folds
+  the pane title into the left of the top border and the pane status into the right of it
+- the standalone title/status/search paragraphs are deleted; `format_mode_line` is deleted
+- the focused pane gets `BorderType::Thick` plus `border_focus`; unfocused panes get
+  `BorderType::Plain` plus `border`
+- mode is shown as a single colored chip at the left of the status bar (project = blue,
+  task = green, filter = magenta, project-search / filter-edit = yellow), matching the focused
+  pane's border color
+
+Hints and help overlay (`src/ui/hints.rs`, `src/ui/help_overlay.rs`):
+
+- replace `hint_lines: Vec<String>` with a `Hint { keys: Vec<String>, label: String }` model;
+  the hint bar renders keys in `key` style and labels in `muted`, and drops entries from the right
+  when the terminal is too narrow rather than wrapping
+- derive the key text for each hint from the resolved keymap rather than hardcoding it, so
+  rebinding a key updates the hints and the overlay automatically
+- `?` opens a centered modal overlay instead of expanding inline help; it keeps the existing
+  `help_details_visible` toggle semantics (same key, same toggle, same state flag)
+- the overlay groups bindings by intent (Move / Select / Group & sort / Task / View / Panes /
+  Modes) in a two-column grid, scrolls with `j`/`k` when it doesn't fit, and closes on `?` or `esc`
+- the overlay shows the active mode's bindings first, then the always-available ones; it introduces
+  no new keybindings
+
+Project list (`src/ui/project_list.rs`):
+
+- `ProjectListView.rows` becomes styled rows: a 2-cell cursor/selection gutter, a star column, the
+  name, and a right-aligned `hidden` chip only when hidden projects are being shown
+- `[x]`/`[ ]` becomes `●`/blank in `accent`; `[*]` becomes `★` in `star` and unstarred `☆` in
+  `muted`; `[hidden]` becomes a dim right-aligned chip and a dimmed name
+- the assigned-to-me row is pinned at the top with an `info`-colored `◆` and a dim rule beneath it
+- the search line renders only when a search is active or a query exists, as `/query` with a mode
+  chip; an invalid regex renders the message in `danger`
+- counts move to the right side of the pane border: `3 shown · 1 selected · 2 hidden`
+- empty and loading states render a centered muted message instead of an empty bordered box
+
+Task table (`src/ui/task_table.rs`, split with `src/ui/text.rs`):
+
+- replace ` | ` separators with two spaces of padding plus a `muted` `│` rule drawn only between
+  cells of task rows and the header row
+- the header row gets a `header_bg` band, and the active sort column gets a `▲`/`▼` suffix
+- `ProjectHeader` renders as `▌Name ─────` (accent bar, bold name, dim rule to the pane edge);
+  `SectionHeader` renders indented as `Name ·····` in `subtitle`; `SectionSpacer` renders truly
+  blank; none of the three draw column rules or empty cells
+- a 2-cell gutter carries cursor (`▍`, `cursor_bg` on the row) and multi-select (`●`, `accent`);
+  the `REVERSED | UNDERLINED` combination is retired
+- `State` becomes a centered glyph column: `○` open, `✓ ok` done; completed rows render the title
+  `CROSSED_OUT` and `muted`
+- `Due` and `Start` render short and relative: `Today`, `Tomorrow`, `Mon`, `Jun 10`, and
+  `2025-11-04` only when the year differs; `Due` is colored `danger` overdue, `warn` today,
+  `accent` within three days, `muted` otherwise, and prefixed with `!` when overdue
+- empty cells render a `muted` `—` instead of blank so the grid stays readable
+- all columns truncate with `…`; per-column caps get minimum widths so headers like `Priority`
+  are never cut mid-word
+- the subtask indent marker moves out of `domain::task` and into the renderer as a `muted` `↳`,
+  so the domain model stops carrying presentation strings
+- optional `zebra` striping via a very low-contrast background on alternating task rows, off by
+  default
+
+Filter panel (`src/ui/filter_panel.rs`, extracted from `task_table.rs`):
+
+- three aligned columns: label (bold when active), kind chip (`muted`), value
+- fields are grouped under `muted` headings — Text, Dates, Labels, Custom fields — and a group is
+  omitted when it has no fields
+- an empty filter shows a `muted` `—`; an active filter shows a `●` in the gutter
+- label filters render each value as a chip; the focused chip is `REVERSED` while editing
+- editing shows a `▏` cursor after the query and switches the pane border to `warn`
+- the active count moves to the pane border (`Filters ─ 1 active`); `(active)`/`(editing)` title
+  suffixes are removed
+
+Status summary (`src/domain/task.rs`, `src/app/task.rs`):
+
+- `TaskTableSettings::summary` and `TaskState::filter_summary` return a structured
+  `Vec<StatusChip>` instead of `grp p:on s:on; comp open; sub show; sort date; filters off`
+- only non-default settings produce chips: `group: project+section`, `open only`, `no subtasks`,
+  `sort: due ▲`, `1 filter`
+- the row/count portion (`14 tasks · row 3 · 2 selected`) moves to the task pane border; the
+  settings chips go to the right of the status bar
+
+Loading, empty, and error states:
+
+- loading renders a braille spinner plus target names, centered and `muted`
+- empty renders a centered `muted` message with the single most useful key (`No tasks · r refresh`)
+- errors render a `danger`-bordered pane with the message and a recovery hint instead of a bare
+  `Error: …` line
+- `OutOfDate` renders a `warn` chip in the pane border rather than a `stale: …` status string
+
+Snapshot tests (`tests/ui_snapshot.rs`):
+
+- a fixture app is rendered through `TestBackend` at 80, 120, and 200 columns in project, task,
+  filter, filter-edit, and help-overlay states
+- each render is compared against a committed plain-text snapshot under `tests/snapshots/`
+- a `UPDATE_SNAPSHOTS=1` env var rewrites them, so the redesign work has a fast visual diff loop
+- a test asserts every glyph in `GlyphSet::unicode` and `GlyphSet::ascii` has display width 1
+
+### Target module layout
+
+```
+src/ui/
+  mod.rs             re-exports
+  theme.rs           Theme, palette variants, GlyphSet
+  layout.rs          frame geometry, one function, returns named regions + page size
+  chrome.rs          header bar, hint bar, status bar, pane block factory
+  hints.rs           Hint model, keymap-derived key text, per-mode hint sets
+  help_overlay.rs    centered modal help
+  project_list.rs    styled project rows
+  task_table.rs      styled task grid
+  filter_panel.rs    styled filter fields (extracted from task_table.rs)
+  text.rs            width, padding, truncation, span slicing (extracted from task_table.rs)
+  runtime.rs         event loop only; no drawing beyond calling into the above
+```
+
+### Implementation notes
+
+- do it in this order, keeping the build and tests green at each step:
+  1. `theme.rs` + `text.rs` extraction + `[theme]` config, wired to borders and titles only
+  2. `layout.rs` + `chrome.rs`: header/hint/status bars, pane blocks, delete the inline help block
+     and the title/status/search paragraphs
+  3. `hints.rs` + `help_overlay.rs`
+  4. project list restyle
+  5. task table restyle
+  6. filter panel extraction and restyle
+  7. status chips
+  8. loading / empty / error states
+  9. snapshot tests, then README and `developer.md` updates
+- `runtime.rs` currently computes geometry inline with `Rect::new` and calls `render_task_table`
+  twice per frame (once to read `hint_lines`, once to draw). Fold that into one `render_task_table`
+  call per frame while moving geometry into `layout.rs`.
+- the hint bar is a fixed one line and the help block is gone, which changes the body height and
+  therefore `page_size` for `ctrl-d`/`ctrl-u`. That is an accepted consequence of the layout change;
+  the paging *semantics* stay the same.
+- keep the `TaskRow` set and ordering exactly as the domain produces it. Only `cells[0]`'s subtask
+  prefix moves out of the domain; row kinds, counts, and indices are untouched.
+- `Line::style` on a whole row (used today for cursor/selection) does not compose well with
+  per-cell colors. Apply the cursor background per span while building the row instead.
+- prefer indexed ANSI colors for the default palette. Truecolor values look wrong against light
+  terminal themes, and this app has no way to detect background luminance.
+- do not add keybindings in this milestone. The overlay, chips, and grouping are presentation only.
+
+### Tests that will need updating
+
+These assert on the current strings and must be rewritten against the new output:
+
+- `src/ui/project_list.rs`: `renders_selection_and_star_state`, `renders_empty_state`,
+  `renders_assigned_to_me_row_without_star_or_hidden_markers`,
+  `renders_hidden_project_hint_and_marker`, `renders_contextual_selection_commands_…`,
+  `renders_expanded_help_with_toggle_at_front`
+- `src/ui/task_table.rs`: `renders_task_table_columns_and_rows`,
+  `bolds_project_and_section_labels_without_bolding_separators`,
+  `renders_loading_state_with_spinner_and_targets`, `renders_out_of_date_status_with_refresh_hint`,
+  `renders_task_filter_and_sort_hints`, `renders_expanded_task_help_details`,
+  `keeps_column_markers_aligned_for_varied_lengths`,
+  `keeps_column_markers_aligned_when_scrolled_horizontally`, `scroll_hint_reflects_overflowing_view`,
+  `truncates_the_title_column_with_an_ellipsis_when_it_exceeds_the_view`
+- `src/ui/runtime.rs`: `moves_selection_until_quit` (asserts `"Projects"`),
+  `project_panel_keeps_space_for_rows_when_tasks_are_visible` (test-only `project_panel_height`
+  helper; delete it with the old geometry code)
+- `src/domain/task.rs`: `renders_subtasks_with_an_indent_marker` (`"  L Child task"`) and the
+  `cells[4] == "done"` assertion, both of which move to the render layer
+- `src/app/task.rs`: the `filter_summary` assertions (`"comp done"`, `"grp p:off s:off"`,
+  `"sub hide"`, `"sort title"`)
+- `tests/task_view_integration.rs`: `"Task review"`, `"Tasks"` assertions
+- `tests/project_list_keyboard_navigation.rs`: `"Projects"` assertion
+
+Prefer converting these to assertions about structure (row kinds, styles, chip contents) rather than
+exact rendered text, and let `tests/ui_snapshot.rs` own the full-text checks.
+
+### Acceptance criteria
+
+- no key, action, mode, filter, sort, or load behavior differs from before the milestone; every
+  existing behavioral test passes unchanged or with only string-expectation edits
+- there is exactly one `Theme` and one `GlyphSet`; no render function constructs a raw `Color`
+- chrome is a fixed 3 lines (header, hint, status); pressing `?` does not reflow the layout
+- `?` opens a centered, scrollable, grouped help overlay and closes on `?` or `esc`
+- the hint bar is one line, shows keys resolved from the active keymap, and truncates from the right
+- the focused pane is identifiable in a monochrome terminal by its border weight alone
+- project rows show cursor, selection, star, and hidden state without ASCII bracket markers
+- group header rows draw no column rules and no empty cells
+- cursor row, multi-selected row, and a row that is both are visually distinct without using
+  `REVERSED | UNDERLINED`
+- overdue, due-today, and completed tasks are each identifiable without color
+- every column truncates with `…`; no header is cut mid-word at 80 columns
+- the status bar shows only settings that differ from their defaults
+- loading, empty, and error states render a centered message rather than an empty bordered box
+- `NO_COLOR=1` and `theme.variant = "mono"` both produce readable output with no color codes
+- `tests/ui_snapshot.rs` covers project, task, filter, filter-edit, and help-overlay states at 80,
+  120, and 200 columns, and a test proves every glyph has display width 1
+- README documents the `[theme]` section and the current keybindings
+
+### Notes from implementation
+
+- The one-line-per-row invariant held up: `SectionSpacer` renders as a blank
+  line rather than being dropped, so selection indices and `vertical_scroll`
+  needed no changes at all.
+- `KeyMap::keys_for` is the inverse of `action_for` and agrees with it, so a key
+  bound globally but shadowed in a mode is never advertised for the global
+  action. This is what makes keymap-derived hints trustworthy — it caught that
+  `toggle_task_filters` is unbound in task mode (`f` there is `set_filter_mode`)
+  and that the pane-resize keys are shadowed by the section/project jumps.
+- Snapshot determinism needed two things: `TUISANA_TODAY` to pin relative dates,
+  and sending keys in *batches* with an async-load drain between them. Sending
+  a whole script at once made the result depend on whether the worker thread
+  finished first.
+- Dates are resolved in UTC because the standard library has no timezone
+  database. For a date-only field the worst case is `Today` vs `Tomorrow` for a
+  few hours around midnight west of UTC.
 
 ## Milestone 12: Edit tasks
 
@@ -790,7 +1220,7 @@ Acceptance criteria:
 - all keybindings are configurable
 - tests cover field editing, task creation, subtask adjustment, and bulk operations
 
-## Milestone 12: Hardening and polish
+## Milestone 13: Hardening and polish
 
 Goal:
 

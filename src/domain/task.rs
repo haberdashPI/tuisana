@@ -157,6 +157,12 @@ pub struct TaskRow {
     pub section: Option<String>,
     /// The section ordering used for navigation.
     pub section_order: Option<usize>,
+    /// How deeply this task is nested under a parent task.
+    ///
+    /// The renderer turns this into an indent and a marker. The depth is kept
+    /// as a number rather than baked into the title cell so the domain model
+    /// stays free of presentation strings.
+    pub subtask_depth: usize,
     /// One cell per visible table column.
     pub cells: Vec<String>,
 }
@@ -170,6 +176,7 @@ impl TaskRow {
             project: None,
             section: None,
             section_order: None,
+            subtask_depth: 0,
             cells,
         }
     }
@@ -182,6 +189,7 @@ impl TaskRow {
             project: None,
             section: None,
             section_order: None,
+            subtask_depth: 0,
             cells: vec![String::new(); column_count],
         }
     }
@@ -197,6 +205,7 @@ impl TaskRow {
             project: Some(label),
             section: None,
             section_order: None,
+            subtask_depth: 0,
             cells,
         }
     }
@@ -212,6 +221,7 @@ impl TaskRow {
             project: None,
             section: None,
             section_order: None,
+            subtask_depth: 0,
             cells,
         }
     }
@@ -224,6 +234,7 @@ impl TaskRow {
             project: None,
             section: None,
             section_order: None,
+            subtask_depth: 0,
             cells: vec![String::new(); column_count],
         }
     }
@@ -1084,10 +1095,7 @@ fn build_rows(
         row.project = Some(project);
         row.section = Some(section);
         row.section_order = record.section_order;
-        if record.subtask_depth > 0 {
-            let indent = "  ".repeat(record.subtask_depth);
-            row.cells[0] = format!("{indent}L {}", row.cells[0]);
-        }
+        row.subtask_depth = record.subtask_depth;
         rows.push(row);
     }
 

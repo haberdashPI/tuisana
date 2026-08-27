@@ -22,6 +22,9 @@ pub struct Config {
     #[serde(default)]
     pub header: Header,
     #[serde(default)]
+    #[serde(skip_serializing_if = "ThemeConfig::is_default")]
+    pub theme: ThemeConfig,
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
     #[serde(default)]
@@ -36,6 +39,7 @@ pub struct Config {
 impl PartialEq for Config {
     fn eq(&self, other: &Self) -> bool {
         self.header == other.header
+            && self.theme == other.theme
             && self.auth == other.auth
             && self.bind == other.bind
             && self.project_visibility == other.project_visibility
@@ -46,6 +50,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             header: Header::default(),
+            theme: ThemeConfig::default(),
             auth: None,
             bind: default_bindings(),
             project_visibility: Vec::new(),
@@ -115,6 +120,8 @@ impl Config {
             ));
         }
 
+        self.theme.validate()?;
+
         if let Some(auth) = &self.auth {
             auth.validate()?;
         }
@@ -130,6 +137,89 @@ impl Config {
             }
         }
 
+        Ok(())
+    }
+}
+
+/// How the UI resolves colors for the terminal.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeVariant {
+    /// Use the terminal's own 16-color palette so the UI inherits its scheme.
+    #[default]
+    Ansi,
+    /// Additionally use indexed shades for subtle backgrounds such as zebra rows.
+    Truecolor,
+    /// Emit no color at all; rely on bold, dim, and reverse video.
+    Mono,
+}
+
+/// Which character set the UI draws markers and rules with.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeGlyphs {
+    /// Plain Unicode box-drawing and symbol glyphs.
+    #[default]
+    Unicode,
+    /// ASCII-only fallback for terminals with ambiguous-width fonts.
+    Ascii,
+}
+
+/// The accent colors the theme accepts.
+const ACCENT_COLORS: [&str; 9] = [
+    "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "gray",
+];
+
+/// User-facing appearance settings.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ThemeConfig {
+    /// How colors resolve for this terminal.
+    #[serde(default)]
+    pub variant: ThemeVariant,
+    /// Which glyph set to draw with.
+    #[serde(default)]
+    pub glyphs: ThemeGlyphs,
+    /// The accent color used for focus, titles, and key names.
+    #[serde(default = "default_accent")]
+    pub accent: String,
+    /// Whether to stripe alternating task rows. Requires the truecolor variant.
+    #[serde(default)]
+    pub zebra: bool,
+}
+
+fn default_accent() -> String {
+    "cyan".to_string()
+}
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self {
+            variant: ThemeVariant::default(),
+            glyphs: ThemeGlyphs::default(),
+            accent: default_accent(),
+            zebra: false,
+        }
+    }
+}
+
+impl ThemeConfig {
+    /// Returns `true` when nothing has been customized.
+    ///
+    /// Used to keep the `[theme]` table out of configs the app rewrites when
+    /// persisting project visibility.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    fn validate(&self) -> Result<()> {
+        let accent = self.accent.trim().to_ascii_lowercase();
+        if !ACCENT_COLORS.contains(&accent.as_str()) {
+            return Err(Error::ConfigValidation(format!(
+                "theme.accent must be one of {}, found {}",
+                ACCENT_COLORS.join(", "),
+                self.accent
+            )));
+        }
         Ok(())
     }
 }
@@ -769,5 +859,82 @@ mod tests {
             keymap.action_for(&KeyBinding::Char('.'), Mode::Task),
             Some(&Action::ToggleSectionGrouping)
         );
+    }
+}
+
+#[cfg(test)]
+mod theme_config_tests {
+    use super::{Config, ThemeConfig, ThemeGlyphs, ThemeVariant};
+
+    #[test]
+    fn theme_defaults_are_omitted_when_the_config_is_serialized() {
+        let config = Config::default();
+        let serialized = toml::to_string_pretty(&config).expect("serializes");
+
+        assert!(
+            !serialized.contains("[theme]"),
+            "an untouched theme should not be written back into the user's config"
+        );
+    }
+
+    #[test]
+    fn a_customized_theme_round_trips_through_toml() {
+        let parsed = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 1.0
+
+                [theme]
+                variant = "mono"
+                glyphs = "ascii"
+                accent = "magenta"
+                zebra = true
+            "#,
+        )
+        .expect("config parses");
+
+        assert_eq!(parsed.theme.variant, ThemeVariant::Mono);
+        assert_eq!(parsed.theme.glyphs, ThemeGlyphs::Ascii);
+        assert_eq!(parsed.theme.accent, "magenta");
+        assert!(parsed.theme.zebra);
+
+        let serialized = toml::to_string_pretty(&parsed).expect("serializes");
+        assert_eq!(
+            Config::from_toml_str(&serialized).expect("round trips").theme,
+            parsed.theme
+        );
+    }
+
+    #[test]
+    fn an_unknown_accent_is_rejected_rather_than_silently_ignored() {
+        let error = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 1.0
+
+                [theme]
+                accent = "chartreuse"
+            "#,
+        )
+        .expect_err("an unknown accent should fail validation");
+
+        assert!(format!("{error}").contains("theme.accent"));
+    }
+
+    #[test]
+    fn an_omitted_theme_section_falls_back_to_the_defaults() {
+        let parsed = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 1.0
+            "#,
+        )
+        .expect("config parses");
+
+        assert_eq!(parsed.theme, ThemeConfig::default());
+        assert!(parsed.theme.is_default());
     }
 }

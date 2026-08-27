@@ -56,6 +56,31 @@ impl FromStr for KeyBinding {
 }
 
 impl KeyBinding {
+    /// A stable ordering used when listing the keys bound to an action.
+    ///
+    /// Plain letters come first because they are what a user reaches for, then
+    /// punctuation, named keys, arrows, and finally control combinations. The
+    /// ordering only exists so hints and help render deterministically rather
+    /// than in `HashMap` iteration order.
+    fn sort_rank(&self) -> (u8, u32) {
+        match self {
+            Self::Char(c) if c.is_ascii_alphanumeric() => (0, *c as u32),
+            Self::Char(c) => (1, *c as u32),
+            Self::Enter => (2, 0),
+            Self::Esc => (2, 1),
+            Self::Backspace => (2, 2),
+            Self::Home => (3, 0),
+            Self::End => (3, 1),
+            Self::Up => (4, 0),
+            Self::Down => (4, 1),
+            Self::Left => (4, 2),
+            Self::Right => (4, 3),
+            Self::PageUp => (5, 0),
+            Self::PageDown => (5, 1),
+            Self::Ctrl(c) => (6, *c as u32),
+        }
+    }
+
     /// Converts a crossterm key event into a normalized key binding.
     pub fn from_crossterm_event(event: crossterm::event::KeyEvent) -> Option<Self> {
         use crossterm::event::{KeyCode, KeyModifiers};
@@ -381,6 +406,30 @@ impl KeyMap {
             }
         })
     }
+
+    /// Every key that triggers `action` in `mode`, in a stable display order.
+    ///
+    /// This is the inverse of [`KeyMap::action_for`] and agrees with it: a key
+    /// bound globally but shadowed by a mode-specific binding is not reported
+    /// for the global action, so hints and help never advertise a key that
+    /// would do something else if pressed.
+    pub fn keys_for(&self, action: &Action, mode: Mode) -> Vec<KeyBinding> {
+        let mut keys = self
+            .bindings
+            .iter()
+            .filter(|((bind_mode, _), bound)| {
+                *bound == action
+                    && (*bind_mode == mode
+                        || (*bind_mode == Mode::Any && mode.allows_any_fallback()))
+            })
+            .map(|((_, key), _)| key.clone())
+            .filter(|key| self.action_for(key, mode) == Some(action))
+            .collect::<Vec<_>>();
+
+        keys.sort_by_key(KeyBinding::sort_rank);
+        keys.dedup();
+        keys
+    }
 }
 
 #[cfg(test)]
@@ -549,6 +598,49 @@ mod tests {
         assert_eq!(
             keymap.action_for(&KeyBinding::Char('x'), Mode::FilterEdit),
             None
+        );
+    }
+
+    #[test]
+    fn keys_for_lists_bound_keys_in_a_stable_order() {
+        let keymap = KeyMap::from_bindings(&[
+            Bind::new("j", "move_down"),
+            Bind::new("down", "move_down"),
+            Bind::new("ctrl-n", "move_down"),
+            Bind::new("k", "move_up"),
+        ])
+        .expect("keymap parses");
+
+        assert_eq!(
+            keymap.keys_for(&Action::MoveDown, Mode::Any),
+            vec![
+                KeyBinding::Char('j'),
+                KeyBinding::Down,
+                KeyBinding::Ctrl('n')
+            ]
+        );
+        assert!(keymap.keys_for(&Action::Quit, Mode::Any).is_empty());
+    }
+
+    #[test]
+    fn keys_for_excludes_keys_shadowed_by_a_mode_specific_binding() {
+        let keymap = KeyMap::from_bindings(&[
+            Bind::new("j", "move_down"),
+            Bind::new("down", "move_down"),
+            Bind::with_mode("j", Mode::FilterEdit, "filter_cycle_label_down"),
+        ])
+        .expect("keymap parses");
+
+        // `j` means something else while editing a filter, so it must not be
+        // advertised as move_down there.
+        assert_eq!(keymap.keys_for(&Action::MoveDown, Mode::Task), vec![
+            KeyBinding::Char('j'),
+            KeyBinding::Down
+        ]);
+        assert!(keymap.keys_for(&Action::MoveDown, Mode::FilterEdit).is_empty());
+        assert_eq!(
+            keymap.keys_for(&Action::FilterCycleLabelDown, Mode::FilterEdit),
+            vec![KeyBinding::Char('j')]
         );
     }
 }

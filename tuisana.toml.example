@@ -10,6 +10,18 @@ personal_access_token = "your-asana-pat-here"
 # logged-in user; this field is only needed to load its tasks after you select it.
 workspace_gid = "your-workspace-gid-here"
 
+# Appearance. Every value is optional; these are the defaults.
+[theme]
+# "ansi" uses the terminal's own 16 colors, "truecolor" adds indexed shades,
+# "mono" drops color entirely. Setting NO_COLOR forces "mono".
+variant = "ansi"
+# "ascii" swaps every box-drawing and marker glyph for an ASCII equivalent.
+glyphs = "unicode"
+# black, red, green, yellow, blue, magenta, cyan, white, gray
+accent = "cyan"
+# Stripe alternating task rows. Requires variant = "truecolor".
+zebra = false
+
 # Projects not listed here default to hidden.
 
 [[bind]]

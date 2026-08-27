@@ -170,6 +170,9 @@ pub(crate) struct TaskFilterPanelEntry {
     pub editing: bool,
     pub label_values: Vec<String>,
     pub label_cursor: Option<usize>,
+    /// Whether this field came from a project custom field rather than a
+    /// built-in task field.
+    pub custom: bool,
 }
 
 /// Tracks the filter panel's visibility, edit mode, selected row, and fields.
@@ -416,6 +419,16 @@ impl TaskFilterEditorState {
         self.fields
             .iter()
             .filter(|field| !field.query.trim().is_empty())
+            .count()
+    }
+
+    /// Fields that exclude anything, counting label selections as well as text.
+    fn active_filter_count(&self) -> usize {
+        self.fields
+            .iter()
+            .filter(|field| {
+                !field.query.trim().is_empty() || !field.label_values.is_empty()
+            })
             .count()
     }
 
@@ -1002,6 +1015,15 @@ impl TaskState {
         &self.view.settings
     }
 
+    /// How many filter fields currently exclude anything.
+    ///
+    /// Unlike the older `active_count` behind [`TaskState::filter_summary`],
+    /// this counts label filters as well as text ones, so the UI's "N active"
+    /// matches what the panel shows.
+    pub fn active_filter_count(&self) -> usize {
+        self.view.filter_editor.active_filter_count()
+    }
+
     pub fn filter_summary(&self) -> String {
         let mut summary = self.view.settings.summary();
         let active = self.view.filter_editor.active_count();
@@ -1057,6 +1079,17 @@ impl TaskState {
 
     pub(crate) fn filter_selected_kind(&self) -> Option<TaskFieldFilterKind> {
         self.view.filter_editor.selected_kind()
+    }
+
+    /// Whether the filter cursor is on a field whose value is a set of labels.
+    ///
+    /// The label-navigation keys only apply to those fields, so the hint bar
+    /// asks before advertising them.
+    pub fn filter_selected_is_labels(&self) -> bool {
+        matches!(
+            self.filter_selected_kind(),
+            Some(TaskFieldFilterKind::Labels)
+        )
     }
 
     pub fn filter_panel_help_lines(&self) -> Vec<String> {
@@ -1180,6 +1213,7 @@ impl TaskState {
                     }
                     _ => field.query.clone(),
                 },
+                custom: field.spec.key.starts_with("custom:"),
                 kind: match field.spec.kind {
                     TaskFieldFilterKind::String => match field.string_mode {
                         TaskFieldStringMode::Fuzzy => "string:fuzzy".to_string(),
@@ -2501,15 +2535,23 @@ mod tests {
             .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
 
+        // Nesting is carried as a depth, not as an indent baked into the title;
+        // the renderer turns the depth into an indent and a marker.
         let task_rows = state
             .table()
             .rows
             .iter()
             .filter(|row| row.kind.is_task())
-            .map(|row| row.cells[0].clone())
+            .map(|row| (row.cells[0].clone(), row.subtask_depth))
             .collect::<Vec<_>>();
 
-        assert_eq!(task_rows, vec!["Parent task", "  L Child task"]);
+        assert_eq!(
+            task_rows,
+            vec![
+                ("Parent task".to_string(), 0),
+                ("Child task".to_string(), 1)
+            ]
+        );
         assert_eq!(state.table().task_count(), 2);
     }
 
