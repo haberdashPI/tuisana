@@ -12,6 +12,7 @@ use crossterm::event::{self, Event, KeyEvent};
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::Rect,
+    text::Span,
     widgets::{List, ListItem, ListState, Paragraph},
     Frame, Terminal,
 };
@@ -23,7 +24,7 @@ use crate::{
     input::KeyMap,
     ui::{
         chrome::{self, Chip, Tone},
-        filter_panel, help_overlay, hints, layout, project_list,
+        calendar, filter_panel, help_overlay, hints, layout, project_list,
         task_table::{self, TaskTableView, GUTTER_WIDTH},
         theme::Theme,
     },
@@ -39,6 +40,9 @@ pub enum InputEvent {
     Key(KeyEvent),
     /// A polling interval elapsed without any input.
     Tick,
+    /// The terminal changed size, so the next frame has to be drawn from
+    /// scratch rather than diffed against a buffer of the old size.
+    Resize,
     /// The input source ended and no more events will arrive.
     Closed,
 }
@@ -63,13 +67,24 @@ impl KeySource for CrosstermKeySource {
             return Ok(InputEvent::Tick);
         }
 
-        // Resize and mouse events are not part of the app's input model, so
-        // keep reading until a key arrives.
-        loop {
-            if let Event::Key(key_event) = event::read()? {
-                return Ok(InputEvent::Key(key_event));
-            }
-        }
+        Ok(classify(event::read()?))
+    }
+}
+
+/// Maps a crossterm event onto the app's input model.
+///
+/// Everything maps to *something*. This used to loop on `event::read()` until a
+/// key arrived, discarding resizes and mouse events — which meant one stray
+/// non-key event blocked the loop, stopping the tick and freezing the screen
+/// until the user happened to press something. A resize was the obvious way to
+/// hit it, and the frame stayed broken for as long as you left it alone.
+fn classify(event: Event) -> InputEvent {
+    match event {
+        Event::Key(key_event) => InputEvent::Key(key_event),
+        Event::Resize(_, _) => InputEvent::Resize,
+        // A mouse move or a focus change carries nothing the app acts on, but a
+        // redraw costs little and never blocks.
+        _ => InputEvent::Tick,
     }
 }
 
@@ -80,9 +95,12 @@ impl KeySource for CrosstermKeySource {
 fn focused_pane(mode: Mode) -> FocusedPane {
     match mode {
         Mode::Task => FocusedPane::Task,
-        Mode::Project | Mode::ProjectSearch | Mode::Filter | Mode::FilterEdit | Mode::Any => {
-            FocusedPane::Top
-        }
+        Mode::Project
+        | Mode::ProjectSearch
+        | Mode::Filter
+        | Mode::FilterEdit
+        | Mode::Calendar
+        | Mode::Any => FocusedPane::Top,
     }
 }
 
@@ -113,7 +131,7 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
             if let Some(area) = regions.top_pane {
                 let focused = focus == FocusedPane::Top;
                 page_size = match mode {
-                    Mode::Filter | Mode::FilterEdit => {
+                    Mode::Filter | Mode::FilterEdit | Mode::Calendar => {
                         render_filter_pane(frame, area, app, &theme, mode, focused)
                     }
                     _ => render_project_pane(frame, area, app, &theme, mode, focused),
@@ -153,9 +171,13 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
             );
 
             // Drawn last so it sits over the panes; the layout underneath is
-            // unchanged, which is the whole point of an overlay.
+            // unchanged, which is the whole point of an overlay. Only one shows
+            // at a time, and help wins: it is reachable from inside the picker
+            // via `?`, so asking for it has to actually show it.
             if help_visible(app, mode) {
                 help_overlay::render(frame, regions.body, &theme, keymap, mode);
+            } else if let Some(view) = calendar::calendar_view(app.tasks.filter_calendar()) {
+                calendar::render(frame, regions.body, &theme, &view);
             }
         })
         .map(|_| page_size)
@@ -165,7 +187,9 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
 /// inline help used before.
 fn help_visible<C: AsanaClient + Clone + Send + 'static>(app: &App<C>, mode: Mode) -> bool {
     match mode {
-        Mode::Task | Mode::Filter | Mode::FilterEdit => app.tasks.help_details_visible(),
+        Mode::Task | Mode::Filter | Mode::FilterEdit | Mode::Calendar => {
+            app.tasks.help_details_visible()
+        }
         Mode::Project | Mode::ProjectSearch | Mode::Any => app.projects.help_details_visible(),
     }
 }
@@ -192,6 +216,12 @@ fn render_header<C: AsanaClient + Clone + Send + 'static>(
         crumbs.push(format!("{count} task{}", if count == 1 { "" } else { "s" }));
     }
 
+    // The whole loading indicator — spinner and word together — used to sit in
+    // the task pane's right-hand chips, where it was easy to miss. The top left
+    // is the first place the eye lands.
+    let leading = task_table::loading_frame(&app.tasks, theme)
+        .map(|frame| Span::styled(format!("{frame} loading "), theme.info));
+
     // When the task pane is hidden nothing else can report that the loaded
     // task data no longer matches the project selection, so the header does.
     let right = match app.tasks.status() {
@@ -201,7 +231,7 @@ fn render_header<C: AsanaClient + Clone + Send + 'static>(
         _ => Vec::new(),
     };
 
-    chrome::render_header(frame, area, theme, &crumbs, right);
+    chrome::render_header(frame, area, theme, leading, &crumbs, right);
 }
 
 fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
@@ -217,11 +247,12 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
         searching: app.projects.search_active() || !app.projects.search_query().is_empty(),
         has_selection: match mode {
             Mode::Task => app.tasks.selected_task_count() > 0,
-            Mode::Filter | Mode::FilterEdit => false,
+            Mode::Filter | Mode::FilterEdit | Mode::Calendar => false,
             _ => app.projects.selected_count() > 0,
         },
         can_scroll: task_view.is_some_and(|view| view.max_scroll > 0),
         on_label_filter: app.tasks.filter_selected_is_labels(),
+        on_date_range: app.tasks.filter_calendar_is_range(),
     };
 
     let line = hints::hint_line(
@@ -444,6 +475,12 @@ where
             InputEvent::Tick => {
                 page_size = draw(terminal, app, &keymap)?;
             }
+            InputEvent::Resize => {
+                // Clearing first discards the diff against the old geometry, so
+                // nothing is left behind from the previous size.
+                terminal.clear()?;
+                page_size = draw(terminal, app, &keymap)?;
+            }
             InputEvent::Closed => break,
         }
     }
@@ -503,6 +540,129 @@ mod tests {
             .chunks(buffer.area.width as usize)
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect()
+    }
+
+    #[test]
+    fn every_terminal_event_maps_to_something_drawable() {
+        use crossterm::event::{Event, MouseEvent, MouseEventKind};
+        use ratatui::crossterm::event::KeyModifiers as Mods;
+
+        let key = KeyEvent::new(KeyCode::Char('j'), Mods::NONE);
+        assert_eq!(
+            super::classify(Event::Key(key)),
+            InputEvent::Key(key),
+            "a key is still a key"
+        );
+        assert_eq!(
+            super::classify(Event::Resize(80, 24)),
+            InputEvent::Resize,
+            "a resize asks for a fresh frame"
+        );
+
+        // The regression: these used to be swallowed by a loop that blocked on
+        // `event::read()` until a key arrived, freezing the screen.
+        assert_eq!(
+            super::classify(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: 0,
+                row: 0,
+                modifiers: Mods::NONE,
+            })),
+            InputEvent::Tick
+        );
+        assert_eq!(super::classify(Event::FocusGained), InputEvent::Tick);
+        assert_eq!(super::classify(Event::FocusLost), InputEvent::Tick);
+    }
+
+    #[test]
+    fn the_loading_spinner_sits_at_the_top_left() {
+        let projects = vec![Project::new("1", "Inbox", true)];
+        let client = FakeAsanaClient::new(projects.clone());
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+        app.tasks.begin_loading(&projects);
+
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let keymap = app.keymap().expect("keymap");
+        super::draw(&mut terminal, &mut app, &keymap).expect("draws");
+
+        let theme = crate::ui::theme::Theme::default();
+        let lines = screen(&mut terminal);
+        let header = lines[0].clone();
+        let frames = theme.glyphs.spinner;
+
+        // In the top-right chips it was easy to miss; it belongs on the side the
+        // eye starts from — and the spinner and the word travel together.
+        // The spinner and the word are one indicator, so assert them as one
+        // string rather than as two positions.
+        assert!(
+            frames
+                .iter()
+                .any(|frame| header.contains(&format!("{frame} loading"))),
+            "the header shows the spinner and the word together: {header:?}"
+        );
+
+        let word_at = header
+            .char_indices()
+            .position(|(byte, _)| header[byte..].starts_with("loading"))
+            .expect("the header says what it is doing");
+        assert!(
+            word_at < header.chars().count() / 2,
+            "on the left half of the header: {header:?}"
+        );
+        assert!(
+            lines[1..].iter().all(|line| !line.contains("loading")),
+            "and nothing repeats it further down the screen"
+        );
+    }
+
+    /// A resize used to block the event loop: the key source looped on
+    /// `event::read()` until a key arrived, so nothing redrew in between.
+    #[test]
+    fn a_resize_redraws_instead_of_waiting_for_a_keypress() {
+        struct ResizeThenClose {
+            sent: bool,
+        }
+
+        impl KeySource for ResizeThenClose {
+            fn next_event(&mut self, _timeout: Duration) -> io::Result<InputEvent> {
+                if self.sent {
+                    return Ok(InputEvent::Closed);
+                }
+                self.sent = true;
+                Ok(InputEvent::Resize)
+            }
+        }
+
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]);
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        // Draw at one size, then resize the backend under the app so the old
+        // frame's geometry no longer matches.
+        run_session(&mut app, &mut ResizeThenClose { sent: true }, &mut terminal)
+            .expect("first session runs");
+        terminal
+            .backend_mut()
+            .resize(60, 20);
+
+        run_session(&mut app, &mut ResizeThenClose { sent: false }, &mut terminal)
+            .expect("session runs");
+
+        let lines = screen(&mut terminal);
+        assert_eq!(lines.len(), 20, "the frame was redrawn at the new height");
+        assert!(
+            lines[0].contains("TUISANA"),
+            "and the header came back: {:?}",
+            lines[0]
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("Projects")),
+            "along with the panes"
+        );
     }
 
     #[test]

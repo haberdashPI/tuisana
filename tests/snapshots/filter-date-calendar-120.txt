@@ -1,0 +1,30 @@
+ TUISANA  ▸ 1 project ▸ 4 tasks
+┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ editing ┓
+┃    Title     fuzzy     —                                                                                             ┃
+┃    Assignee  contains  —                                                                                             ┃
+┃▍   Due       date                                                                                                    ┃
+┃    Start     date      —                                                                                             ┃
+┃    State     labels    —                                                                                             ┃
+┃    Projects  contains  —                                                                                             ┃
+┃    Priority  labels    —                                                                                             ┃
+┃                                               ┏ Due ━━━━━━━━━━━━━━━━┓                                                ┃
+┃                                               ┃      Aug 2026       ┃                                                ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃Mo Tu We Th Fr Sa Su ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌ Tasks ────────────────────────────────────────┃                1  2 ┃─────────────────────────────── 4 tasks · row 1 ┐
+│   Task                                        ┃ 3  4  5  6  7  8  9 ┃ue▲ │ Start │ St │ Projects           │ Priority│
+│                                               ┃10 11 12 13 14 15 16 ┃                                                │
+│▌Northwind BTX 4412 ───────────────────────────┃17 18 19 20 21 22 23 ┃────────────────────────────────────────────────│
+│                                               ┃24 25 26 27 28 29 30 ┃                                                │
+│   Study Kit Design ···························┃31                   ┃················································│
+│▍  Review shipment requirements doc            ┗━━━━━━━━━━━━━━━━━━━━━┛ 19 │ Aug 4 │ ○  │ Northwind BTX 4412 │ High    │
+│   Ship release candidate to the study team      │ Alex Chen    │   Today │ Aug 4 │ ○  │ Northwind BTX 4412 │ High    │
+│   Confirm carrier pickup window with the vendor │ —            │     Wed │ Aug 4 │ ○  │ Northwind BTX 4412 │ —       │
+│                                                                                                                      │
+│   Shipment ··········································································································│
+│   Close out packaging vendor contract           │ Alex Chen    │  Nov 14 │ Aug 4 │ ○  │ Northwind BTX 4412 │ Low     │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+h/l day   k/j month   t today   left/right caret   ⏎ pick   d clear   esc close
+ CALENDAR

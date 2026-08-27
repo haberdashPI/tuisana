@@ -109,9 +109,35 @@ Reading the screen:
   within three days takes the accent color.
 - In the task table the left gutter carries two markers: the cursor (`▍`) and
   multi-selection (`●`). An empty cell shows `—`.
+- Editing a date filter opens a calendar overlay: it starts on the current month
+  with today highlighted, `h`/`l` move by day, `j`/`k` flip months, and `enter`
+  picks the highlighted day. Typed digits go straight into the filter field, and
+  move the highlight to match.
+- A date range shades the days between its two ends, with both ends picked out.
 
-`TUISANA_TODAY=YYYY-MM-DD` pins the date relative due dates are measured
-against, which is mostly useful for tests and screenshots.
+### Dates and time zones
+
+Asana's due and start dates are date-only values, so they carry no time zone and
+are never converted. What *is* resolved in your local zone is today's date, which
+is what `Today` / `Tomorrow` / overdue and the `today` filter keyword are measured
+against.
+
+`TUISANA_TODAY=YYYY-MM-DD` pins that date, which is mostly useful for tests and
+screenshots.
+
+Date filters accept:
+
+| form | example |
+| --- | --- |
+| a full date | `2026-09-15` |
+| a date in the current year | `09-15` |
+| a keyword | `today`, `tomorrow`, `yesterday` |
+| the next occurrence of a weekday | `mon`, `friday` |
+| an inclusive range | `2026-09-01..2026-09-30` |
+| a range open on one side | `today..`, `..2026-12-31` |
+
+A `due` filter is also pushed to the API as `due_on.after` / `due_on.before`, so
+narrowing it reduces what gets downloaded.
 
 ### Key bindings
 
@@ -119,7 +145,7 @@ The `[[bind]]` section maps keyboard input to command names.
 If you omit a command from your config, the built-in default binding for that command still applies.
 
 Each binding may include an optional `mode` field to restrict it to a specific UI context.
-Available modes are `any` (default), `project`, `project_search`, `filter`, `filter_edit`, and `task`.
+Available modes are `any` (default), `project`, `project_search`, `filter`, `filter_edit`, `calendar`, and `task`.
 
 Example:
 
@@ -194,6 +220,19 @@ All bindable commands:
 - `search_substring`
 - `search_regex`
 
+**Calendar mode** (the date picker)
+
+- `calendar_prev_day`
+- `calendar_next_day`
+- `calendar_prev_month`
+- `calendar_next_month`
+- `calendar_today`
+- `calendar_commit`
+- `calendar_close`
+- `calendar_clear`
+- `calendar_jump_to_start`
+- `calendar_jump_to_end`
+
 **Filter edit mode**
 
 - `filter_done_editing`
@@ -204,6 +243,8 @@ All bindable commands:
 - `filter_cycle_label_down`
 - `filter_add_label`
 - `filter_delete_label`
+- `filter_caret_left`
+- `filter_caret_right`
 - `clear_search`
 - `search_fuzzy`
 - `search_substring`
@@ -253,7 +294,9 @@ The top window is shared between the project list and the filter view. When the 
 - `@` to select all visible non-hidden projects
 - `o` to filter to selected projects only
 - `/` to start search entry
-- `ctrl-f`, `ctrl-s`, `ctrl-r` to switch search mode (fuzzy / substring / regex)
+- `ctrl-z`, `ctrl-s`, `ctrl-r` to switch search mode (fuzzy / substring / regex).
+  Fuzzy is on `ctrl-z` rather than `ctrl-f` so that `ctrl-b`/`ctrl-f` can move the
+  caret in every mode that edits text.
 
 **Project search** accepts ordinary typing, `backspace`, `enter`, and `esc`.
 `ctrl-l` clears the search string.
@@ -266,21 +309,47 @@ The top window is shared between the project list and the filter view. When the 
 - `f` to toggle the filter panel
 - `s` to cycle the string-match mode
 - `ctrl-l` to clear the search string
-- `ctrl-f`, `ctrl-s`, `ctrl-r` to switch search mode
+- `ctrl-z`, `ctrl-s`, `ctrl-r` to switch search mode
 
 **Filter field editing** (filter edit mode):
 
-- Ordinary typing to edit a text or date field
-- `backspace` to delete the last character
+- Ordinary typing to edit a text field, inserted at the caret
+- `left`/`right`, or `ctrl-b`/`ctrl-f`, to move the caret through the value
+- `backspace` to delete the character before the caret
 - `enter` to confirm the edit and return to filter browse mode
 - `esc` to discard the edit, close the panel, and return to task mode
-- `ctrl-l`, `ctrl-f`, `ctrl-s`, `ctrl-r` as above
+- `ctrl-z`, `ctrl-s`, `ctrl-r` to switch match mode, `ctrl-l` to clear
 
 For fields include a fixed set of labels, the edit keys navigate instead of typing:
 
 - `h`/`l` to move between the set of listed labeles
 - `j`/`k` to cycle the selected label between the possible options
 - `a` to add a label, `d` to delete the current one
+
+**Date picking** (calendar mode). Pressing `enter` on the `Due` or `Start` filter
+opens the calendar. The text you are editing stays in the filter field, where the
+panel draws it with a caret; the overlay shows the month.
+
+Moving the date:
+
+- `h`/`l` to move the highlight by a day. Stepping off the end of a month lands on
+  the first of the next one.
+- `j`/`k` to flip months. Forward lands on the first of the next month, backward on
+  the last of the previous one.
+- `t` to jump back to today
+- `enter` to pick and close, `esc` to close, `d` to clear the field
+
+Editing the text:
+
+- Ordinary typing goes into the filter field, and the table refilters as it lands
+- `left`/`right`, or `ctrl-b`/`ctrl-f`, to move the caret; `backspace` deletes
+- `ctrl-a` and `ctrl-e` to jump to a range's start and end dates. They do nothing
+  when the field holds no `..`.
+
+The two directions stay in step. Typing `2026-09` moves the grid to September even
+though no day is named yet; a year alone shows that January. Moving the highlight
+rewrites the date you are on — and only that one, so the other end of a range is
+left alone.
 
 **Task view shortcuts**:
 

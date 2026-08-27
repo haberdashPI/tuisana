@@ -114,6 +114,21 @@ fn non_empty(area: Rect) -> Option<Rect> {
     (area.height > 0 && area.width > 0).then_some(area)
 }
 
+/// Centers a box of the given size inside `area`, clamping to fit.
+///
+/// Shared by the overlays so a modal is positioned the same way no matter which
+/// one is showing.
+pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{regions, HEADER_HEIGHT, HINT_HEIGHT, STATUS_HEIGHT};

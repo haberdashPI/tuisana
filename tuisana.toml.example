@@ -258,6 +258,58 @@ key = "s"
 mode = "task"
 command = "cycle_task_sort"
 
+# Pressing enter on the Due or Start filter opens a calendar overlay. These are
+# its keys; "calendar" mode does not fall back to global bindings, so digits and
+# other unbound keys type into the date instead.
+[[bind]]
+key = "h"
+mode = "calendar"
+command = "calendar_prev_day"
+
+[[bind]]
+key = "l"
+mode = "calendar"
+command = "calendar_next_day"
+
+[[bind]]
+key = "k"
+mode = "calendar"
+command = "calendar_prev_month"
+
+[[bind]]
+key = "j"
+mode = "calendar"
+command = "calendar_next_month"
+
+[[bind]]
+key = "t"
+mode = "calendar"
+command = "calendar_today"
+
+# `filter_caret_*` works on any filter field, not just dates, and is bound to both
+# the arrows and ctrl-b/ctrl-f in filter-edit and calendar modes. That is why
+# search_fuzzy defaults to ctrl-z rather than ctrl-f. ctrl-a and ctrl-e jump
+# between the two ends of a `start..end` range, and do nothing without one.
+[[bind]]
+key = "ctrl-b"
+mode = "calendar"
+command = "filter_caret_left"
+
+[[bind]]
+key = "ctrl-f"
+mode = "calendar"
+command = "filter_caret_right"
+
+[[bind]]
+key = "ctrl-a"
+mode = "calendar"
+command = "calendar_jump_to_start"
+
+[[bind]]
+key = "ctrl-e"
+mode = "calendar"
+command = "calendar_jump_to_end"
+
 [[project]]
 gid = "project-gid-here"
 starred = true

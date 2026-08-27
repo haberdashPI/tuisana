@@ -1,0 +1,30 @@
+ TUISANA  ▸ 1 project ▸ 4 tasks
+┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ editing ┓
+┃    Title     fuzzy     —                                                                                                                                                                             ┃
+┃    Assignee  contains  —                                                                                                                                                                             ┃
+┃▍   Due       date                                                                                                                                                                                    ┃
+┃    Start     date      —                                ┏ Help · calendar mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                                                         ┃
+┃    State     labels    —                                ┃Move the date                              Edit the text                          ┃                                                         ┃
+┃    Projects  contains  —                                ┃h/l         day                            0-9 - ..    typed into the filter field┃                                                         ┃
+┃    Priority  labels    —                                ┃k/j         month                          left/right  move the caret             ┃                                                         ┃
+┃                                                         ┃t           jump to today                  bksp        delete                     ┃                                                         ┃
+┃                                                         ┃⏎           pick and close                 ^a          go to the start date       ┃                                                         ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃d           clear the field                ^e          go to the end date         ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌ Tasks ──────────────────────────────────────────────────┃esc         close                                                                 ┃──────────────────────────────────────── 4 tasks · row 1 ┐
+│   Task                                                  ┃                                           Date syntax                            ┃Due▲ │ Start │ St │ Projects           │ Priority        │
+│                                                         ┃                                           exact       YYYY-MM-DD or MM-DD        ┃                                                         │
+│▌Northwind BTX 4412 ─────────────────────────────────────┃                                           range       start..end                 ┃─────────────────────────────────────────────────────────│
+│                                                         ┃                                           open range  start.. or ..end           ┃                                                         │
+│   Study Kit Design ·····································┃                                                                                  ┃·························································│
+│▍  Review shipment requirements doc                      ┃                                           App                                    ┃g 19 │ Aug 4 │ ○  │ Northwind BTX 4412 │ High            │
+│   Ship release candidate to the study team              ┃                                           ?           close this help            ┃oday │ Aug 4 │ ○  │ Northwind BTX 4412 │ High            │
+│   Confirm carrier pickup window with the vendor         ┃                                                                                  ┃ Wed │ Aug 4 │ ○  │ Northwind BTX 4412 │ —               │
+│                                                         ┃                                                                        ? to close┃                                                         │
+│   Shipment ·············································┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛·························································│
+│   Close out packaging vendor contract                                                                                   │ Alex Chen    │  Nov 14 │ Aug 4 │ ○  │ Northwind BTX 4412 │ Low             │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+h/l day   k/j month   t today   left/right caret   ⏎ pick   d clear   esc close
+ CALENDAR

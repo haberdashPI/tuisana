@@ -5,18 +5,19 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::Instant,
 };
 
 use crate::{
-    app::debug_log,
+    app::{calendar::CalendarState, debug_log},
     asana::{
         dto::{CustomFieldValueDto, TaskDto},
         AsanaClient, TaskLoadScope, TaskQuery, TaskTarget,
     },
     domain::{
-        merge_task_record, CustomFieldDefinition, Project, ProjectKind, TaskRecord, TaskRowKind,
-        TaskTableModel, TaskTableSettings,
+        date, group_custom_fields_by_name, merge_task_record, CivilDate, CustomFieldDefinition,
+        DateQuery, Project, ProjectKind, TaskRecord, TaskRowKind, TaskTableModel,
+        TaskTableSettings,
     },
     error::Result,
     input::Action,
@@ -146,6 +147,12 @@ struct TaskFilterFieldSpec {
     key: String,
     label: String,
     kind: TaskFieldFilterKind,
+    /// Every custom-field id this row filters on.
+    ///
+    /// A custom field with the same name usually exists separately in each
+    /// project, with its own id. Keying rows by id gave one identically-labelled
+    /// row per project — five "Tag" rows in a row. One row now covers them all.
+    custom_gids: Vec<String>,
 }
 
 /// Mutable state for one filter row, including the user query and any selected
@@ -154,6 +161,12 @@ struct TaskFilterFieldSpec {
 struct TaskFilterFieldState {
     spec: TaskFilterFieldSpec,
     query: String,
+    /// The text caret, as a char index into `query`.
+    ///
+    /// Editing used to be append-only, with the caret pinned to the end. It is a
+    /// position now so the arrow keys can move through the text on any field,
+    /// not just the date fields the calendar drives.
+    query_caret: usize,
     string_mode: TaskFieldStringMode,
     label_values: Vec<String>,
     label_options: Vec<String>,
@@ -170,6 +183,9 @@ pub(crate) struct TaskFilterPanelEntry {
     pub editing: bool,
     pub label_values: Vec<String>,
     pub label_cursor: Option<usize>,
+    /// Where the edit caret sits in the value, as a char index, when this row is
+    /// the one being edited.
+    pub caret: Option<usize>,
     /// Whether this field came from a project custom field rather than a
     /// built-in task field.
     pub custom: bool,
@@ -182,6 +198,8 @@ struct TaskFilterEditorState {
     editing: bool,
     selected: usize,
     fields: Vec<TaskFilterFieldState>,
+    /// The date picker, while a date field is being edited through it.
+    calendar: Option<CalendarState>,
 }
 
 /// Small cache of task records and custom field names keyed by task GID.
@@ -279,6 +297,7 @@ impl TaskFilterEditorState {
                     key: "title".to_string(),
                     label: "Title".to_string(),
                     kind: TaskFieldFilterKind::String,
+                    custom_gids: Vec::new(),
                 },
                 TaskFieldStringMode::Fuzzy,
                 Vec::new(),
@@ -288,6 +307,7 @@ impl TaskFilterEditorState {
                     key: "assignee".to_string(),
                     label: "Assignee".to_string(),
                     kind: TaskFieldFilterKind::String,
+                    custom_gids: Vec::new(),
                 },
                 TaskFieldStringMode::Substring,
                 Vec::new(),
@@ -297,6 +317,7 @@ impl TaskFilterEditorState {
                     key: "due".to_string(),
                     label: "Due".to_string(),
                     kind: TaskFieldFilterKind::Date,
+                    custom_gids: Vec::new(),
                 },
                 TaskFieldStringMode::Substring,
                 Vec::new(),
@@ -306,6 +327,7 @@ impl TaskFilterEditorState {
                     key: "start".to_string(),
                     label: "Start".to_string(),
                     kind: TaskFieldFilterKind::Date,
+                    custom_gids: Vec::new(),
                 },
                 TaskFieldStringMode::Substring,
                 Vec::new(),
@@ -315,6 +337,7 @@ impl TaskFilterEditorState {
                     key: "state".to_string(),
                     label: "State".to_string(),
                     kind: TaskFieldFilterKind::Labels,
+                    custom_gids: Vec::new(),
                 },
                 TaskFieldStringMode::Substring,
                 vec!["open".to_string(), "done".to_string()],
@@ -324,17 +347,23 @@ impl TaskFilterEditorState {
                     key: "projects".to_string(),
                     label: "Projects".to_string(),
                     kind: TaskFieldFilterKind::String,
+                    custom_gids: Vec::new(),
                 },
                 TaskFieldStringMode::Substring,
                 Vec::new(),
             ),
         ];
 
-        for definition in &dataset.custom_field_definitions {
+        // One row per distinct field *name*, gathering every id that carries it.
+        // The table's columns are grouped by the same helper, so the two agree.
+        for (name, gids) in group_custom_fields_by_name(&dataset.custom_field_definitions) {
             let mut values = dataset
                 .records
                 .iter()
-                .filter_map(|record| record.custom_fields.get(&definition.gid))
+                .flat_map(|record| {
+                    gids.iter()
+                        .filter_map(|gid| record.custom_fields.get(gid))
+                })
                 .flat_map(|values| values.iter().cloned())
                 .collect::<Vec<_>>();
             values.sort();
@@ -354,9 +383,12 @@ impl TaskFilterEditorState {
             };
             fields.push(TaskFilterFieldState::new(
                 TaskFilterFieldSpec {
-                    key: format!("custom:{}", definition.gid),
-                    label: definition.name.clone(),
+                    // Keyed by name, not id, so a saved query survives a reload
+                    // that brings a different set of projects with it.
+                    key: format!("custom:{name}"),
+                    label: name.clone(),
                     kind,
+                    custom_gids: gids,
                 },
                 TaskFieldStringMode::Substring,
                 if kind == TaskFieldFilterKind::Labels {
@@ -372,6 +404,7 @@ impl TaskFilterEditorState {
             editing: false,
             selected: 0,
             fields,
+            calendar: None,
         }
     }
 
@@ -471,6 +504,7 @@ impl TaskFilterEditorState {
     fn clear_current(&mut self) {
         if let Some(field) = self.fields.get_mut(self.selected) {
             field.query.clear();
+            field.query_caret = 0;
             field.label_values.clear();
             field.label_cursor = 0;
         }
@@ -503,7 +537,11 @@ impl TaskFilterEditorState {
             if matches!(field.spec.kind, TaskFieldFilterKind::Labels) {
                 return;
             }
-            field.query.push(ch);
+            let mut chars = field.query.chars().collect::<Vec<_>>();
+            let at = field.query_caret.min(chars.len());
+            chars.insert(at, ch);
+            field.query = chars.into_iter().collect();
+            field.query_caret = at + 1;
         }
     }
 
@@ -512,16 +550,76 @@ impl TaskFilterEditorState {
             if matches!(field.spec.kind, TaskFieldFilterKind::Labels) {
                 return;
             }
-            field.query.pop();
+            let mut chars = field.query.chars().collect::<Vec<_>>();
+            let at = field.query_caret.min(chars.len());
+            if at == 0 {
+                return;
+            }
+            chars.remove(at - 1);
+            field.query = chars.into_iter().collect();
+            field.query_caret = at - 1;
+        }
+    }
+
+    /// Moves the selected field's caret, clamped to its text.
+    fn move_query_caret(&mut self, delta: i64) {
+        if let Some(field) = self.fields.get_mut(self.selected) {
+            if matches!(field.spec.kind, TaskFieldFilterKind::Labels) {
+                return;
+            }
+            let len = field.query.chars().count() as i64;
+            field.query_caret = (field.query_caret as i64 + delta).clamp(0, len) as usize;
+        }
+    }
+
+    /// Puts the caret at the end of the selected field's text.
+    ///
+    /// Called when an edit begins, so typing continues from where the value
+    /// leaves off rather than from wherever the caret was last time.
+    fn reset_query_caret(&mut self) {
+        if let Some(field) = self.fields.get_mut(self.selected) {
+            field.query_caret = field.query.chars().count();
         }
     }
 
     fn start_editing(&mut self) {
         self.editing = true;
+        self.reset_query_caret();
     }
 
     fn stop_editing(&mut self) {
         self.editing = false;
+        self.calendar = None;
+    }
+
+    /// Opens the date picker on the selected field, if it holds a date.
+    fn open_calendar(&mut self, today: CivilDate) -> bool {
+        let Some(field) = self.fields.get(self.selected) else {
+            return false;
+        };
+        if !matches!(field.spec.kind, TaskFieldFilterKind::Date) {
+            return false;
+        }
+        self.calendar = Some(CalendarState::open(
+            field.spec.label.clone(),
+            &field.query,
+            today,
+        ));
+        self.editing = true;
+        true
+    }
+
+    /// Copies the picker's text into the field it is editing.
+    ///
+    /// Called after every picker change, because the field — not the overlay —
+    /// is where the value is shown and what the table filters on.
+    fn sync_calendar_query(&mut self) {
+        let Some(query) = self.calendar.as_ref().map(|state| state.query().to_string()) else {
+            return;
+        };
+        if let Some(field) = self.fields.get_mut(self.selected) {
+            field.query = query;
+        }
     }
 
     fn move_label_cursor_left(&mut self) {
@@ -610,27 +708,24 @@ impl TaskFilterEditorState {
     }
 
     /// Extract a due-date range from the filter state for server-side use.
-    /// Returns `(after, before)` as YYYY-MM-DD strings. Keywords ("today",
-    /// "tomorrow", weekday names, MM-DD) are resolved to explicit dates using
-    /// the current date. Returns `None` for each bound that is empty or
-    /// unrecognized.
+    ///
+    /// Returns `(after, before)` as `YYYY-MM-DD` strings for the API's
+    /// `due_on.after` / `due_on.before` params. Keywords resolve against the
+    /// *local* date, which is the whole reason this goes through
+    /// [`crate::domain::date`]: resolving `today` in UTC fetched the wrong day's
+    /// tasks every evening west of UTC, and then cached that window as covered.
     fn due_date_range_for_query(&self) -> (Option<String>, Option<String>) {
         let Some(due_field) = self.fields.iter().find(|f| f.spec.key == "due") else {
             return (None, None);
         };
-        let query = due_field.query.trim();
-        if query.is_empty() {
+        let Some(query) = DateQuery::parse(&due_field.query, date::today()) else {
             return (None, None);
-        }
-        let today = current_date_parts();
-        if let Some((start, end)) = query.split_once("..") {
-            let after = parse_date_token(start.trim(), today).filter(|d| !d.is_empty());
-            let before = parse_date_token(end.trim(), today).filter(|d| !d.is_empty());
-            (after, before)
-        } else {
-            let resolved = parse_date_token(query, today).filter(|d| !d.is_empty());
-            (resolved.clone(), resolved)
-        }
+        };
+        let (after, before) = query.bounds();
+        (
+            after.map(|date| date.iso()),
+            before.map(|date| date.iso()),
+        )
     }
 }
 
@@ -643,6 +738,7 @@ impl TaskFilterFieldState {
         Self {
             spec,
             query: String::new(),
+            query_caret: 0,
             string_mode,
             label_values: Vec::new(),
             label_options,
@@ -657,11 +753,14 @@ impl TaskFilterFieldState {
                     "title" => record.name.clone(),
                     "assignee" => record.assignee.clone().unwrap_or_default(),
                     "projects" => record.projects.join(" "),
-                    key if key.starts_with("custom:") => record
-                        .custom_fields
-                        .get(key.trim_start_matches("custom:"))
-                        .map(|values| values.join(" "))
-                        .unwrap_or_default(),
+                    key if key.starts_with("custom:") => self
+                        .spec
+                        .custom_gids
+                        .iter()
+                        .filter_map(|gid| record.custom_fields.get(gid))
+                        .flat_map(|values| values.iter().map(String::as_str))
+                        .collect::<Vec<_>>()
+                        .join(" "),
                     _ => String::new(),
                 }
                 .to_ascii_lowercase();
@@ -678,11 +777,13 @@ impl TaskFilterFieldState {
             TaskFieldFilterKind::Labels => {
                 let values = match self.spec.key.as_str() {
                     "state" => vec![if record.completed { "done" } else { "open" }.to_string()],
-                    key if key.starts_with("custom:") => record
-                        .custom_fields
-                        .get(key.trim_start_matches("custom:"))
-                        .cloned()
-                        .unwrap_or_default(),
+                    key if key.starts_with("custom:") => self
+                        .spec
+                        .custom_gids
+                        .iter()
+                        .filter_map(|gid| record.custom_fields.get(gid))
+                        .flat_map(|values| values.iter().cloned())
+                        .collect::<Vec<_>>(),
                     _ => Vec::new(),
                 };
                 label_filter_matches(&values, &self.label_values)
@@ -745,173 +846,18 @@ fn parse_label_values(query: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether a task's date-only field satisfies a filter query.
+///
+/// A bare token is an exact-equality test; `start..end` is inclusive on both
+/// ends and either side may be empty for an open bound. A query that is not a
+/// date expression at all matches nothing, which the calendar overlay surfaces
+/// rather than leaving the table mysteriously empty.
 fn date_filter_matches(value: Option<&str>, query: &str) -> bool {
-    let Some(value) = value else {
+    let Some(parsed) = DateQuery::parse(query, date::today()) else {
+        // An empty query is not a filter; anything else here is unparseable.
         return query.trim().is_empty();
     };
-
-    let query = query.trim();
-    if query.is_empty() {
-        return true;
-    }
-
-    let today = current_date_parts();
-    if let Some((start, end)) = query.split_once("..") {
-        let start = start.trim();
-        let end = end.trim();
-        let Some(start) = parse_date_token(start, today) else {
-            return false;
-        };
-        let Some(end) = parse_date_token(end, today) else {
-            return false;
-        };
-        if !start.is_empty() && value < start.as_str() {
-            return false;
-        }
-        if !end.is_empty() && value > end.as_str() {
-            return false;
-        }
-        true
-    } else {
-        parse_date_token(query, today).is_some_and(|date| value == date)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct DateParts {
-    year: i32,
-    month: u32,
-    day: u32,
-    weekday: Weekday,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Weekday {
-    Sun,
-    Mon,
-    Tue,
-    Wed,
-    Thu,
-    Fri,
-    Sat,
-}
-
-impl Weekday {
-    fn from_str(value: &str) -> Option<Self> {
-        match value.to_ascii_lowercase().as_str() {
-            "sun" | "sunday" => Some(Self::Sun),
-            "mon" | "monday" => Some(Self::Mon),
-            "tue" | "tues" | "tuesday" => Some(Self::Tue),
-            "wed" | "wednesday" => Some(Self::Wed),
-            "thu" | "thur" | "thurs" | "thursday" => Some(Self::Thu),
-            "fri" | "friday" => Some(Self::Fri),
-            "sat" | "saturday" => Some(Self::Sat),
-            _ => None,
-        }
-    }
-
-    fn index(self) -> i64 {
-        match self {
-            Self::Sun => 0,
-            Self::Mon => 1,
-            Self::Tue => 2,
-            Self::Wed => 3,
-            Self::Thu => 4,
-            Self::Fri => 5,
-            Self::Sat => 6,
-        }
-    }
-}
-
-fn current_date_parts() -> DateParts {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let days = (now.as_secs() / 86_400) as i64;
-    date_parts_from_days(days)
-}
-
-fn date_parts_from_days(days: i64) -> DateParts {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = mp + if mp < 10 { 3 } else { -9 };
-    let year = y + if month <= 2 { 1 } else { 0 };
-    let weekday = match (days + 4).rem_euclid(7) {
-        0 => Weekday::Sun,
-        1 => Weekday::Mon,
-        2 => Weekday::Tue,
-        3 => Weekday::Wed,
-        4 => Weekday::Thu,
-        5 => Weekday::Fri,
-        _ => Weekday::Sat,
-    };
-    DateParts {
-        year: year as i32,
-        month: month as u32,
-        day: day as u32,
-        weekday,
-    }
-}
-
-fn days_from_date_parts(date: DateParts) -> i64 {
-    let year = date.year as i64 - if date.month <= 2 { 1 } else { 0 };
-    let era = year.div_euclid(400);
-    let yoe = year.rem_euclid(400);
-    let month = date.month as i64;
-    let day = date.day as i64;
-    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-fn parse_date_token(token: &str, today: DateParts) -> Option<String> {
-    let token = token.trim();
-    if token.is_empty() {
-        return Some(String::new());
-    }
-
-    let parts = if token.eq_ignore_ascii_case("today") {
-        today
-    } else if token.eq_ignore_ascii_case("tomorrow") {
-        date_parts_from_days(days_from_date_parts(today) + 1)
-    } else if let Some(weekday) = Weekday::from_str(token) {
-        let current = today.weekday.index();
-        let target = weekday.index();
-        let delta = (target - current).rem_euclid(7);
-        date_parts_from_days(days_from_date_parts(today) + delta)
-    } else if let Some((month, day)) = token.split_once('-') {
-        if token.len() == 5 && token.chars().nth(2) == Some('-') {
-            let year = today.year;
-            let month = month.parse::<u32>().ok()?;
-            let day = day.parse::<u32>().ok()?;
-            DateParts {
-                year,
-                month,
-                day,
-                weekday: today.weekday,
-            }
-        } else {
-            let year = token.get(0..4)?.parse::<i32>().ok()?;
-            let month = token.get(5..7)?.parse::<u32>().ok()?;
-            let day = token.get(8..10)?.parse::<u32>().ok()?;
-            DateParts {
-                year,
-                month,
-                day,
-                weekday: today.weekday,
-            }
-        }
-    } else {
-        return None;
-    };
-
-    Some(format!("{:04}-{:02}-{:02}", parts.year, parts.month, parts.day))
+    value.is_some_and(|value| parsed.matches(value))
 }
 
 impl TaskState {
@@ -1110,8 +1056,10 @@ impl TaskState {
                 lines.push("labels: j/k cycle value, h/l move, a add, d delete".to_string());
             }
             Some(TaskFieldFilterKind::Date) => {
+                lines.push("date: enter opens a calendar".to_string());
                 lines.push(
-                    "date: YYYY-MM-DD | MM-DD | today | tomorrow | mon/tue/...".to_string(),
+                    "date: YYYY-MM-DD | MM-DD | today | tomorrow | mon/tue/... | start..end"
+                        .to_string(),
                 );
             }
             None => {}
@@ -1126,10 +1074,12 @@ impl TaskState {
 
     pub fn move_filter_up(&mut self) {
         self.view.filter_editor.move_up();
+        self.view.filter_editor.reset_query_caret();
     }
 
     pub fn move_filter_down(&mut self) {
         self.view.filter_editor.move_down();
+        self.view.filter_editor.reset_query_caret();
     }
 
     pub fn filter_page_up(&mut self, page_size: usize) {
@@ -1165,12 +1115,129 @@ impl TaskState {
         self.refresh_table();
     }
 
+    /// Moves the caret in the selected text filter field.
+    pub(crate) fn filter_move_caret(&mut self, delta: i64) {
+        self.view.filter_editor.move_query_caret(delta);
+    }
+
     pub(crate) fn filter_edit_begin(&mut self) {
         self.view.filter_editor.start_editing();
     }
 
     pub(crate) fn filter_edit_done(&mut self) {
         self.view.filter_editor.stop_editing();
+    }
+
+    /// Whether the date picker is open.
+    pub fn filter_calendar_open(&self) -> bool {
+        self.view.filter_editor.calendar.is_some()
+    }
+
+    /// The filter rows as `(label, query)` pairs, for tests that need to see the
+    /// text a picker or an edit produced.
+    pub fn filter_panel_rows(&self) -> Vec<(String, String)> {
+        self.filter_panel_entries()
+            .into_iter()
+            .map(|entry| (entry.label, entry.query))
+            .collect()
+    }
+
+    /// Whether the date being picked is a range, which is what decides whether
+    /// the hint bar advertises the keys for moving between its two ends.
+    pub fn filter_calendar_is_range(&self) -> bool {
+        self.view
+            .filter_editor
+            .calendar
+            .as_ref()
+            .is_some_and(|calendar| calendar.range().is_some())
+    }
+
+    /// The date picker's state, for the renderer.
+    pub(crate) fn filter_calendar(&self) -> Option<&CalendarState> {
+        self.view.filter_editor.calendar.as_ref()
+    }
+
+    /// Opens the date picker on the selected field. Answers whether it opened,
+    /// which is how the caller knows a date field was selected.
+    pub(crate) fn filter_calendar_begin(&mut self) -> bool {
+        self.view.filter_editor.open_calendar(date::today())
+    }
+
+    /// Fills in the highlighted day if the text is incomplete, then closes.
+    pub(crate) fn filter_calendar_commit(&mut self) {
+        if let Some(calendar) = self.view.filter_editor.calendar.as_mut() {
+            calendar.normalize();
+        }
+        self.apply_calendar();
+        self.view.filter_editor.calendar = None;
+    }
+
+    /// Closes the picker. The text stays as edited, because it was going into the
+    /// field as it was typed.
+    pub(crate) fn filter_calendar_close(&mut self) {
+        self.view.filter_editor.calendar = None;
+    }
+
+    /// Clears the field the picker is editing, then closes it.
+    pub(crate) fn filter_calendar_clear(&mut self) {
+        self.view.filter_editor.calendar = None;
+        self.filter_clear_current();
+    }
+
+    pub(crate) fn filter_calendar_move_days(&mut self, delta: i64) {
+        self.with_calendar(|calendar| calendar.move_days(delta));
+    }
+
+    pub(crate) fn filter_calendar_move_months(&mut self, delta: i64) {
+        self.with_calendar(|calendar| calendar.move_months(delta));
+    }
+
+    pub(crate) fn filter_calendar_today(&mut self) {
+        self.with_calendar(|calendar| calendar.jump_today());
+    }
+
+    pub(crate) fn filter_calendar_push_char(&mut self, ch: char) {
+        self.with_calendar(|calendar| calendar.push_char(ch));
+    }
+
+    pub(crate) fn filter_calendar_pop_char(&mut self) {
+        self.with_calendar(|calendar| calendar.pop_char());
+    }
+
+    pub(crate) fn filter_calendar_move_caret(&mut self, delta: i64) {
+        self.with_calendar(|calendar| calendar.move_caret(delta));
+    }
+
+    /// Jumps the caret to a range's start end. Does nothing when there is no
+    /// range, since there is no other end to jump to.
+    pub(crate) fn filter_calendar_jump_to_start(&mut self) {
+        self.with_calendar(|calendar| {
+            calendar.jump_to_start();
+        });
+    }
+
+    /// Jumps the caret to a range's end end.
+    pub(crate) fn filter_calendar_jump_to_end(&mut self) {
+        self.with_calendar(|calendar| {
+            calendar.jump_to_end();
+        });
+    }
+
+    /// Runs a picker change, then pushes the result into the field and refilters.
+    ///
+    /// Every picker key goes through here, so the field and the table can never
+    /// drift from what the overlay shows.
+    fn with_calendar(&mut self, change: impl FnOnce(&mut CalendarState)) {
+        let Some(calendar) = self.view.filter_editor.calendar.as_mut() else {
+            return;
+        };
+        change(calendar);
+        self.apply_calendar();
+    }
+
+    fn apply_calendar(&mut self) {
+        self.view.filter_editor.sync_calendar_query();
+        self.refresh_table();
     }
 
     pub(crate) fn filter_move_label_left(&mut self) {
@@ -1233,8 +1300,29 @@ impl TaskState {
                 } else {
                     None
                 },
+                caret: self.filter_caret_for(index, field),
             })
             .collect()
+    }
+
+    /// Where the edit caret sits on one row, if it is the row being edited.
+    ///
+    /// A date field picked on the calendar keeps its caret in the calendar, which
+    /// is what the arrow keys move; every other field appends, so the caret is
+    /// simply at the end.
+    fn filter_caret_for(&self, index: usize, field: &TaskFilterFieldState) -> Option<usize> {
+        if index != self.view.filter_editor.selected {
+            return None;
+        }
+        if let Some(calendar) = &self.view.filter_editor.calendar {
+            return Some(calendar.caret());
+        }
+        if !self.view.filter_editor.editing()
+            || matches!(field.spec.kind, TaskFieldFilterKind::Labels)
+        {
+            return None;
+        }
+        Some(field.query_caret.min(field.query.chars().count()))
     }
 
     /// Translate the completed-task filter into the Asana fetch scope.
@@ -2188,6 +2276,133 @@ mod tests {
         }
     }
 
+    /// A custom field with the same name usually exists separately in every
+    /// project, each with its own id. Reviewing five projects used to produce
+    /// five identically-labelled filter rows *and* five identical table columns.
+    #[test]
+    fn a_custom_field_shared_by_name_across_projects_is_one_row_and_one_column() {
+        let projects = vec![
+            Project::new("p1", "Inbox", true),
+            Project::new("p2", "Backlog", true),
+        ];
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_sections(
+                "p1",
+                vec![SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_sections(
+                "p2",
+                vec![SectionDto {
+                    gid: "s2".to_string(),
+                    name: "Later".to_string(),
+                }],
+            )
+            // Same field name, different id per project.
+            .with_custom_field_settings(
+                "p1",
+                vec![ProjectCustomFieldSettingDto {
+                    gid: "set-1".to_string(),
+                    custom_field: CustomFieldDto {
+                        gid: "cf-inbox".to_string(),
+                        name: "Tag".to_string(),
+                    },
+                }],
+            )
+            .with_custom_field_settings(
+                "p2",
+                vec![ProjectCustomFieldSettingDto {
+                    gid: "set-2".to_string(),
+                    custom_field: CustomFieldDto {
+                        gid: "cf-backlog".to_string(),
+                        name: "Tag".to_string(),
+                    },
+                }],
+            )
+            .with_tasks(
+                "p1",
+                vec![task(
+                    "t1", "Ship release", "p1", "Inbox", "s1", "Today", "cf-inbox", "Tag", "red",
+                )],
+            )
+            .with_tasks(
+                "p2",
+                vec![task(
+                    "t2", "Draft plan", "p2", "Backlog", "s2", "Later", "cf-backlog", "Tag",
+                    "blue",
+                )],
+            );
+
+        let mut state = TaskState::new();
+        state
+            .load_task_dataset_for_projects(&client, &projects)
+            .expect("tasks load");
+
+        let labels = state
+            .filter_panel_rows()
+            .into_iter()
+            .map(|(label, _)| label)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels.iter().filter(|label| *label == "Tag").count(),
+            1,
+            "one filter row, not one per project: {labels:?}"
+        );
+
+        // The table's columns are keyed the same way, so they cannot disagree
+        // with the filter panel about how many "Tag" fields there are.
+        let columns = state.table().columns.clone();
+        assert_eq!(
+            columns.iter().filter(|column| *column == "Tag").count(),
+            1,
+            "one table column, not one per project: {columns:?}"
+        );
+
+        // And that single column shows each task's own value, whichever id it
+        // came from.
+        let tag = columns
+            .iter()
+            .position(|column| column == "Tag")
+            .expect("the Tag column exists");
+        let values = state
+            .table()
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.cells[tag].clone())
+            .collect::<Vec<_>>();
+        let mut sorted = values.clone();
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            vec!["blue".to_string(), "red".to_string()],
+            "each project's value lands in the shared column: {values:?}"
+        );
+
+        // And that single row filters on both ids, so it can still pick out a
+        // value that only exists in one project.
+        let tag = state
+            .view
+            .filter_editor
+            .fields
+            .iter()
+            .position(|field| field.spec.label == "Tag")
+            .expect("the Tag row exists");
+        assert_eq!(
+            state.view.filter_editor.fields[tag].label_options,
+            vec!["blue".to_string(), "red".to_string()],
+            "the options are the union across every id"
+        );
+
+        state.view.filter_editor.selected = tag;
+        state.filter_edit_begin();
+        state.filter_add_label();
+        state.filter_cycle_label_value(0);
+        assert_eq!(state.table().task_count(), 1);
+    }
+
     #[test]
     fn loads_tasks_for_selected_projects_and_builds_a_table_model() {
         let client = FakeAsanaClient::new(vec![
@@ -2843,37 +3058,56 @@ mod tests {
     }
 
     #[test]
-    fn date_filters_support_shortcuts_and_implicit_years() {
-        let today = super::current_date_parts();
-        let tomorrow = super::date_parts_from_days(super::days_from_date_parts(today) + 1);
-        let monday_offset = (super::Weekday::Mon.index() - today.weekday.index()).rem_euclid(7);
-        let monday = super::date_parts_from_days(super::days_from_date_parts(today) + monday_offset);
+    fn date_filters_match_exact_dates_ranges_and_open_bounds() {
+        // Token parsing itself is covered in `domain::date`; this pins the
+        // predicate the filter panel actually calls.
+        assert!(super::date_filter_matches(Some("2026-09-15"), "2026-09-15"));
+        assert!(!super::date_filter_matches(Some("2026-09-16"), "2026-09-15"));
 
-        assert_eq!(
-            super::parse_date_token("today", today),
-            Some(format!(
-                "{:04}-{:02}-{:02}",
-                today.year, today.month, today.day
-            ))
-        );
-        assert_eq!(
-            super::parse_date_token("tomorrow", today),
-            Some(format!(
-                "{:04}-{:02}-{:02}",
-                tomorrow.year, tomorrow.month, tomorrow.day
-            ))
-        );
-        assert_eq!(
-            super::parse_date_token("mon", today),
-            Some(format!(
-                "{:04}-{:02}-{:02}",
-                monday.year, monday.month, monday.day
-            ))
-        );
-        assert_eq!(
-            super::parse_date_token("06-01", today),
-            Some(format!("{:04}-06-01", today.year))
-        );
+        assert!(super::date_filter_matches(
+            Some("2026-09-01"),
+            "2026-09-01..2026-09-30"
+        ));
+        assert!(super::date_filter_matches(
+            Some("2026-09-30"),
+            "2026-09-01..2026-09-30"
+        ));
+        assert!(!super::date_filter_matches(
+            Some("2026-10-01"),
+            "2026-09-01..2026-09-30"
+        ));
+
+        assert!(super::date_filter_matches(Some("2030-01-01"), "2026-09-01.."));
+        assert!(super::date_filter_matches(Some("2020-01-01"), "..2026-09-01"));
+
+        // A task with no date cannot satisfy a date filter, but a blank query is
+        // not a filter at all.
+        assert!(!super::date_filter_matches(None, "2026-09-15"));
+        assert!(super::date_filter_matches(None, "   "));
+        assert!(super::date_filter_matches(Some("2026-09-15"), ""));
+
+        // An unparseable query matches nothing rather than everything.
+        assert!(!super::date_filter_matches(Some("2026-09-15"), "someday"));
+        assert!(!super::date_filter_matches(Some("2026-09-15"), "2026-02-31"));
+    }
+
+    #[test]
+    fn date_filters_resolve_keywords_against_the_local_date() {
+        let today = crate::domain::date::today();
+
+        assert!(super::date_filter_matches(Some(&today.iso()), "today"));
+        assert!(!super::date_filter_matches(
+            Some(&today.add_days(1).iso()),
+            "today"
+        ));
+        assert!(super::date_filter_matches(
+            Some(&today.add_days(1).iso()),
+            "tomorrow"
+        ));
+        assert!(super::date_filter_matches(
+            Some(&today.iso()),
+            &format!("{:02}-{:02}", today.month, today.day)
+        ));
     }
 
     #[test]
@@ -3024,18 +3258,39 @@ mod tests {
 
     #[test]
     fn due_date_range_for_query_resolves_keywords() {
-        use super::current_date_parts;
         let mut state = TaskFilterEditorState::from_dataset(&TaskDataset::default());
         if let Some(due) = state.fields.iter_mut().find(|f| f.spec.key == "due") {
             due.query = "today..2026-12-31".to_string();
         }
-        let today = current_date_parts();
-        let expected_today = format!("{:04}-{:02}-{:02}", today.year, today.month, today.day);
         let (after, before) = state.due_date_range_for_query();
-        // "today" is resolved to the current date and pushed server-side
-        assert_eq!(after.as_deref(), Some(expected_today.as_str()));
-        // explicit end date IS pushed
+
+        // "today" resolves against the *local* date before being pushed to the
+        // API. Resolving it in UTC fetched the wrong day's tasks all evening.
+        assert_eq!(
+            after.as_deref(),
+            Some(crate::domain::date::today().iso().as_str())
+        );
         assert_eq!(before.as_deref(), Some("2026-12-31"));
+    }
+
+    #[test]
+    fn due_date_range_for_query_bounds_an_exact_date_on_both_sides() {
+        let mut state = TaskFilterEditorState::from_dataset(&TaskDataset::default());
+        if let Some(due) = state.fields.iter_mut().find(|f| f.spec.key == "due") {
+            due.query = "2026-03-04".to_string();
+        }
+        let (after, before) = state.due_date_range_for_query();
+        assert_eq!(after.as_deref(), Some("2026-03-04"));
+        assert_eq!(before.as_deref(), Some("2026-03-04"));
+    }
+
+    #[test]
+    fn due_date_range_for_query_pushes_nothing_for_an_unparseable_query() {
+        let mut state = TaskFilterEditorState::from_dataset(&TaskDataset::default());
+        if let Some(due) = state.fields.iter_mut().find(|f| f.spec.key == "due") {
+            due.query = "someday".to_string();
+        }
+        assert_eq!(state.due_date_range_for_query(), (None, None));
     }
 
     fn sel_task(gid: &str, name: &str, completed: bool) -> TaskDto {

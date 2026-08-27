@@ -19,7 +19,7 @@
 ┃                        ┃                                                                    ┃                        ┃
 ┃                        ┃Search                              App                             ┃                        ┃
 ┃                        ┃/         start                     r         refresh               ┃                        ┃
-┃                        ┃^f        fuzzy                     q ^c      quit                  ┃                        ┃
+┃                        ┃^z        fuzzy                     q ^c      quit                  ┃                        ┃
 ┃                        ┃^s        contains                  ?         close this help       ┃                        ┃
 ┃                        ┃^r        regex                                                     ┃                        ┃
 ┃                        ┃                                                                    ┃                        ┃

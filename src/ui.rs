@@ -7,12 +7,14 @@
 //!   above them constructs a raw color.
 //! - [`layout`] and [`chrome`] own the frame: where each region goes, and the
 //!   header bar, hint bar, status bar, and pane frames that surround content.
-//! - [`project_list`], [`task_table`], [`filter_panel`], [`hints`], and
-//!   [`help_overlay`] render content into a region they are handed.
+//! - [`project_list`], [`task_table`], [`filter_panel`], [`hints`],
+//!   [`help_overlay`], and [`calendar`] render content into a region they are
+//!   handed. The last two are centered modals drawn over the panes.
 //!
 //! [`runtime`] runs the event loop and is the only module that talks to the
 //! terminal backend.
 
+pub mod calendar;
 pub mod chrome;
 pub mod date;
 pub mod filter_panel;

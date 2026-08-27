@@ -11,6 +11,7 @@ use std::{
     thread,
 };
 
+pub mod calendar;
 pub mod project_list;
 pub mod task;
 
@@ -249,6 +250,17 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         }
     }
 
+    /// Enters the date picker. The picker owns the whole date edit, so the
+    /// filter panel's own text-edit flag stays off.
+    fn set_calendar_mode(&mut self) {
+        self.prepare_mode_switch();
+        self.mode = Mode::Calendar;
+        self.tasks.set_visible(true);
+        if !self.tasks.filter_panel_visible() {
+            self.tasks.toggle_filter_panel();
+        }
+    }
+
     fn set_task_mode(&mut self) {
         if self.projects.search_active() {
             self.projects.end_search();
@@ -364,6 +376,49 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         Ok(false)
     }
 
+    /// Move the caret in whichever filter editor is active.
+    ///
+    /// A date field being picked keeps its caret in the calendar, since that is
+    /// what decides which end of a range the navigation keys rewrite; every other
+    /// field keeps its own.
+    fn move_filter_caret(&mut self, delta: i64) {
+        if self.tasks.filter_calendar_open() {
+            self.tasks.filter_calendar_move_caret(delta);
+        } else {
+            self.tasks.filter_move_caret(delta);
+        }
+    }
+
+    /// Handle typed characters while the date picker is open.
+    ///
+    /// Typed text goes into the filter field the panel is showing, not into a
+    /// buffer hidden in the overlay, and the table refilters as it lands. Only
+    /// keys the keymap did not claim reach here, so the navigation letters stay
+    /// navigation.
+    fn handle_calendar_input(&mut self, event: crossterm::event::KeyEvent) -> Result<bool> {
+        if !self.tasks.filter_calendar_open() {
+            return Ok(false);
+        }
+
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        match event.code {
+            KeyCode::Backspace => {
+                self.tasks.filter_calendar_pop_char();
+                Ok(true)
+            }
+            KeyCode::Char(c)
+                if !event
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.tasks.filter_calendar_push_char(c);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     fn handle_project_search_input(&mut self, event: crossterm::event::KeyEvent) -> Result<bool> {
         use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -417,17 +472,79 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
 
         match action {
             Action::BeginFilterEdit => {
-                self.tasks.filter_edit_begin();
-                self.set_filter_edit_mode();
+                // A date field is edited on the calendar rather than as raw
+                // text, so it gets its own mode instead of the text buffer.
+                if self.tasks.filter_calendar_begin() {
+                    self.set_calendar_mode();
+                } else {
+                    self.tasks.filter_edit_begin();
+                    self.set_filter_edit_mode();
+                }
+                return Ok(None);
+            }
+            Action::CalendarCommit => {
+                self.tasks.filter_calendar_commit();
+                self.set_filter_mode();
+                self.ensure_task_data();
+                return Ok(None);
+            }
+            Action::CalendarClose => {
+                self.tasks.filter_calendar_close();
+                self.set_filter_mode();
+                self.ensure_task_data();
+                return Ok(None);
+            }
+            Action::FilterCaretLeft => {
+                self.move_filter_caret(-1);
+                return Ok(None);
+            }
+            Action::FilterCaretRight => {
+                self.move_filter_caret(1);
+                return Ok(None);
+            }
+            Action::CalendarJumpToStart => {
+                self.tasks.filter_calendar_jump_to_start();
+                return Ok(None);
+            }
+            Action::CalendarJumpToEnd => {
+                self.tasks.filter_calendar_jump_to_end();
+                return Ok(None);
+            }
+            Action::CalendarClear => {
+                self.tasks.filter_calendar_clear();
+                self.set_filter_mode();
+                self.ensure_task_data();
+                return Ok(None);
+            }
+            Action::CalendarPrevDay => {
+                self.tasks.filter_calendar_move_days(-1);
+                return Ok(None);
+            }
+            Action::CalendarNextDay => {
+                self.tasks.filter_calendar_move_days(1);
+                return Ok(None);
+            }
+            Action::CalendarPrevMonth => {
+                self.tasks.filter_calendar_move_months(-1);
+                return Ok(None);
+            }
+            Action::CalendarNextMonth => {
+                self.tasks.filter_calendar_move_months(1);
+                return Ok(None);
+            }
+            Action::CalendarToday => {
+                self.tasks.filter_calendar_today();
                 return Ok(None);
             }
             Action::FilterDoneEditing => {
+                self.tasks.filter_calendar_close();
                 self.tasks.filter_edit_done();
                 self.set_filter_mode();
                 self.ensure_task_data();
                 return Ok(None);
             }
             Action::FilterCancelEditing => {
+                self.tasks.filter_calendar_close();
                 self.tasks.filter_edit_done();
                 self.tasks.toggle_filter_panel();
                 self.set_task_mode();
@@ -601,6 +718,10 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 return self.handle_action(&action, page_size);
             }
             debug_log("no action for binding");
+        }
+
+        if self.handle_calendar_input(event)? {
+            return Ok(None);
         }
 
         if self.tasks.filter_panel_visible() {

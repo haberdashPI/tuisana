@@ -236,6 +236,7 @@ pub enum Mode {
     ProjectSearch,
     Filter,
     FilterEdit,
+    Calendar,
     Task,
 }
 
@@ -251,7 +252,7 @@ impl Mode {
     }
 
     pub fn allows_any_fallback(&self) -> bool {
-        !matches!(self, Self::ProjectSearch | Self::FilterEdit)
+        !matches!(self, Self::ProjectSearch | Self::FilterEdit | Self::Calendar)
     }
 
     pub fn label(&self) -> &'static str {
@@ -261,6 +262,7 @@ impl Mode {
             Self::ProjectSearch => "project-search",
             Self::Filter => "filter",
             Self::FilterEdit => "filter-edit",
+            Self::Calendar => "calendar",
             Self::Task => "task",
         }
     }
@@ -424,13 +426,13 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("f", Mode::Filter, "toggle_task_filters"),
         Bind::with_mode("s", Mode::Filter, "cycle_filter_string_mode"),
         Bind::with_mode("ctrl-l", Mode::Filter, "clear_search"),
-        Bind::with_mode("ctrl-f", Mode::Filter, "search_fuzzy"),
+        Bind::with_mode("ctrl-z", Mode::Filter, "search_fuzzy"),
         Bind::with_mode("ctrl-s", Mode::Filter, "search_substring"),
         Bind::with_mode("ctrl-r", Mode::Filter, "search_regex"),
         Bind::with_mode("enter", Mode::FilterEdit, "filter_done_editing"),
         Bind::with_mode("esc", Mode::FilterEdit, "filter_cancel_editing"),
         Bind::with_mode("ctrl-l", Mode::FilterEdit, "clear_search"),
-        Bind::with_mode("ctrl-f", Mode::FilterEdit, "search_fuzzy"),
+        Bind::with_mode("ctrl-z", Mode::FilterEdit, "search_fuzzy"),
         Bind::with_mode("ctrl-s", Mode::FilterEdit, "search_substring"),
         Bind::with_mode("ctrl-r", Mode::FilterEdit, "search_regex"),
         Bind::with_mode("h", Mode::FilterEdit, "filter_move_label_left"),
@@ -439,12 +441,39 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("k", Mode::FilterEdit, "filter_cycle_label_up"),
         Bind::with_mode("a", Mode::FilterEdit, "filter_add_label"),
         Bind::with_mode("d", Mode::FilterEdit, "filter_delete_label"),
+        // Text fields get the same caret motion the date picker has. `search_fuzzy`
+        // moved to ctrl-z to free ctrl-f, so the motion keys mean the same thing
+        // in every mode that edits text.
+        Bind::with_mode("left", Mode::FilterEdit, "filter_caret_left"),
+        Bind::with_mode("right", Mode::FilterEdit, "filter_caret_right"),
+        Bind::with_mode("ctrl-b", Mode::FilterEdit, "filter_caret_left"),
+        Bind::with_mode("ctrl-f", Mode::FilterEdit, "filter_caret_right"),
+        Bind::with_mode("h", Mode::Calendar, "calendar_prev_day"),
+        Bind::with_mode("l", Mode::Calendar, "calendar_next_day"),
+        Bind::with_mode("k", Mode::Calendar, "calendar_prev_month"),
+        Bind::with_mode("j", Mode::Calendar, "calendar_next_month"),
+        Bind::with_mode("t", Mode::Calendar, "calendar_today"),
+        Bind::with_mode("d", Mode::Calendar, "calendar_clear"),
+        Bind::with_mode("enter", Mode::Calendar, "calendar_commit"),
+        Bind::with_mode("esc", Mode::Calendar, "calendar_close"),
+        // Readline's motion keys, so editing the date text feels like editing
+        // text: ctrl-b/ctrl-f step a character, ctrl-a/ctrl-e go to the ends.
+        Bind::with_mode("left", Mode::Calendar, "filter_caret_left"),
+        Bind::with_mode("right", Mode::Calendar, "filter_caret_right"),
+        Bind::with_mode("ctrl-b", Mode::Calendar, "filter_caret_left"),
+        Bind::with_mode("ctrl-f", Mode::Calendar, "filter_caret_right"),
+        Bind::with_mode("ctrl-a", Mode::Calendar, "calendar_jump_to_start"),
+        Bind::with_mode("ctrl-e", Mode::Calendar, "calendar_jump_to_end"),
+        // `?` is never part of a date, so it stays a help key here rather than
+        // typing. Without it the calendar's own help would be unreachable,
+        // because calendar mode does not fall back to global bindings.
+        Bind::with_mode("?", Mode::Calendar, "toggle_help_details"),
         Bind::with_mode("[", Mode::Task, "move_section_up"),
         Bind::with_mode("]", Mode::Task, "move_section_down"),
         Bind::with_mode("{", Mode::Task, "move_project_up"),
         Bind::with_mode("}", Mode::Task, "move_project_down"),
         Bind::with_mode("o", Mode::Project, "toggle_only_selected"),
-        Bind::with_mode("ctrl-f", Mode::Project, "search_fuzzy"),
+        Bind::with_mode("ctrl-z", Mode::Project, "search_fuzzy"),
         Bind::with_mode("ctrl-s", Mode::Project, "search_substring"),
         Bind::with_mode("ctrl-r", Mode::Project, "search_regex"),
         Bind::with_mode("c", Mode::Task, "toggle_completed_filter"),
@@ -734,6 +763,44 @@ mod tests {
         );
     }
 
+    /// `ctrl-b`/`ctrl-f` have to mean the same thing in every mode that edits
+    /// text, which is why `search_fuzzy` gave up `ctrl-f`.
+    #[test]
+    fn the_caret_motion_keys_are_the_same_in_every_text_editing_mode() {
+        let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
+            .expect("default bindings parse");
+
+        for mode in [Mode::FilterEdit, Mode::Calendar] {
+            assert_eq!(
+                keymap.action_for(&KeyBinding::Ctrl('b'), mode),
+                Some(&Action::FilterCaretLeft),
+                "ctrl-b moves the caret left in {mode:?}"
+            );
+            assert_eq!(
+                keymap.action_for(&KeyBinding::Ctrl('f'), mode),
+                Some(&Action::FilterCaretRight),
+                "ctrl-f moves the caret right in {mode:?}"
+            );
+            assert_eq!(
+                keymap.action_for(&KeyBinding::Left, mode),
+                Some(&Action::FilterCaretLeft)
+            );
+            assert_eq!(
+                keymap.action_for(&KeyBinding::Right, mode),
+                Some(&Action::FilterCaretRight)
+            );
+        }
+
+        // Fuzzy matching keeps a key everywhere it had one, just a different one.
+        for mode in [Mode::Filter, Mode::FilterEdit, Mode::Project] {
+            assert_eq!(
+                keymap.action_for(&KeyBinding::Ctrl('z'), mode),
+                Some(&Action::SearchFuzzy),
+                "ctrl-z switches to fuzzy in {mode:?}"
+            );
+        }
+    }
+
     #[test]
     fn default_bindings_include_filter_controls() {
         let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
@@ -756,8 +823,9 @@ mod tests {
             Some(&Action::CycleFilterStringMode)
         );
         assert_eq!(
-            keymap.action_for(&KeyBinding::Ctrl('f'), Mode::Filter),
-            Some(&Action::SearchFuzzy)
+            keymap.action_for(&KeyBinding::Ctrl('z'), Mode::Filter),
+            Some(&Action::SearchFuzzy),
+            "fuzzy moved off ctrl-f so the motion keys could have it"
         );
         assert_eq!(
             keymap.action_for(&KeyBinding::Ctrl('s'), Mode::Filter),
@@ -776,7 +844,7 @@ mod tests {
             Some(&Action::FilterCancelEditing)
         );
         assert_eq!(
-            keymap.action_for(&KeyBinding::Ctrl('f'), Mode::FilterEdit),
+            keymap.action_for(&KeyBinding::Ctrl('z'), Mode::FilterEdit),
             Some(&Action::SearchFuzzy)
         );
         assert_eq!(

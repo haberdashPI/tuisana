@@ -22,6 +22,7 @@ use crate::{
     ui::{
         chrome::pane_block,
         hints::{all_key_texts, key_column_spans, Hint},
+        layout,
         text::{pad_cell, visible_width},
         theme::Theme,
     },
@@ -54,6 +55,7 @@ pub fn groups_for(mode: Mode) -> Vec<HelpGroup> {
     let mut groups = match mode {
         Mode::Task => task_groups(),
         Mode::Filter | Mode::FilterEdit => filter_groups(),
+        Mode::Calendar => calendar_groups(),
         Mode::Project | Mode::ProjectSearch | Mode::Any => project_groups(),
     };
     groups.extend(shared_groups());
@@ -169,12 +171,70 @@ fn filter_groups() -> Vec<HelpGroup> {
             ],
         ),
         HelpGroup::new(
+            "Text values",
+            vec![
+                Hint::new(
+                    &[Action::FilterCaretLeft, Action::FilterCaretRight],
+                    "move the caret",
+                ),
+                Hint::literal("bksp", "delete at the caret"),
+            ],
+        ),
+        HelpGroup::new(
             "Match modes",
             vec![
                 Hint::new(&[Action::SearchFuzzy], "fuzzy"),
                 Hint::new(&[Action::SearchSubstring], "contains"),
                 Hint::new(&[Action::SearchRegex], "regex"),
-                Hint::literal("date", "YYYY-MM-DD, MM-DD, today, mon"),
+                Hint::literal("date", "picked on a calendar"),
+            ],
+        ),
+        HelpGroup::new(
+            "Date syntax",
+            vec![
+                Hint::literal("exact", "YYYY-MM-DD or MM-DD"),
+                Hint::literal("keyword", "today, tomorrow, mon"),
+                Hint::literal("range", "start..end"),
+            ],
+        ),
+    ]
+}
+
+fn calendar_groups() -> Vec<HelpGroup> {
+    vec![
+        HelpGroup::new(
+            "Move the date",
+            vec![
+                Hint::new(&[Action::CalendarPrevDay, Action::CalendarNextDay], "day"),
+                Hint::new(
+                    &[Action::CalendarPrevMonth, Action::CalendarNextMonth],
+                    "month",
+                ),
+                Hint::new(&[Action::CalendarToday], "jump to today"),
+                Hint::new(&[Action::CalendarCommit], "pick and close"),
+                Hint::new(&[Action::CalendarClear], "clear the field"),
+                Hint::new(&[Action::CalendarClose], "close"),
+            ],
+        ),
+        HelpGroup::new(
+            "Edit the text",
+            vec![
+                Hint::literal("0-9 - ..", "typed into the filter field"),
+                Hint::new(
+                    &[Action::FilterCaretLeft, Action::FilterCaretRight],
+                    "move the caret",
+                ),
+                Hint::literal("bksp", "delete"),
+                Hint::new(&[Action::CalendarJumpToStart], "go to the start date"),
+                Hint::new(&[Action::CalendarJumpToEnd], "go to the end date"),
+            ],
+        ),
+        HelpGroup::new(
+            "Date syntax",
+            vec![
+                Hint::literal("exact", "YYYY-MM-DD or MM-DD"),
+                Hint::literal("range", "start..end"),
+                Hint::literal("open range", "start.. or ..end"),
             ],
         ),
     ]
@@ -254,7 +314,7 @@ pub fn render(
     let inner_width = (content_width * 2 + COLUMN_GAP).min(MAX_WIDTH as usize - 2);
     let lines = merge_columns(columns, content_width, inner_width, theme);
 
-    let box_area = centered(
+    let box_area = layout::centered(
         area,
         (inner_width as u16).saturating_add(2),
         (lines.len() as u16).saturating_add(2),
@@ -406,17 +466,6 @@ fn merge_columns(
     )));
 
     lines
-}
-
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
-    let width = width.min(area.width);
-    let height = height.min(area.height);
-    Rect {
-        x: area.x + (area.width - width) / 2,
-        y: area.y + (area.height - height) / 2,
-        width,
-        height,
-    }
 }
 
 #[cfg(test)]

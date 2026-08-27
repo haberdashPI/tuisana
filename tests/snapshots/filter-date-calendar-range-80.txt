@@ -1,0 +1,30 @@
+ TUISANA  ▸ 1 project ▸ 1 task
+┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1 active · editing ┓
+┃    Title     fuzzy     —                                                     ┃
+┃    Assignee  contains  —                                                     ┃
+┃▍ ● Due       date      2026-08-10..2026-08-20                                ┃
+┃    Start     date      —                                                     ┃
+┃    State     labels    —                                                     ┃
+┃    Projects  contains  —                                                     ┃
+┃    Priority  labels    —                                                     ┃
+┃                           ┏ Due ━━━━━━━━━━━━ to ┓                            ┃
+┃                           ┃      Aug 2026       ┃                            ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━┃Mo Tu We Th Fr Sa Su ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌ Tasks ────────────────────┃                1  2 ┃asks · row 1 · columns 0/27 ┐
+│   Task                    ┃ 3  4  5  6  7  8  9 ┃ │    Due▲ │ Start │ St │ Pr│
+│                           ┃10 11 12 13 14 15 16 ┃                            │
+│▌Northwind BTX 4412 ───────┃17 18 19 20 21 22 23 ┃────────────────────────────│
+│                           ┃24 25 26 27 28 29 30 ┃                            │
+│   Study Kit Design ·······┃31                   ┃····························│
+│▍  Review shipment requirem┗━━━━━━━━━━━━━━━━━━━━━┛ │ !Aug 19 │ Aug 4 │ ○  │ Co│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+h/l day   k/j month   t today   ^a/^e from/to   left/right caret   ⏎ pick
+ CALENDAR                                                               1 filter

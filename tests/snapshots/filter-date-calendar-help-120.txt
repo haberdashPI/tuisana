@@ -1,0 +1,30 @@
+ TUISANA  ▸ 1 project ▸ 4 tasks
+┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ editing ┓
+┃    Title     fuzzy     —                                                                                             ┃
+┃    Assignee  contains  —                                                                                             ┃
+┃▍   Due       date                                                                                                    ┃
+┃    Start     dat┏ Help · calendar mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                 ┃
+┃    State     lab┃Move the date                              Edit the text                          ┃                 ┃
+┃    Projects  con┃h/l         day                            0-9 - ..    typed into the filter field┃                 ┃
+┃    Priority  lab┃k/j         month                          left/right  move the caret             ┃                 ┃
+┃                 ┃t           jump to today                  bksp        delete                     ┃                 ┃
+┃                 ┃⏎           pick and close                 ^a          go to the start date       ┃                 ┃
+┗━━━━━━━━━━━━━━━━━┃d           clear the field                ^e          go to the end date         ┃━━━━━━━━━━━━━━━━━┛
+┌ Tasks ──────────┃esc         close                                                                 ┃ 4 tasks · row 1 ┐
+│   Task          ┃                                           Date syntax                            ┃       │ Priority│
+│                 ┃                                           exact       YYYY-MM-DD or MM-DD        ┃                 │
+│▌Northwind PGI 79┃                                           range       start..end                 ┃─────────────────│
+│                 ┃                                           open range  start.. or ..end           ┃                 │
+│   Study Kit Desi┃                                                                                  ┃·················│
+│▍  Review shipmen┃                                           App                                    ┃I 7997 │ High    │
+│   Ship release c┃                                           ?           close this help            ┃I 7997 │ High    │
+│   Confirm carrie┃                                                                                  ┃I 7997 │ —       │
+│                 ┃                                                                        ? to close┃                 │
+│   Shipment ·····┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛·················│
+│   Close out packaging vendor contract           │ Alex Chen    │  Nov 14 │ Aug 4 │ ○  │ Northwind BTX 4412 │ Low     │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+h/l day   k/j month   t today   left/right caret   ⏎ pick   d clear   esc close
+ CALENDAR

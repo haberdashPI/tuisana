@@ -66,6 +66,8 @@ pub struct HintContext {
     pub can_scroll: bool,
     /// The selected filter field holds label values.
     pub on_label_filter: bool,
+    /// The date being picked is a range, so it has two ends to move between.
+    pub on_date_range: bool,
 }
 
 /// Hints shown on the right of the bar in every mode.
@@ -94,6 +96,32 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
             Hint::new(&[Action::ToggleHelpDetails], "help"),
         ],
         Mode::FilterEdit => filter_edit_hints(context),
+        Mode::Calendar => {
+            let mut hints = vec![
+                Hint::new(&[Action::CalendarPrevDay, Action::CalendarNextDay], "day"),
+                Hint::new(
+                    &[Action::CalendarPrevMonth, Action::CalendarNextMonth],
+                    "month",
+                ),
+                Hint::new(&[Action::CalendarToday], "today"),
+            ];
+            // The range keys only mean anything once there are two ends, so they
+            // appear only when the query has a `..` in it.
+            if context.on_date_range {
+                hints.push(Hint::new(
+                    &[Action::CalendarJumpToStart, Action::CalendarJumpToEnd],
+                    "from/to",
+                ));
+            }
+            hints.push(Hint::new(
+                &[Action::FilterCaretLeft, Action::FilterCaretRight],
+                "caret",
+            ));
+            hints.push(Hint::new(&[Action::CalendarCommit], "pick"));
+            hints.push(Hint::new(&[Action::CalendarClear], "clear"));
+            hints.push(Hint::new(&[Action::CalendarClose], "close"));
+            hints
+        }
         Mode::Task => task_hints(context),
     }
 }
@@ -157,6 +185,10 @@ fn filter_edit_hints(context: HintContext) -> Vec<Hint> {
         hints.push(Hint::new(&[Action::FilterAddLabel], "add"));
         hints.push(Hint::new(&[Action::FilterDeleteLabel], "remove"));
     } else {
+        hints.push(Hint::new(
+            &[Action::FilterCaretLeft, Action::FilterCaretRight],
+            "caret",
+        ));
         hints.push(Hint::literal("bksp", "delete"));
         hints.push(Hint::new(&[Action::ClearSearch], "clear"));
     }

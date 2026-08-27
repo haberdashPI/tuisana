@@ -43,11 +43,39 @@ impl CustomFieldDefinition {
     }
 }
 
+/// Groups custom field definitions by name, keeping every id that carries it.
+///
+/// The same custom field usually exists separately in each project, with its own
+/// id, so anything keyed by id gets one duplicate per project — five projects
+/// with a "Tag" field produced five "Tag" table columns and five "Tag" filter
+/// rows. Both the table and the filter panel group through here.
+///
+/// Names keep their first-appearance order, so a sorted input stays sorted and
+/// the table's columns line up with the filter panel's rows.
+pub fn group_custom_fields_by_name(
+    definitions: &[CustomFieldDefinition],
+) -> Vec<(String, Vec<String>)> {
+    let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
+    for definition in definitions {
+        match grouped
+            .iter_mut()
+            .find(|(name, _)| *name == definition.name)
+        {
+            Some((_, gids)) => gids.push(definition.gid.clone()),
+            None => grouped.push((definition.name.clone(), vec![definition.gid.clone()])),
+        }
+    }
+    grouped
+}
+
 /// One task table column backed by a custom field.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomFieldColumn {
-    /// The custom field definition that labels this column.
-    pub definition: CustomFieldDefinition,
+    /// The field name this column is labelled with.
+    pub name: String,
+    /// Every custom-field id this column gathers values from. A field with one
+    /// name usually has a separate id in each project.
+    pub gids: Vec<String>,
     /// One display value per task row.
     pub values: Vec<String>,
 }
@@ -517,20 +545,21 @@ impl TaskTableModel {
         merged.sort_by(|left, right| settings.sort.compare(left, right));
         merged = apply_task_filter(merged, &settings.filter);
 
-        let custom_field_columns = custom_field_definitions
+        let custom_field_columns = group_custom_fields_by_name(&custom_field_definitions)
             .into_iter()
-            .map(|definition| {
+            .map(|(name, gids)| {
                 let values = merged
                     .iter()
                     .map(|record| {
-                        record
-                            .custom_fields
-                            .get(&definition.gid)
-                            .map(|values| join_non_empty(values))
-                            .unwrap_or_default()
+                        let values = gids
+                            .iter()
+                            .filter_map(|gid| record.custom_fields.get(gid))
+                            .flat_map(|values| values.iter().cloned())
+                            .collect::<Vec<_>>();
+                        join_non_empty(&values)
                     })
                     .collect();
-                CustomFieldColumn { definition, values }
+                CustomFieldColumn { name, gids, values }
             })
             .collect::<Vec<_>>();
 
@@ -542,7 +571,7 @@ impl TaskTableModel {
                 .chain(
                     custom_field_columns
                         .iter()
-                        .map(|column| column.definition.name.clone()),
+                        .map(|column| column.name.clone()),
                 )
                 .collect(),
             custom_field_columns,
@@ -1109,6 +1138,33 @@ mod tests {
         TaskFilter, TaskRecord, TaskRowKind, TaskSort, TaskSortField, TaskSortRule,
         TaskTableModel, TaskTableSettings,
     };
+
+    #[test]
+    fn groups_custom_fields_by_name_keeping_every_id() {
+        use super::group_custom_fields_by_name;
+
+        let definitions = vec![
+            CustomFieldDefinition::new("cf-a", "Tag"),
+            CustomFieldDefinition::new("cf-b", "Tag"),
+            CustomFieldDefinition::new("cf-c", "Priority"),
+            CustomFieldDefinition::new("cf-d", "Tag"),
+        ];
+
+        assert_eq!(
+            group_custom_fields_by_name(&definitions),
+            vec![
+                (
+                    "Tag".to_string(),
+                    vec!["cf-a".to_string(), "cf-b".to_string(), "cf-d".to_string()]
+                ),
+                ("Priority".to_string(), vec!["cf-c".to_string()]),
+            ],
+            "one entry per name, in first-appearance order, and ids not adjacent \
+             in the input are still gathered"
+        );
+
+        assert!(group_custom_fields_by_name(&[]).is_empty());
+    }
 
     #[test]
     fn merges_duplicate_tasks_and_combines_sources() {

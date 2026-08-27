@@ -361,6 +361,9 @@ impl Theme {
             Mode::ProjectSearch => Color::Yellow,
             Mode::Filter => Color::Magenta,
             Mode::FilterEdit => Color::Yellow,
+            // Editing, like the other edit modes: the overlay title says which
+            // field, so the color only needs to signal "you are typing".
+            Mode::Calendar => Color::Yellow,
             Mode::Task => Color::Green,
             Mode::Any => return None,
         })

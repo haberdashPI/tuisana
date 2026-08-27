@@ -125,6 +125,7 @@ pub fn render_header(
     frame: &mut Frame<'_>,
     area: Rect,
     theme: &Theme,
+    leading: Option<Span<'static>>,
     crumbs: &[String],
     right: Vec<Span<'static>>,
 ) {
@@ -136,6 +137,12 @@ pub fn render_header(
         Span::styled(format!(" {BRAND} "), theme.brand),
         Span::raw(" "),
     ];
+
+    // Anything urgent goes here, immediately after the brand, where it is the
+    // first thing on the line rather than the last.
+    if let Some(leading) = leading {
+        spans.push(leading);
+    }
 
     for (index, crumb) in crumbs.iter().enumerate() {
         if index > 0 {

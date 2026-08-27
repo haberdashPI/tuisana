@@ -53,6 +53,10 @@ fn key(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
 }
 
+fn ctrl(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+}
+
 fn enter() -> KeyEvent {
     KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
 }
@@ -375,6 +379,75 @@ fn filter_edit_mode() {
     });
 }
 
+/// The `Due` filter is the third row, so two `j`s land on it.
+fn open_due_calendar() -> Vec<KeyEvent> {
+    vec![key('f'), key('j'), key('j'), enter()]
+}
+
+#[test]
+fn filter_date_calendar() {
+    assert_snapshot("filter-date-calendar", || {
+        vec![enter_task_mode(), open_due_calendar()]
+    });
+}
+
+#[test]
+fn filter_date_calendar_after_flipping_two_months_forward() {
+    assert_snapshot("filter-date-calendar-month", || {
+        vec![enter_task_mode(), open_due_calendar(), vec![key('j'), key('j')]]
+    });
+}
+
+#[test]
+fn filter_date_calendar_with_unusable_text() {
+    // `a`, `b`, and `c` are unbound in calendar mode, so they type rather than
+    // navigating. The overlay has to say the text is unusable, because the old
+    // behavior was to silently filter the table to nothing.
+    assert_snapshot("filter-date-calendar-invalid", || {
+        vec![
+            enter_task_mode(),
+            open_due_calendar(),
+            vec![key('a'), key('b'), key('c')],
+        ]
+    });
+}
+
+#[test]
+fn filter_date_calendar_with_a_range() {
+    // Digits, `-`, and `.` are unbound in calendar mode, so they type into the
+    // filter field. The grid shades the span between the two ends.
+    assert_snapshot("filter-date-calendar-range", || {
+        vec![
+            enter_task_mode(),
+            open_due_calendar(),
+            "2026-08-10..2026-08-20".chars().map(key).collect(),
+        ]
+    });
+}
+
+#[test]
+fn filter_date_calendar_editing_the_start_of_a_range() {
+    // `ctrl-a` moves the caret to the start end, so the navigation keys rewrite
+    // that end and the overlay says which one it is editing.
+    assert_snapshot("filter-date-calendar-range-start", || {
+        vec![
+            enter_task_mode(),
+            open_due_calendar(),
+            "2026-08-10..2026-08-20".chars().map(key).collect(),
+            vec![ctrl('a'), key('h')],
+        ]
+    });
+}
+
+#[test]
+fn filter_date_calendar_help() {
+    // Calendar mode does not fall back to global bindings, so `?` has to be
+    // bound there for the picker's own keys to be discoverable.
+    assert_snapshot("filter-date-calendar-help", || {
+        vec![enter_task_mode(), open_due_calendar(), vec![key('?')]]
+    });
+}
+
 #[test]
 fn task_mode_in_the_monochrome_ascii_theme() {
     assert_snapshot_with(mono_config(), vec![120], "task-mono", || {
@@ -401,8 +474,25 @@ fn the_monochrome_theme_emits_no_color() {
     )
     .expect("session runs");
     drain_task_data(&mut app);
+    // The calendar overlay is checked in the same pass: it draws day numbers, a
+    // highlight, and a shaded range, all of which are easy to reach for color or
+    // a box-drawing glyph without noticing.
+    let mut keys = open_due_calendar();
+    keys.extend("2026-08-10..2026-08-20".chars().map(key));
+    run_session(
+        &mut app,
+        &mut ScriptedSource { keys },
+        &mut terminal,
+    )
+    .expect("session opens the calendar");
+    drain_task_data(&mut app);
     run_session(&mut app, &mut ScriptedSource { keys: Vec::new() }, &mut terminal)
         .expect("session redraws");
+
+    assert!(
+        app.tasks.filter_calendar_open(),
+        "the calendar is what this pass is checking"
+    );
 
     let buffer = terminal.backend_mut().buffer().clone();
     for cell in buffer.content.iter() {

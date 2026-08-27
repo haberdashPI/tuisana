@@ -1,0 +1,30 @@
+ TUISANA  ▸ 1 project ▸ 4 tasks
+┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ editing ┓
+┃    Title     fuzzy     —                                                     ┃
+┃    Assignee  contains  —                                                     ┃
+┃▍   Due       date                                                            ┃
+┏ Help · calendar mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Move the date                              Edit the text                      ┃
+┃h/l         day                            0-9 - ..    typed into the filter f┃
+┃k/j         month                          left/right  move the caret         ┃
+┃t           jump to today                  bksp        delete                 ┃
+┃⏎           pick and close                 ^a          go to the start date   ┃
+┃d           clear the field                ^e          go to the end date     ┃
+┃esc         close                                                             ┃
+┃                                           Date syntax                        ┃
+┃                                           exact       YYYY-MM-DD or MM-DD    ┃
+┃                                           range       start..end             ┃
+┃                                           open range  start.. or ..end       ┃
+┃                                                                              ┃
+┃                                           App                                ┃
+┃                                           ?           close this help        ┃
+┃                                                                              ┃
+┃                                                                        ? to c┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+│   Close out packaging vendor contract           │ Alex Chen    │  Nov 14 │ Au│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+h/l day   k/j month   t today   left/right caret   ⏎ pick   d clear   esc close
+ CALENDAR

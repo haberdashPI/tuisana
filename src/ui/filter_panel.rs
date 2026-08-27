@@ -10,7 +10,7 @@
 //! reordering would make the cursor appear to skip around. The match-mode chip
 //! in the second column carries the same information a grouping would.
 
-use ratatui::text::{Line, Span};
+use ratatui::{style::Modifier, text::{Line, Span}};
 
 use crate::{
     app::task::{TaskFilterPanelEntry, TaskState},
@@ -61,6 +61,12 @@ pub struct FilterRow {
     pub value: FilterValue,
     /// Whether the cursor is on this row.
     pub selected: bool,
+    /// Where the edit caret sits in the value, as a char index.
+    ///
+    /// `None` when this row is not being edited. A date field being picked on
+    /// the calendar can have its caret anywhere in the text, because the arrow
+    /// keys move it, so this is a position rather than a flag.
+    pub caret: Option<usize>,
 }
 
 /// Snapshot of the filter panel used by the UI renderer.
@@ -195,19 +201,12 @@ fn value_spans(
     let glyphs = &theme.glyphs;
 
     match &row.value {
-        FilterValue::Text(query) if query.is_empty() && !(row.selected && editing) => {
+        FilterValue::Text(query) if query.is_empty() && row.caret.is_none() => {
             vec![Span::styled(glyphs.empty.to_string(), theme.muted)]
         }
         FilterValue::Text(query) => {
-            let caret = if row.selected && editing {
-                glyphs.edit_cursor
-            } else {
-                ""
-            };
-            vec![Span::styled(
-                truncate_with_ellipsis(&format!("{query}{caret}"), width, glyphs.ellipsis),
-                theme.text,
-            )]
+            let text = truncate_with_ellipsis(query, width, glyphs.ellipsis);
+            caret_spans(&text, row.caret, theme)
         }
         FilterValue::Labels { values, .. } if values.is_empty() => {
             vec![Span::styled(glyphs.empty.to_string(), theme.muted)]
@@ -238,6 +237,43 @@ fn value_spans(
     }
 }
 
+/// Splits a value around the caret so the caret can be drawn as a style.
+///
+/// The caret used to be a glyph spliced into the text, which pushed the
+/// characters after it along and read as a stray space that wandered as the
+/// caret moved. Reversing the character *under* the caret instead costs no
+/// columns, so the text stays put while the caret travels through it. Only at
+/// the very end, where there is no character to reverse, does a cell get added.
+fn caret_spans(text: &str, caret: Option<usize>, theme: &Theme) -> Vec<Span<'static>> {
+    let Some(caret) = caret else {
+        return vec![Span::styled(text.to_string(), theme.text)];
+    };
+
+    let chars = text.chars().collect::<Vec<_>>();
+    let at = caret.min(chars.len());
+    let head = chars[..at].iter().collect::<String>();
+    let under = chars.get(at).copied();
+    let tail = if at < chars.len() {
+        chars[at + 1..].iter().collect::<String>()
+    } else {
+        String::new()
+    };
+
+    let caret_style = theme.text.add_modifier(Modifier::REVERSED);
+    let mut spans = Vec::with_capacity(3);
+    if !head.is_empty() {
+        spans.push(Span::styled(head, theme.text));
+    }
+    spans.push(Span::styled(
+        under.map_or_else(|| " ".to_string(), |ch| ch.to_string()),
+        caret_style,
+    ));
+    if !tail.is_empty() {
+        spans.push(Span::styled(tail, theme.text));
+    }
+    spans
+}
+
 fn filter_row(entry: TaskFilterPanelEntry) -> FilterRow {
     let value = if entry.kind == "labels" {
         FilterValue::Labels {
@@ -253,6 +289,7 @@ fn filter_row(entry: TaskFilterPanelEntry) -> FilterRow {
         kind: kind_chip(&entry.kind).to_string(),
         value,
         selected: entry.selected,
+        caret: entry.caret,
     }
 }
 
@@ -269,6 +306,8 @@ mod tests {
     use super::{
         filter_panel_lines, kind_chip, render_filter_panel, FilterValue, MARKER_WIDTH,
     };
+    use ratatui::style::Modifier;
+
     use crate::{
         app::task::TaskState,
         asana::{
@@ -423,10 +462,94 @@ mod tests {
         let lines = filter_panel_lines(&view, &theme, 60);
 
         assert!(view.editing);
-        assert!(view
-            .counts
+        assert!(view.counts.iter().any(|chip| chip.text == "editing"));
+        assert_eq!(view.rows[0].caret, Some(1), "the caret follows the typing");
+        assert!(
+            reversed(&lines[0]).is_some(),
+            "and is drawn as a reversed cell"
+        );
+    }
+
+    /// The text of the caret cell on a line, if one is drawn.
+    fn reversed(line: &ratatui::text::Line<'_>) -> Option<String> {
+        line.spans
             .iter()
-            .any(|chip| chip.text == "editing"));
-        assert!(lines[0].to_string().contains(theme.glyphs.edit_cursor));
+            .find(|span| span.style.add_modifier.contains(Modifier::REVERSED))
+            .map(|span| span.content.to_string())
+    }
+
+    #[test]
+    fn the_caret_costs_no_width_until_it_reaches_the_end_of_the_text() {
+        let theme = Theme::default();
+        let mut state = panel_state();
+        state.filter_edit_begin();
+        for ch in "shipit".chars() {
+            state.filter_push_char(ch);
+        }
+
+        // At the end there is no character to reverse, so the caret is a cell of
+        // its own.
+        let at_end = render_filter_panel(&state).expect("panel is open");
+        assert_eq!(at_end.rows[0].caret, Some(6));
+        assert_eq!(
+            reversed(&filter_panel_lines(&at_end, &theme, 60)[0]).as_deref(),
+            Some(" ")
+        );
+
+        // Moved back into the text, the caret reverses the character it is on
+        // rather than pushing the rest along. This is what stopped it reading as
+        // a stray space wandering through the value.
+        state.filter_move_caret(-2);
+        let inside = render_filter_panel(&state).expect("panel is open");
+        let line = filter_panel_lines(&inside, &theme, 60)[0].to_string();
+
+        assert_eq!(inside.rows[0].caret, Some(4));
+        assert_eq!(
+            reversed(&filter_panel_lines(&inside, &theme, 60)[0]).as_deref(),
+            Some("i"),
+            "the caret sits on the character it is in front of"
+        );
+        assert!(line.contains("shipit"), "and the value is unbroken");
+    }
+
+    #[test]
+    fn the_caret_stops_at_both_ends_of_a_text_field() {
+        let mut state = panel_state();
+        state.filter_edit_begin();
+        for ch in "ab".chars() {
+            state.filter_push_char(ch);
+        }
+
+        state.filter_move_caret(-99);
+        assert_eq!(
+            render_filter_panel(&state).expect("panel is open").rows[0].caret,
+            Some(0)
+        );
+
+        // Backspace at the start has nothing to delete.
+        state.filter_pop_char();
+        let view = render_filter_panel(&state).expect("panel is open");
+        assert!(matches!(&view.rows[0].value, FilterValue::Text(query) if query == "ab"));
+
+        state.filter_move_caret(99);
+        assert_eq!(
+            render_filter_panel(&state).expect("panel is open").rows[0].caret,
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn typing_inserts_at_the_caret_rather_than_appending() {
+        let mut state = panel_state();
+        state.filter_edit_begin();
+        for ch in "ac".chars() {
+            state.filter_push_char(ch);
+        }
+        state.filter_move_caret(-1);
+        state.filter_push_char('b');
+
+        let view = render_filter_panel(&state).expect("panel is open");
+        assert!(matches!(&view.rows[0].value, FilterValue::Text(query) if query == "abc"));
+        assert_eq!(view.rows[0].caret, Some(2), "and the caret moves with it");
     }
 }

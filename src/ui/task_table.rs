@@ -263,7 +263,7 @@ pub fn render_task_table(
             .filter(|row| row.kind.is_task() && state.is_task_selected(&row.gid))
             .map(|row| row.gid.clone())
             .collect(),
-        counts: counts(state, theme),
+        counts: counts(state),
         message: message(state, rows.is_empty()),
         rows,
     }
@@ -597,13 +597,11 @@ pub fn settings_chips(state: &TaskState) -> Vec<Chip> {
     chips
 }
 
-fn counts(state: &TaskState, theme: &Theme) -> Vec<Chip> {
+fn counts(state: &TaskState) -> Vec<Chip> {
     let mut chips = Vec::new();
 
-    if let TaskStatus::Loading = state.status() {
-        let frame = loading_frame(state, theme).unwrap_or(theme.glyphs.active);
-        chips.push(Chip::toned(format!("{frame} loading"), Tone::Info));
-    }
+    // Loading is reported in the header, at the top left, spinner and word
+    // together. Repeating it here would only split the reader's attention.
     if let TaskStatus::OutOfDate(_) = state.status() {
         chips.push(Chip::toned("stale", Tone::Warn));
     }

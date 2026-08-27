@@ -169,6 +169,30 @@ pub enum Action {
     FilterCycleLabelDown,
     FilterAddLabel,
     FilterDeleteLabel,
+    /// Move the calendar's highlighted day back one day.
+    CalendarPrevDay,
+    /// Move the calendar's highlighted day forward one day.
+    CalendarNextDay,
+    /// Flip the calendar back one month.
+    CalendarPrevMonth,
+    /// Flip the calendar forward one month.
+    CalendarNextMonth,
+    /// Jump the calendar's highlight back to today.
+    CalendarToday,
+    /// Write the picked date into the field and close the calendar.
+    CalendarCommit,
+    /// Close the calendar, keeping the text as edited.
+    CalendarClose,
+    /// Move the edit caret one character left, in any filter field.
+    FilterCaretLeft,
+    /// Move the edit caret one character right, in any filter field.
+    FilterCaretRight,
+    /// Put the caret on a range's start date. Does nothing without a range.
+    CalendarJumpToStart,
+    /// Put the caret on a range's end date. Does nothing without a range.
+    CalendarJumpToEnd,
+    /// Clear the field the calendar is editing, then close it.
+    CalendarClear,
     ToggleTaskSelection,
     SelectAllVisibleTasks,
     InvertTaskSelection,
@@ -239,6 +263,18 @@ impl Action {
             "filter_cycle_label_down" => Ok(Self::FilterCycleLabelDown),
             "filter_add_label" => Ok(Self::FilterAddLabel),
             "filter_delete_label" => Ok(Self::FilterDeleteLabel),
+            "calendar_prev_day" => Ok(Self::CalendarPrevDay),
+            "calendar_next_day" => Ok(Self::CalendarNextDay),
+            "calendar_prev_month" => Ok(Self::CalendarPrevMonth),
+            "calendar_next_month" => Ok(Self::CalendarNextMonth),
+            "calendar_today" => Ok(Self::CalendarToday),
+            "calendar_commit" => Ok(Self::CalendarCommit),
+            "calendar_close" => Ok(Self::CalendarClose),
+            "filter_caret_left" => Ok(Self::FilterCaretLeft),
+            "filter_caret_right" => Ok(Self::FilterCaretRight),
+            "calendar_jump_to_start" => Ok(Self::CalendarJumpToStart),
+            "calendar_jump_to_end" => Ok(Self::CalendarJumpToEnd),
+            "calendar_clear" => Ok(Self::CalendarClear),
             "toggle_task_selection" => Ok(Self::ToggleTaskSelection),
             "select_all_visible_tasks" => Ok(Self::SelectAllVisibleTasks),
             "invert_task_selection" => Ok(Self::InvertTaskSelection),
@@ -370,6 +406,18 @@ impl Display for Action {
             Action::FilterCycleLabelDown => "filter_cycle_label_down",
             Action::FilterAddLabel => "filter_add_label",
             Action::FilterDeleteLabel => "filter_delete_label",
+            Action::CalendarPrevDay => "calendar_prev_day",
+            Action::CalendarNextDay => "calendar_next_day",
+            Action::CalendarPrevMonth => "calendar_prev_month",
+            Action::CalendarNextMonth => "calendar_next_month",
+            Action::CalendarToday => "calendar_today",
+            Action::CalendarCommit => "calendar_commit",
+            Action::CalendarClose => "calendar_close",
+            Action::FilterCaretLeft => "filter_caret_left",
+            Action::FilterCaretRight => "filter_caret_right",
+            Action::CalendarJumpToStart => "calendar_jump_to_start",
+            Action::CalendarJumpToEnd => "calendar_jump_to_end",
+            Action::CalendarClear => "calendar_clear",
             Action::ToggleTaskSelection => "toggle_task_selection",
             Action::SelectAllVisibleTasks => "select_all_visible_tasks",
             Action::InvertTaskSelection => "invert_task_selection",
