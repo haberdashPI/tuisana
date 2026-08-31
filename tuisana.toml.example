@@ -258,6 +258,11 @@ key = "s"
 mode = "task"
 command = "cycle_task_sort"
 
+[[bind]]
+key = "^"
+mode = "task"
+command = "toggle_task_sort_direction"
+
 # Pressing enter on the Due or Start filter opens a calendar overlay. These are
 # its keys; "calendar" mode does not fall back to global bindings, so digits and
 # other unbound keys type into the date instead.

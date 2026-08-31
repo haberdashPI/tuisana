@@ -1830,6 +1830,11 @@ impl TaskState {
         self.refresh_table();
     }
 
+    pub fn toggle_sort_direction(&mut self) {
+        self.view.settings.sort.toggle_primary_direction();
+        self.refresh_table();
+    }
+
     pub fn toggle_project_grouping(&mut self) {
         self.view.settings.sort.toggle_project_grouping();
         self.refresh_table();
@@ -1954,6 +1959,10 @@ impl TaskState {
             }
             Action::CycleTaskSort => {
                 self.cycle_sort_field();
+                None
+            }
+            Action::ToggleTaskSortDirection => {
+                self.toggle_sort_direction();
                 None
             }
             Action::ToggleProjectGrouping => {
@@ -2700,7 +2709,57 @@ mod tests {
         assert!(state.filter_summary().contains("grp p:off s:off"));
 
         state.cycle_sort_field();
-        assert!(state.filter_summary().contains("sort title"));
+        assert!(state.filter_summary().contains("sort title asc"));
+
+        state.toggle_sort_direction();
+        assert!(state.filter_summary().contains("sort title desc"));
+    }
+
+    #[test]
+    fn the_sort_direction_action_reverses_the_visible_rows() {
+        let mut state = TaskState::default();
+        // The visible dataset is rebuilt by project membership, so every record
+        // needs to name the loaded project to survive the round trip.
+        let record = |gid: &str, due: Option<&str>| {
+            let mut record = crate::domain::TaskRecord::new(gid, gid);
+            record.due_date = due.map(str::to_string);
+            record.project_gids = vec!["p1".to_string()];
+            record.projects = vec!["Inbox".to_string()];
+            record
+        };
+        let early = record("early", Some("2026-09-01"));
+        let late = record("late", Some("2026-09-30"));
+        let undated = record("undated", None);
+
+        state.begin_loading(&[Project::new("p1", "Inbox", true)]);
+        state.finish_loading_dataset(TaskDataset {
+            records: vec![late, early, undated],
+            custom_field_definitions: Vec::new(),
+        });
+        state.toggle_project_grouping();
+        state.toggle_section_grouping();
+
+        let gids = |state: &TaskState| {
+            state
+                .table()
+                .rows
+                .iter()
+                .filter(|row| row.kind.is_task())
+                .map(|row| row.gid.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(gids(&state), vec!["early", "late", "undated"]);
+
+        state.apply_action(&crate::input::Action::ToggleTaskSortDirection, 10);
+        assert_eq!(
+            gids(&state),
+            vec!["late", "early", "undated"],
+            "the dates reverse and the undated row stays at the bottom"
+        );
+
+        state.apply_action(&crate::input::Action::ToggleTaskSortDirection, 10);
+        assert_eq!(gids(&state), vec!["early", "late", "undated"]);
     }
 
     #[test]

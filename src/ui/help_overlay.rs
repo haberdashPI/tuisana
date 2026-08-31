@@ -128,6 +128,7 @@ fn task_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::ToggleProjectGrouping], "group by project"),
                 Hint::new(&[Action::ToggleSectionGrouping], "group by section"),
                 Hint::new(&[Action::CycleTaskSort], "cycle sort field"),
+                Hint::new(&[Action::ToggleTaskSortDirection], "asc / desc"),
             ],
         ),
         HelpGroup::new(

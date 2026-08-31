@@ -1,24 +1,24 @@
  TUISANA  ▸ 1 project ▸ 4 tasks
-┌ Projects ────────────────────────────────────────────── 3 shown · 1 selected ┐
-│  ● ★ C┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓       │
-│▍   ★ P┃Tasks                            Move                         ┃       │
-│    ☆ B┃⏎           open in Asana        j/k         down / up        ┃       │
-│       ┃␣           select               ^d/^u       page down / up   ┃       │
+┌ Projec┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓lected ┐
+│  ● ★ C┃Tasks                            Move                         ┃       │
+│▍   ★ P┃⏎           open in Asana        j/k         down / up        ┃       │
+│    ☆ B┃␣           select               ^d/^u       page down / up   ┃       │
 │       ┃a           select all           home/end    top / bottom     ┃       │
 │       ┃i           invert                                            ┃       │
 │       ┃x           clear                Modes                        ┃       │
 │       ┃^x          clear hidden         p           projects         ┃       │
 │       ┃y           copy links           f           filters          ┃       │
-└───────┃                                 t           tasks            ┃───────┘
-┏ Tasks ┃Group & sort                     m           toggle tasks     ┃s 0/40 ┓
-┃   Task┃[/]         jump section                                      ┃e▲ │ St┃
-┃       ┃{/}         jump project         Panes                        ┃       ┃
-┃▌Corete┃,           group by project     0           restore          ┃───────┃
-┃       ┃.           group by section                                  ┃       ┃
-┃   Stud┃s           cycle sort field     App                          ┃·······┃
-┃▍  Revi┃                                 r           refresh          ┃19 │ Au┃
-┃   Ship┃View                             q ^c        quit             ┃ay │ Au┃
-┃   Conf┃f           filter panel         ?           close this help  ┃ed │ Au┃
+│       ┃                                 t           tasks            ┃       │
+└───────┃Group & sort                     m           toggle tasks     ┃───────┘
+┏ Tasks ┃[/]         jump section                                      ┃s 0/40 ┓
+┃   Task┃{/}         jump project         Panes                        ┃e▲ │ St┃
+┃       ┃,           group by project     0           restore          ┃       ┃
+┃▌Corete┃.           group by section                                  ┃───────┃
+┃       ┃s           cycle sort field     App                          ┃       ┃
+┃   Stud┃^           asc / desc           r           refresh          ┃·······┃
+┃▍  Revi┃                                 q ^c        quit             ┃19 │ Au┃
+┃   Ship┃View                             ?           close this help  ┃ay │ Au┃
+┃   Conf┃f           filter panel                                      ┃ed │ Au┃
 ┃       ┃c           open / done / all                                 ┃       ┃
 ┃   Ship┃z           subtasks                                          ┃·······┃
 ┃   Clos┃left/right  scroll columns                                    ┃14 │ Au┃

@@ -579,9 +579,16 @@ pub fn settings_chips(state: &TaskState) -> Vec<Chip> {
         chips.push(Chip::toned("no subtasks", Tone::Accent));
     }
 
-    if primary_sort_field(state) != TaskSortField::Date {
+    // An ascending date sort is the default and needs no chip. Any other field,
+    // or a flipped direction, does — the header arrow alone is easy to miss.
+    let descending = !primary_sort_ascending(state);
+    if primary_sort_field(state) != TaskSortField::Date || descending {
         chips.push(Chip::toned(
-            format!("sort {}", settings.sort.primary_field_label()),
+            format!(
+                "sort {} {}",
+                settings.sort.primary_field_label(),
+                if descending { "desc" } else { "asc" }
+            ),
             Tone::Accent,
         ));
     }
@@ -1087,18 +1094,42 @@ mod tests {
         state.toggle_subtask_visibility();
         state.cycle_sort_field();
 
-        let chips = settings_chips(&state)
-            .iter()
-            .map(|chip| chip.text.clone())
-            .collect::<Vec<_>>();
+        let chip_texts = |state: &TaskState| {
+            settings_chips(state)
+                .iter()
+                .map(|chip| chip.text.clone())
+                .collect::<Vec<_>>()
+        };
 
         assert_eq!(
-            chips,
+            chip_texts(&state),
             vec![
                 "group by section".to_string(),
                 "no subtasks".to_string(),
-                "sort title".to_string(),
+                "sort title asc".to_string(),
             ]
+        );
+
+        state.toggle_sort_direction();
+        assert!(chip_texts(&state).contains(&"sort title desc".to_string()));
+    }
+
+    #[test]
+    fn a_flipped_direction_earns_a_chip_even_on_the_default_sort_field() {
+        // The default ascending date sort is silent, but flipping it has to say
+        // so somewhere other than the header arrow.
+        let mut state = state_with(vec![task("t1", "One", Some("2026-06-10"), false)]);
+        state.set_completed_filter(Some(false));
+        assert!(settings_chips(&state).is_empty());
+
+        state.toggle_sort_direction();
+
+        assert_eq!(
+            settings_chips(&state)
+                .iter()
+                .map(|chip| chip.text.clone())
+                .collect::<Vec<_>>(),
+            vec!["sort date desc".to_string()]
         );
     }
 

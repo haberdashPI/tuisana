@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+use crate::domain::date::CivilDate;
+
 /// A section within a project.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Section {
@@ -469,6 +471,35 @@ impl TaskSort {
         }
     }
 
+    /// Flips the primary sort rule between ascending and descending.
+    ///
+    /// Only the primary rule flips. The rules after it are tie-breakers, and
+    /// reversing those too would reorder rows the user never asked about.
+    pub fn toggle_primary_direction(&mut self) {
+        match self.rules.first_mut() {
+            Some(rule) => {
+                rule.direction = match rule.direction {
+                    SortDirection::Asc => SortDirection::Desc,
+                    SortDirection::Desc => SortDirection::Asc,
+                }
+            }
+            // No rules means the implicit date sort, which reads as ascending;
+            // asking to flip it makes that sort explicit and descending.
+            None => self.rules.push(TaskSortRule {
+                field: TaskSortField::Date,
+                direction: SortDirection::Desc,
+            }),
+        }
+    }
+
+    /// The direction of the primary sort rule, ascending when there is none.
+    pub fn primary_direction(&self) -> SortDirection {
+        self.rules
+            .first()
+            .map(|rule| rule.direction)
+            .unwrap_or(SortDirection::Asc)
+    }
+
     /// Returns a short label for the primary sort field.
     pub fn primary_field_label(&self) -> &'static str {
         match self.rules.first().map(|rule| rule.field) {
@@ -507,12 +538,18 @@ impl TaskTableSettings {
             SubtaskVisibility::Hide => "hide",
         };
 
+        let direction = match self.sort.primary_direction() {
+            SortDirection::Asc => "asc",
+            SortDirection::Desc => "desc",
+        };
+
         format!(
-            "{}; comp {}; sub {}; sort {}",
+            "{}; comp {}; sub {}; sort {} {}",
             grouping,
             completed,
             subtasks,
-            self.sort.primary_field_label()
+            self.sort.primary_field_label(),
+            direction
         )
     }
 }
@@ -909,7 +946,38 @@ fn compare_section_key(left: &TaskRecord, right: &TaskRecord) -> std::cmp::Order
         })
 }
 
+/// The calendar date a record sorts by: its due date, or its start date when it
+/// has no due date.
+///
+/// Records store `YYYY-MM-DD` as it came off the API; the relative "Today" /
+/// "Tomorrow" / "Aug 31" text the table shows is produced at render time and
+/// never reaches here. Parsing to a [`CivilDate`] rather than comparing the
+/// strings means a value the API surprised us with — anything that is not a real
+/// date — is treated as undated instead of ordering somewhere arbitrary.
+fn record_sort_date(record: &TaskRecord) -> Option<CivilDate> {
+    record
+        .due_date
+        .as_deref()
+        .or(record.start_date.as_deref())
+        .and_then(CivilDate::parse)
+}
+
 fn compare_rule(rule: &TaskSortRule, left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
+    // Undated tasks sort last in both directions. "No date" is not an early
+    // date, so reversing the sort must not float them above everything that is
+    // actually scheduled.
+    if rule.field == TaskSortField::Date {
+        return match (record_sort_date(left), record_sort_date(right)) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (Some(left), Some(right)) => match rule.direction {
+                SortDirection::Asc => left.cmp(&right),
+                SortDirection::Desc => right.cmp(&left),
+            },
+        };
+    }
+
     let ordering = match rule.field {
         TaskSortField::Project => left
             .projects
@@ -918,18 +986,7 @@ fn compare_rule(rule: &TaskSortRule, left: &TaskRecord, right: &TaskRecord) -> s
             .unwrap_or_default()
             .cmp(&right.projects.first().cloned().unwrap_or_default()),
         TaskSortField::Section => compare_section_key(left, right),
-        TaskSortField::Date => left
-            .due_date
-            .clone()
-            .or_else(|| left.start_date.clone())
-            .unwrap_or_default()
-            .cmp(
-                &right
-                    .due_date
-                    .clone()
-                    .or_else(|| right.start_date.clone())
-                    .unwrap_or_default(),
-            ),
+        TaskSortField::Date => unreachable!("handled above so undated rows can ignore direction"),
         TaskSortField::Title => sanitize_display_text(&left.name).cmp(&sanitize_display_text(&right.name)),
         TaskSortField::Assignee => left
             .assignee
@@ -1553,6 +1610,148 @@ mod tests {
                 TaskRowKind::Task,
                 TaskRowKind::Task,
             ]
+        );
+    }
+
+    /// A record due on `due`, ordered `natural_order` by the API, in one
+    /// ungrouped project so the date rule is the only thing deciding.
+    fn dated(gid: &str, due: Option<&str>, natural_order: usize) -> TaskRecord {
+        let mut record = TaskRecord::new(gid, format!("Task {gid}"));
+        record.due_date = due.map(str::to_string);
+        record.natural_order = natural_order;
+        record
+    }
+
+    fn date_sorted_gids(records: Vec<TaskRecord>, direction: SortDirection) -> Vec<String> {
+        let settings = TaskTableSettings {
+            filter: TaskFilter::default(),
+            sort: TaskSort {
+                group_by_project: false,
+                group_by_section: false,
+                rules: vec![TaskSortRule {
+                    field: TaskSortField::Date,
+                    direction,
+                }],
+            },
+        };
+
+        TaskTableModel::from_records_with_settings(records, vec![], &settings)
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.clone())
+            .collect()
+    }
+
+    #[test]
+    fn orders_dates_chronologically_across_month_and_year_boundaries() {
+        // Every one of these pairs orders correctly by calendar date and would
+        // still order correctly as ISO text; the point is that the rule reads
+        // the date, not the "Today"/"Sep 1" text the table renders.
+        let records = vec![
+            dated("d", Some("2027-01-04"), 0),
+            dated("b", Some("2026-09-01"), 1),
+            dated("a", Some("2026-08-31"), 2),
+            dated("c", Some("2026-12-31"), 3),
+        ];
+
+        assert_eq!(
+            date_sorted_gids(records.clone(), SortDirection::Asc),
+            vec!["a", "b", "c", "d"]
+        );
+        assert_eq!(
+            date_sorted_gids(records, SortDirection::Desc),
+            vec!["d", "c", "b", "a"]
+        );
+    }
+
+    #[test]
+    fn undated_tasks_sort_last_in_both_directions() {
+        // An empty due date used to compare as the empty string, which sorted
+        // ahead of every real date and put undated tasks at the top of an
+        // ascending sort.
+        let records = vec![
+            dated("undated", None, 0),
+            dated("late", Some("2026-09-30"), 1),
+            dated("early", Some("2026-09-01"), 2),
+        ];
+
+        assert_eq!(
+            date_sorted_gids(records.clone(), SortDirection::Asc),
+            vec!["early", "late", "undated"]
+        );
+        assert_eq!(
+            date_sorted_gids(records, SortDirection::Desc),
+            vec!["late", "early", "undated"]
+        );
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_real_date_sorts_with_the_undated() {
+        let records = vec![
+            dated("nonsense", Some("someday"), 0),
+            dated("impossible", Some("2026-02-31"), 1),
+            dated("real", Some("2026-09-01"), 2),
+        ];
+
+        assert_eq!(
+            date_sorted_gids(records, SortDirection::Asc),
+            vec!["real", "nonsense", "impossible"],
+            "unparseable values fall back to natural order behind every real date"
+        );
+    }
+
+    #[test]
+    fn a_task_with_only_a_start_date_sorts_by_it() {
+        let mut start_only = TaskRecord::new("start", "Start only");
+        start_only.start_date = Some("2026-09-05".to_string());
+
+        let records = vec![
+            start_only,
+            dated("before", Some("2026-09-01"), 1),
+            dated("after", Some("2026-09-10"), 2),
+        ];
+
+        assert_eq!(
+            date_sorted_gids(records, SortDirection::Asc),
+            vec!["before", "start", "after"]
+        );
+    }
+
+    #[test]
+    fn toggling_the_direction_flips_only_the_primary_rule() {
+        let mut sort = TaskSort::default();
+        assert_eq!(sort.primary_direction(), SortDirection::Asc);
+
+        sort.toggle_primary_direction();
+        assert_eq!(sort.primary_direction(), SortDirection::Desc);
+        assert!(
+            sort.rules[1..]
+                .iter()
+                .all(|rule| rule.direction == SortDirection::Asc),
+            "the tie-breakers keep their direction"
+        );
+
+        sort.toggle_primary_direction();
+        assert_eq!(sort.primary_direction(), SortDirection::Asc);
+    }
+
+    #[test]
+    fn toggling_the_direction_with_no_rules_makes_the_implicit_date_sort_explicit() {
+        let mut sort = TaskSort {
+            group_by_project: false,
+            group_by_section: false,
+            rules: vec![],
+        };
+
+        sort.toggle_primary_direction();
+
+        assert_eq!(
+            sort.rules,
+            vec![TaskSortRule {
+                field: TaskSortField::Date,
+                direction: SortDirection::Desc,
+            }]
         );
     }
 

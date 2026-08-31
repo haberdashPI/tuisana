@@ -481,6 +481,7 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode(",", Mode::Task, "toggle_project_grouping"),
         Bind::with_mode(".", Mode::Task, "toggle_section_grouping"),
         Bind::with_mode("s", Mode::Task, "cycle_task_sort"),
+        Bind::with_mode("^", Mode::Task, "toggle_task_sort_direction"),
         Bind::with_mode("enter", Mode::Task, "open"),
         Bind::with_mode("space", Mode::Task, "toggle_task_selection"),
         Bind::with_mode("a", Mode::Task, "select_all_visible_tasks"),
@@ -918,6 +919,10 @@ mod tests {
         assert_eq!(
             keymap.action_for(&KeyBinding::Char('s'), Mode::Task),
             Some(&Action::CycleTaskSort)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('^'), Mode::Task),
+            Some(&Action::ToggleTaskSortDirection)
         );
         assert_eq!(
             keymap.action_for(&KeyBinding::Char(','), Mode::Task),

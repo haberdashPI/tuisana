@@ -257,6 +257,7 @@ All bindable commands:
 - `toggle_project_grouping`
 - `toggle_section_grouping`
 - `cycle_task_sort`
+- `toggle_task_sort_direction`
 - `move_section_up`
 - `move_section_down`
 - `move_project_up`
@@ -356,7 +357,7 @@ left alone.
 - `c` to toggle the completed filter
 - `z` to toggle subtask visibility
 - `,` to toggle project grouping, `.` to toggle section grouping
-- `s` to cycle the task sort
+- `s` to cycle the task sort field, `^` to flip between ascending and descending
 - `[` and `]` to move by section
 - `{` and `}` to move by project
 
