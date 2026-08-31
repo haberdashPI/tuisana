@@ -1,30 +1,40 @@
- TUISANA  ▸ 1 project ▸ 4 tasks
-┌ Projec┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓lected ┐
-│  ● ★ C┃Tasks                            Move                         ┃       │
-│▍   ★ P┃⏎           open in Asana        j/k         down / up        ┃       │
-│    ☆ B┃␣           select               ^d/^u       page down / up   ┃       │
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                      │
+│▍   ★ Platform Infrastructure                                                 │
+│    ☆ Backlog                                                                 │
+│                                                                              │
+│       ┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓       │
+│       ┃Tasks                            Move                         ┃       │
+│       ┃⏎           open in Asana        j/k         down / up        ┃       │
+│       ┃␣           select               ^d/^u       page down / up   ┃       │
 │       ┃a           select all           home/end    top / bottom     ┃       │
-│       ┃i           invert                                            ┃       │
-│       ┃x           clear                Modes                        ┃       │
-│       ┃^x          clear hidden         p           projects         ┃       │
-│       ┃y           copy links           f           filters          ┃       │
-│       ┃                                 t           tasks            ┃       │
-└───────┃Group & sort                     m           toggle tasks     ┃───────┘
-┏ Tasks ┃[/]         jump section                                      ┃s 0/40 ┓
-┃   Task┃{/}         jump project         Panes                        ┃e▲ │ St┃
-┃       ┃,           group by project     0           restore          ┃       ┃
-┃▌Corete┃.           group by section                                  ┃───────┃
-┃       ┃s           cycle sort field     App                          ┃       ┃
-┃   Stud┃^           asc / desc           r           refresh          ┃·······┃
-┃▍  Revi┃                                 q ^c        quit             ┃19 │ Au┃
-┃   Ship┃View                             ?           close this help  ┃ay │ Au┃
-┃   Conf┃f           filter panel                                      ┃ed │ Au┃
-┃       ┃c           open / done / all                                 ┃       ┃
-┃   Ship┃z           subtasks                                          ┃·······┃
-┃   Clos┃left/right  scroll columns                                    ┃14 │ Au┃
-┃       ┃                                                              ┃       ┃
+└───────┃i           invert                                            ┃───────┘
+┏ Tasks ┃x           clear                Modes                        ┃s 0/41 ┓
+┃   Task┃^x          clear hidden         p           projects         ┃e▲ │  S┃
+┃       ┃y           copy links           f           filters          ┃       ┃
+┃▌Corete┃                                 t           tasks            ┃───────┃
+┃       ┃Group & sort                     m           toggle tasks     ┃       ┃
+┃   Stud┃[/]         jump section                                      ┃·······┃
+┃▍  Draf┃{/}         jump project         Panes                        ┃10 │ Ju┃
+┃   Revi┃,           group by project     0           restore          ┃19 │  A┃
+┃   Ship┃.           group by section                                  ┃ay │ Au┃
+┃   Conf┃s           cycle sort field     App                          ┃ed │ Au┃
+┃   Upda┃^           asc / desc           r           refresh          ┃ 4 │ Au┃
+┃   Qual┃                                 q ^c        quit             ┃12 │  J┃
+┃       ┃View                             ?           close this help  ┃       ┃
+┃   Ship┃g           gantt chart                                       ┃·······┃
+┃   Book┃f           filter panel                                      ┃15 │  S┃
+┃   Labe┃c           open / done / all                                 ┃ 9 │   ┃
+┃   Reco┃z           subtasks                                          ┃30 │ Se┃
+┃   Clos┃left/right  scroll columns                                    ┃14 │  O┃
+┃   Clos┃                                                              ┃18 │  N┃
 ┃       ┃                                                    ? to close┃       ┃
 ┃       ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛       ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 j/k move   ⏎ open   ␣ select   f filters   s sort             r refresh   q quit
  TASK

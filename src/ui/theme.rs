@@ -20,6 +20,27 @@ use ratatui::{
 };
 
 use crate::config::{Mode, ThemeConfig, ThemeGlyphs, ThemeVariant};
+use crate::domain::{ColorSlot, PALETTE_SLOTS};
+
+/// Bar textures for the monochrome variant, one per palette slot.
+///
+/// A solid block says nothing about which value it is once colour is gone, so
+/// the glyph carries the distinction instead. None of these is the neutral bar
+/// in either glyph set, so "past the palette" stays readable too.
+const MONO_BAR_TEXTURES: [&str; PALETTE_SLOTS] = ["#", "@", "+", "*", "o", "~"];
+
+/// The Gantt palette, in the order slots are handed out.
+///
+/// The semantically loaded colors come last. A bar should not read as
+/// "overdue" merely for being first in the legend.
+const CATEGORICAL_COLORS: [Color; PALETTE_SLOTS] = [
+    Color::Blue,
+    Color::Magenta,
+    Color::Cyan,
+    Color::Green,
+    Color::Yellow,
+    Color::Red,
+];
 
 /// The characters the UI draws for markers, rules, chips, and spinners.
 ///
@@ -69,6 +90,22 @@ pub struct GlyphSet {
     pub sort_desc: &'static str,
     /// Marker for a filter that is doing something.
     pub active: &'static str,
+    /// Body of a Gantt bar in one of the palette's colours.
+    pub bar: &'static str,
+    /// Body of a Gantt bar whose value fell past the palette.
+    pub bar_neutral: &'static str,
+    /// A due date with no start date.
+    pub milestone: &'static str,
+    /// Today's column, drawn through rows with no bar there.
+    pub today_line: &'static str,
+    /// A month boundary on a group header row.
+    pub gridline: &'static str,
+    /// Fill for a Saturday or Sunday column.
+    pub weekend: &'static str,
+    /// A bar that starts before the window, or a task entirely behind it.
+    pub clip_left: &'static str,
+    /// A bar that runs past the window, or a task entirely beyond it.
+    pub clip_right: &'static str,
     /// Animation frames for the loading spinner.
     pub spinner: &'static [&'static str],
 }
@@ -97,6 +134,14 @@ impl GlyphSet {
         sort_asc: "▲",
         sort_desc: "▼",
         active: "●",
+        bar: "█",
+        bar_neutral: "▒",
+        milestone: "◆",
+        today_line: "┊",
+        gridline: "·",
+        weekend: "░",
+        clip_left: "‹",
+        clip_right: "›",
         spinner: &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
     };
 
@@ -123,6 +168,14 @@ impl GlyphSet {
         sort_asc: "^",
         sort_desc: "v",
         active: "*",
+        bar: "#",
+        bar_neutral: "=",
+        milestone: "<",
+        today_line: ":",
+        gridline: ".",
+        weekend: ":",
+        clip_left: "<",
+        clip_right: ">",
         spinner: &["|", "/", "-", "\\"],
     };
 
@@ -183,6 +236,10 @@ pub struct Theme {
     pub brand: Style,
     /// Optional background for alternating task rows.
     pub zebra: Option<Style>,
+    /// One style per Gantt palette slot.
+    pub categorical: [Style; PALETTE_SLOTS],
+    /// The style for Gantt values past the palette.
+    pub categorical_neutral: Style,
     /// Whether color was resolved away entirely.
     mono: bool,
     /// Whether only ASCII may be drawn.
@@ -247,6 +304,10 @@ impl Theme {
                 key: plain.add_modifier(Modifier::BOLD),
                 brand: plain.add_modifier(Modifier::REVERSED | Modifier::BOLD),
                 zebra: None,
+                // Undifferentiated: the bar glyph, not the style, is what
+                // tells two values apart when there is no color.
+                categorical: [plain; PALETTE_SLOTS],
+                categorical_neutral: plain.add_modifier(Modifier::DIM),
                 mono: true,
                 ascii,
             };
@@ -286,8 +347,49 @@ impl Theme {
                 .bg(accent)
                 .add_modifier(Modifier::BOLD),
             zebra: zebra_style,
+            categorical: CATEGORICAL_COLORS.map(|color| plain.fg(color)),
+            categorical_neutral: plain.fg(Color::DarkGray),
             mono: false,
             ascii,
+        }
+    }
+
+    /// The style a Gantt bar draws in.
+    pub fn categorical_style(&self, slot: ColorSlot) -> Style {
+        match slot {
+            ColorSlot::Indexed(index) => self
+                .categorical
+                .get(index)
+                .copied()
+                .unwrap_or(self.categorical_neutral),
+            ColorSlot::Neutral => self.categorical_neutral,
+        }
+    }
+
+    /// The fill drawn on a weekend column that has nothing else on it.
+    ///
+    /// Monochrome swaps the shade block for a dot. Without colour, `░` and the
+    /// neutral bar's `▒` are one shade apart and read as the same thing; a dot
+    /// cannot be mistaken for any of the bar textures.
+    pub fn weekend_glyph(&self) -> &'static str {
+        match self.mono {
+            true => ".",
+            false => self.glyphs.weekend,
+        }
+    }
+
+    /// The glyph a Gantt bar is drawn with.
+    ///
+    /// Constant across slots when there is color to tell them apart, and one
+    /// texture per slot when there is not.
+    pub fn bar_glyph(&self, slot: ColorSlot) -> &'static str {
+        match slot {
+            ColorSlot::Neutral => self.glyphs.bar_neutral,
+            ColorSlot::Indexed(index) if self.mono => MONO_BAR_TEXTURES
+                .get(index)
+                .copied()
+                .unwrap_or(self.glyphs.bar_neutral),
+            ColorSlot::Indexed(_) => self.glyphs.bar,
         }
     }
 
@@ -365,6 +467,9 @@ impl Theme {
             // field, so the color only needs to signal "you are typing".
             Mode::Calendar => Color::Yellow,
             Mode::Task => Color::Green,
+            Mode::Gantt => Color::Cyan,
+            // Yellow, like the other modes where something is being edited.
+            Mode::GanttOrder => Color::Yellow,
             Mode::Any => return None,
         })
     }
@@ -386,7 +491,9 @@ fn accent_color(name: &str) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use super::{GlyphSet, Theme};
+    use super::{GlyphSet, Theme, MONO_BAR_TEXTURES};
+    use crate::domain::{ColorSlot, PALETTE_SLOTS};
+    use std::collections::HashSet;
     use crate::config::{Mode, ThemeConfig, ThemeGlyphs, ThemeVariant};
     use crate::ui::text::visible_width;
 
@@ -413,6 +520,14 @@ mod tests {
             set.sort_asc,
             set.sort_desc,
             set.active,
+            set.bar,
+            set.bar_neutral,
+            set.milestone,
+            set.today_line,
+            set.gridline,
+            set.weekend,
+            set.clip_left,
+            set.clip_right,
         ];
         glyphs.extend_from_slice(set.spinner);
         glyphs
@@ -521,5 +636,68 @@ mod tests {
 
         assert!(ansi.zebra.is_none());
         assert!(truecolor.zebra.is_some());
+    }
+
+    #[test]
+    fn every_palette_slot_has_its_own_color() {
+        let theme = Theme::default();
+        let colors = (0..PALETTE_SLOTS)
+            .map(|slot| format!("{:?}", theme.categorical_style(ColorSlot::Indexed(slot))))
+            .collect::<HashSet<_>>();
+
+        assert_eq!(colors.len(), PALETTE_SLOTS);
+        assert!(!colors.contains(&format!(
+            "{:?}",
+            theme.categorical_style(ColorSlot::Neutral)
+        )));
+    }
+
+    #[test]
+    fn a_slot_past_the_palette_falls_back_to_neutral_rather_than_panicking() {
+        let theme = Theme::default();
+
+        assert_eq!(
+            theme.categorical_style(ColorSlot::Indexed(PALETTE_SLOTS + 3)),
+            theme.categorical_neutral
+        );
+    }
+
+    #[test]
+    fn a_colored_theme_draws_every_bar_with_one_glyph() {
+        let theme = Theme::default();
+        let glyphs = (0..PALETTE_SLOTS)
+            .map(|slot| theme.bar_glyph(ColorSlot::Indexed(slot)))
+            .collect::<HashSet<_>>();
+
+        assert_eq!(glyphs.len(), 1, "the color is what tells them apart");
+    }
+
+    #[test]
+    fn a_mono_theme_gives_every_slot_its_own_bar_glyph() {
+        // Without this the six slots would be six identical blocks, which is
+        // exactly the "never rely on color alone" failure the theme exists to
+        // avoid.
+        let theme = Theme::new(&ThemeConfig {
+            variant: ThemeVariant::Mono,
+            ..ThemeConfig::default()
+        });
+
+        let mut glyphs = (0..PALETTE_SLOTS)
+            .map(|slot| theme.bar_glyph(ColorSlot::Indexed(slot)))
+            .collect::<Vec<_>>();
+        glyphs.push(theme.bar_glyph(ColorSlot::Neutral));
+
+        assert_eq!(
+            glyphs.iter().collect::<HashSet<_>>().len(),
+            PALETTE_SLOTS + 1,
+            "the neutral bar has to differ from all six too"
+        );
+    }
+
+    #[test]
+    fn the_mono_bar_textures_are_single_width_in_both_glyph_sets() {
+        for texture in MONO_BAR_TEXTURES {
+            assert_eq!(visible_width(texture), 1, "{texture} is not one cell");
+        }
     }
 }

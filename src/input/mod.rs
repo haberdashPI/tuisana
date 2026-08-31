@@ -201,6 +201,42 @@ pub enum Action {
     ClearTaskSelection,
     ClearHiddenTaskSelection,
     CopyTasksToClipboard,
+    /// Draw the Gantt chart and take its controls.
+    SetGanttMode,
+    /// Hide the Gantt chart and return to task mode.
+    ToggleGantt,
+    /// Show one more table column beside the chart.
+    GanttAddColumn,
+    /// Show one fewer table column beside the chart.
+    GanttRemoveColumn,
+    /// Colour the bars by the next available dimension.
+    CycleGanttColorKey,
+    /// Move the timeline window back.
+    GanttScrollLeft,
+    /// Move the timeline window forward.
+    GanttScrollRight,
+    /// Show a shorter span of time.
+    GanttZoomIn,
+    /// Show a longer span of time.
+    GanttZoomOut,
+    /// Return the timeline to fitting the loaded tasks.
+    GanttZoomFit,
+    /// Centre the timeline on today.
+    GanttToday,
+    /// Open the colour order dialog.
+    GanttOpenOrder,
+    /// Move the selected value one place up the colour order.
+    GanttOrderMoveUp,
+    /// Move the selected value one place down the colour order.
+    GanttOrderMoveDown,
+    /// Move the selected value to the front of the colour order.
+    GanttOrderMoveTop,
+    /// Move the selected value to the back of the colour order.
+    GanttOrderMoveBottom,
+    /// Keep the edited order, persist it, and close the dialog.
+    GanttOrderCommit,
+    /// Restore the order the dialog opened with and close it.
+    GanttOrderCancel,
 }
 
 impl Action {
@@ -284,6 +320,24 @@ impl Action {
             "clear_task_selection" => Ok(Self::ClearTaskSelection),
             "clear_hidden_task_selection" => Ok(Self::ClearHiddenTaskSelection),
             "copy_tasks_to_clipboard" => Ok(Self::CopyTasksToClipboard),
+            "set_gantt_mode" => Ok(Self::SetGanttMode),
+            "toggle_gantt" => Ok(Self::ToggleGantt),
+            "gantt_add_column" => Ok(Self::GanttAddColumn),
+            "gantt_remove_column" => Ok(Self::GanttRemoveColumn),
+            "cycle_gantt_color_key" => Ok(Self::CycleGanttColorKey),
+            "gantt_scroll_left" => Ok(Self::GanttScrollLeft),
+            "gantt_scroll_right" => Ok(Self::GanttScrollRight),
+            "gantt_zoom_in" => Ok(Self::GanttZoomIn),
+            "gantt_zoom_out" => Ok(Self::GanttZoomOut),
+            "gantt_zoom_fit" => Ok(Self::GanttZoomFit),
+            "gantt_today" => Ok(Self::GanttToday),
+            "gantt_open_order" => Ok(Self::GanttOpenOrder),
+            "gantt_order_move_up" => Ok(Self::GanttOrderMoveUp),
+            "gantt_order_move_down" => Ok(Self::GanttOrderMoveDown),
+            "gantt_order_move_top" => Ok(Self::GanttOrderMoveTop),
+            "gantt_order_move_bottom" => Ok(Self::GanttOrderMoveBottom),
+            "gantt_order_commit" => Ok(Self::GanttOrderCommit),
+            "gantt_order_cancel" => Ok(Self::GanttOrderCancel),
             other => Err(Error::Backend(format!("unsupported command: {other}"))),
         }
     }
@@ -429,6 +483,24 @@ impl Display for Action {
             Action::ClearTaskSelection => "clear_task_selection",
             Action::ClearHiddenTaskSelection => "clear_hidden_task_selection",
             Action::CopyTasksToClipboard => "copy_tasks_to_clipboard",
+            Action::SetGanttMode => "set_gantt_mode",
+            Action::ToggleGantt => "toggle_gantt",
+            Action::GanttAddColumn => "gantt_add_column",
+            Action::GanttRemoveColumn => "gantt_remove_column",
+            Action::CycleGanttColorKey => "cycle_gantt_color_key",
+            Action::GanttScrollLeft => "gantt_scroll_left",
+            Action::GanttScrollRight => "gantt_scroll_right",
+            Action::GanttZoomIn => "gantt_zoom_in",
+            Action::GanttZoomOut => "gantt_zoom_out",
+            Action::GanttZoomFit => "gantt_zoom_fit",
+            Action::GanttToday => "gantt_today",
+            Action::GanttOpenOrder => "gantt_open_order",
+            Action::GanttOrderMoveUp => "gantt_order_move_up",
+            Action::GanttOrderMoveDown => "gantt_order_move_down",
+            Action::GanttOrderMoveTop => "gantt_order_move_top",
+            Action::GanttOrderMoveBottom => "gantt_order_move_bottom",
+            Action::GanttOrderCommit => "gantt_order_commit",
+            Action::GanttOrderCancel => "gantt_order_cancel",
         };
         f.write_str(name)
     }

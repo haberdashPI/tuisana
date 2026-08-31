@@ -1,4 +1,4 @@
- TUISANA  ▸ 1 project ▸ 2 tasks
+ TUISANA  ▸ 1 project ▸ 3 tasks
 ┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1 active · editing ┓
 ┃▍ ● Title     fuzzy     sh                                                                                            ┃
 ┃    Assignee  contains  —                                                                                             ┃
@@ -10,14 +10,24 @@
 ┃                                                                                                                      ┃
 ┃                                                                                                                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-┌ Tasks ────────────────────────────────────────────────────────────────────────────────────────────── 2 tasks · row 1 ┐
-│   Task                                          │ Assignee     │    Due▲ │ Start │ St │ Projects           │ Priority│
+┌ Tasks ────────────────────────────────────────────────────────────────────────────────────────────── 3 tasks · row 1 ┐
+│   Task                                         │ Assignee     │    Due▲ │  Start │ St │ Projects           │ Priority│
 │                                                                                                                      │
 │▌Northwind BTX 4412 ──────────────────────────────────────────────────────────────────────────────────────────────────│
 │                                                                                                                      │
 │   Study Kit Design ··································································································│
-│▍  Review shipment requirements doc              │ Morgan Ellis │ !Aug 19 │ Aug 4 │ ○  │ Northwind BTX 4412 │ High    │
-│   Ship release candidate to the study team      │ Alex Chen    │   Today │ Aug 4 │ ○  │ Northwind BTX 4412 │ High    │
+│▍  Review shipment requirements doc             │ Morgan Ellis │ !Aug 19 │  Aug 3 │ ○  │ Northwind BTX 4412 │ High    │
+│   Ship release candidate to the study team     │ Alex Chen    │   Today │ Aug 10 │ ○  │ Northwind BTX 4412 │ High    │
+│                                                                                                                      │
+│   Shipment ··········································································································│
+│   Close the quarter's shipping report          │ Priya Raman  │  Dec 18 │  Nov 2 │ ○  │ Northwind BTX 4412 │ Low     │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │

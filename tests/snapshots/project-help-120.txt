@@ -1,8 +1,13 @@
  TUISANA  ▸ Northwind BTX 4412
-┏ Projects ━━━━━━━━━━━━━━┏ Help · project mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓━━━━━━━━━━━━━━━ 3 shown ┓
-┃▍   ★ Northwind BTX 4412┃Select                              Move                            ┃                        ┃
-┃    ★ Platform Infrastru┃␣         select, then move down    j/k       down / up             ┃                        ┃
-┃    ☆ Backlog           ┃a         select all visible        ^d/^u     page down / up        ┃                        ┃
+┏ Projects ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3 shown ┓
+┃▍   ★ Northwind BTX 4412                                                                                              ┃
+┃    ★ Platform Infrastructure                                                                                         ┃
+┃    ☆ Backlog                                                                                                         ┃
+┃                                                                                                                      ┃
+┃                        ┏ Help · project mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                        ┃
+┃                        ┃Select                              Move                            ┃                        ┃
+┃                        ┃␣         select, then move down    j/k       down / up             ┃                        ┃
+┃                        ┃a         select all visible        ^d/^u     page down / up        ┃                        ┃
 ┃                        ┃!         select starred            home/end  top / bottom          ┃                        ┃
 ┃                        ┃@         select non-hidden                                         ┃                        ┃
 ┃                        ┃i         invert                    Modes                           ┃                        ┃
@@ -25,6 +30,11 @@
 ┃                        ┃                                                                    ┃                        ┃
 ┃                        ┃                                                          ? to close┃                        ┃
 ┃                        ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                        ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 j/k move   ␣ select   t tasks   / search   v show hidden   ? help                                     r refresh   q quit
  PROJECT

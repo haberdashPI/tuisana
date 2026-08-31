@@ -68,6 +68,8 @@ pub struct HintContext {
     pub on_label_filter: bool,
     /// The date being picked is a range, so it has two ends to move between.
     pub on_date_range: bool,
+    /// The chart's timeline has been scrolled or zoomed off its fitted window.
+    pub timeline_windowed: bool,
 }
 
 /// Hints shown on the right of the bar in every mode.
@@ -123,7 +125,44 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
             hints
         }
         Mode::Task => task_hints(context),
+        Mode::Gantt => gantt_hints(context),
+        Mode::GanttOrder => vec![
+            Hint::new(&[Action::MoveDown, Action::MoveUp], "cursor"),
+            Hint::new(
+                &[Action::GanttOrderMoveUp, Action::GanttOrderMoveDown],
+                "move",
+            ),
+            Hint::new(
+                &[Action::GanttOrderMoveTop, Action::GanttOrderMoveBottom],
+                "top/bottom",
+            ),
+            Hint::new(&[Action::CycleGanttColorKey], "color by"),
+            Hint::new(&[Action::GanttOrderCommit], "save"),
+            Hint::new(&[Action::GanttOrderCancel], "cancel"),
+        ],
     }
+}
+
+fn gantt_hints(context: HintContext) -> Vec<Hint> {
+    let mut hints = vec![
+        Hint::new(&[Action::GanttScrollLeft, Action::GanttScrollRight], "scroll"),
+        Hint::new(&[Action::GanttZoomOut, Action::GanttZoomIn], "zoom"),
+    ];
+    // Refitting a window that is already fitted does nothing, so it is only
+    // worth a slot once scrolling or zooming has moved it.
+    if context.timeline_windowed {
+        hints.push(Hint::new(&[Action::GanttZoomFit], "fit"));
+    }
+    hints.push(Hint::new(&[Action::GanttToday], "today"));
+    hints.push(Hint::new(
+        &[Action::GanttRemoveColumn, Action::GanttAddColumn],
+        "columns",
+    ));
+    hints.push(Hint::new(&[Action::CycleGanttColorKey], "color"));
+    hints.push(Hint::new(&[Action::GanttOpenOrder], "order"));
+    hints.push(Hint::new(&[Action::ToggleGantt], "close"));
+    hints.push(Hint::new(&[Action::ToggleHelpDetails], "help"));
+    hints
 }
 
 fn project_hints(context: HintContext) -> Vec<Hint> {
@@ -160,6 +199,7 @@ fn task_hints(context: HintContext) -> Vec<Hint> {
             "columns",
         ));
     }
+    hints.push(Hint::new(&[Action::SetGanttMode], "gantt"));
     hints.push(Hint::new(&[Action::ToggleCompletedFilter], "completed"));
     if context.has_selection {
         hints.push(Hint::new(&[Action::CopyTasksToClipboard], "copy"));
@@ -502,5 +542,67 @@ mod tests {
 
         assert!(!idle.contains("copy"));
         assert!(selected.contains("copy"));
+    }
+
+    #[test]
+    fn rebinding_a_gantt_key_changes_what_the_hint_bar_shows() {
+        let config = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 1.0
+
+                [[bind]]
+                key = "w"
+                mode = "gantt"
+                command = "gantt_zoom_fit"
+            "#,
+        )
+        .expect("config parses");
+        let keymap =
+            KeyMap::from_bindings(&config.effective_bindings()).expect("keymap builds");
+        let theme = Theme::default();
+
+        let line = hint_line(
+            &hints_for(
+                Mode::Gantt,
+                HintContext {
+                    timeline_windowed: true,
+                    ..HintContext::default()
+                },
+            ),
+            &keymap,
+            Mode::Gantt,
+            &theme,
+            200,
+        )
+        .to_string();
+
+        assert!(line.contains("w fit"), "{line}");
+    }
+
+    #[test]
+    fn the_fit_hint_appears_only_once_the_window_has_moved() {
+        let keymap = keymap();
+        let theme = Theme::default();
+        let render = |windowed| {
+            hint_line(
+                &hints_for(
+                    Mode::Gantt,
+                    HintContext {
+                        timeline_windowed: windowed,
+                        ..HintContext::default()
+                    },
+                ),
+                &keymap,
+                Mode::Gantt,
+                &theme,
+                200,
+            )
+            .to_string()
+        };
+
+        assert!(!render(false).contains("fit"));
+        assert!(render(true).contains("fit"));
     }
 }

@@ -31,7 +31,10 @@ use tuisana::{
 };
 
 const WIDTHS: [u16; 3] = [80, 120, 200];
-const HEIGHT: u16 = 30;
+// Tall enough that the widened fixture's twelve incomplete tasks all fit in the
+// task pane. At 30 the pane clipped the last section, which hid exactly the
+// rows a chart snapshot most needs to show.
+const HEIGHT: u16 = 40;
 const TODAY: &str = "2026-08-24";
 
 /// Feeds a fixed script, then reports the source as closed so the session draws
@@ -61,11 +64,18 @@ fn enter() -> KeyEvent {
     KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
 }
 
+/// Builds one fixture task.
+///
+/// Positional and long, but every argument is a distinct type-free string, so
+/// the order is written out here rather than inferred at each call site:
+/// `gid, name, section, assignee, start, due, priority, done`.
+#[allow(clippy::too_many_arguments)]
 fn task(
     gid: &str,
     name: &str,
     section: &str,
     assignee: Option<&str>,
+    start: Option<&str>,
     due: Option<&str>,
     priority: Option<&str>,
     done: bool,
@@ -76,7 +86,7 @@ fn task(
         completed: done,
         modified_at: Some("2026-08-01T00:00:00Z".to_string()),
         due_on: due.map(str::to_string),
-        start_on: Some("2026-08-04".to_string()),
+        start_on: start.map(str::to_string),
         assignee: assignee.map(|name| UserDto {
             gid: format!("user-{name}"),
             name: Some(name.to_string()),
@@ -138,13 +148,16 @@ fn client() -> FakeAsanaClient {
     .with_tasks(
         "project-1",
         vec![
-            // Overdue, due today, due soon, far out, and unset, so every
+            // Dues cover overdue, today, soon, far out, and unset, so every
             // urgency level and the empty placeholder appear in one screen.
+            // Starts spread across Jun-Dec so the chart has a range worth
+            // scrolling and zooming, and so bars differ in length.
             task(
                 "t1",
                 "Review shipment requirements doc",
                 "Study Kit Design",
                 Some("Morgan Ellis"),
+                Some("2026-08-03"),
                 Some("2026-08-19"),
                 Some("High"),
                 false,
@@ -154,6 +167,7 @@ fn client() -> FakeAsanaClient {
                 "Ship release candidate to the study team",
                 "Study Kit Design",
                 Some("Alex Chen"),
+                Some("2026-08-10"),
                 Some(TODAY),
                 Some("High"),
                 false,
@@ -163,6 +177,7 @@ fn client() -> FakeAsanaClient {
                 "Confirm carrier pickup window with the vendor",
                 "Study Kit Design",
                 None,
+                Some("2026-08-17"),
                 Some("2026-08-26"),
                 None,
                 false,
@@ -172,6 +187,7 @@ fn client() -> FakeAsanaClient {
                 "Close out packaging vendor contract",
                 "Shipment",
                 Some("Alex Chen"),
+                Some("2026-10-01"),
                 Some("2026-11-14"),
                 Some("Low"),
                 false,
@@ -182,8 +198,84 @@ fn client() -> FakeAsanaClient {
                 "Shipment",
                 Some("Jo Park"),
                 None,
+                None,
                 Some("Low"),
                 true,
+            ),
+            // Eight distinct assignees across the incomplete tasks, so the
+            // Gantt palette runs out and the colour dialog has to show a
+            // neutral group. Six get a colour; the rest do not.
+            task(
+                "t6",
+                "Draft the assay validation protocol",
+                "Study Kit Design",
+                Some("Priya Raman"),
+                Some("2026-06-15"),
+                Some("2026-07-10"),
+                Some("High"),
+                false,
+            ),
+            task(
+                "t7",
+                "Qualify the second reagent supplier",
+                "Study Kit Design",
+                Some("Dana Ruiz"),
+                Some("2026-07-01"),
+                Some("2026-09-12"),
+                Some("Medium"),
+                false,
+            ),
+            task(
+                "t8",
+                "Update the sample intake SOP",
+                "Study Kit Design",
+                Some("Kim Alvarez"),
+                Some("2026-08-20"),
+                Some("2026-09-04"),
+                Some("Medium"),
+                false,
+            ),
+            task(
+                "t9",
+                "Book the courier for the pilot run",
+                "Shipment",
+                Some("Sam Okafor"),
+                Some("2026-09-01"),
+                Some("2026-09-15"),
+                Some("Low"),
+                false,
+            ),
+            task(
+                "t10",
+                "Reconcile the freight invoices",
+                "Shipment",
+                Some("Robin Fox"),
+                Some("2026-09-20"),
+                Some("2026-10-30"),
+                Some("Low"),
+                false,
+            ),
+            // A due date with no start: the chart draws this as a milestone
+            // rather than a bar.
+            task(
+                "t11",
+                "Label the retention samples",
+                "Shipment",
+                Some("Jo Park"),
+                None,
+                Some("2026-10-09"),
+                Some("Medium"),
+                false,
+            ),
+            task(
+                "t12",
+                "Close the quarter's shipping report",
+                "Shipment",
+                Some("Priya Raman"),
+                Some("2026-11-02"),
+                Some("2026-12-18"),
+                Some("Low"),
+                false,
             ),
         ],
     )
@@ -337,6 +429,125 @@ fn project_mode_with_help() {
 #[test]
 fn project_search() {
     assert_snapshot("project-search", || vec![vec![key('/'), key('l')]]);
+}
+
+#[test]
+fn gantt_mode() {
+    assert_snapshot("gantt", || vec![vec![key(' '), key('t')], vec![key('g')]]);
+}
+
+/// Zoomed in twice and scrolled, so bars run past the window and the status
+/// bar has to say where the window is.
+#[test]
+fn gantt_zoomed_and_scrolled() {
+    assert_snapshot("gantt-zoom", || {
+        vec![
+            vec![key(' '), key('t')],
+            vec![key('g'), key('='), key('='), key('l')],
+        ]
+    });
+}
+
+/// More table columns, taking the space from the chart.
+#[test]
+fn gantt_with_more_columns() {
+    assert_snapshot("gantt-columns", || {
+        vec![vec![key(' '), key('t')], vec![key('g'), key('>'), key('>')]]
+    });
+}
+
+/// Zoomed until a month fits the pane: the axis marks weeks, not months.
+#[test]
+fn gantt_zoomed_to_weeks() {
+    assert_snapshot_with(config(), vec![120], "gantt-weeks", || {
+        vec![
+            vec![key(' '), key('t')],
+            vec![key('g'), key('='), key('='), key('='), key('=')],
+        ]
+    });
+}
+
+/// Zoomed to a fortnight: the axis marks individual days, and the weekend
+/// columns are shaded.
+#[test]
+fn gantt_zoomed_to_days() {
+    assert_snapshot_with(config(), vec![120], "gantt-days", || {
+        vec![
+            vec![key(' '), key('t')],
+            vec![key('g'), key('='), key('='), key('='), key('='), key('=')],
+        ]
+    });
+}
+
+/// Zoomed to a week and centred on today, so the axis names weekdays and
+/// bars actually run across the shaded weekend.
+#[test]
+fn gantt_zoomed_to_weekdays() {
+    assert_snapshot_with(config(), vec![120], "gantt-weekdays", || {
+        vec![
+            vec![key(' '), key('t')],
+            vec![
+                key('g'),
+                key('='),
+                key('='),
+                key('='),
+                key('='),
+                key('='),
+                key('='),
+                key('t'),
+            ],
+        ]
+    });
+}
+
+/// The help overlay for gantt mode, which is where someone looks for the
+/// zoom keys.
+#[test]
+fn gantt_mode_with_help() {
+    assert_snapshot_with(config(), vec![120], "gantt-help", || {
+        vec![vec![key(' '), key('t')], vec![key('g'), key('?')]]
+    });
+}
+
+/// The colour dialog, with more than six values so the palette rule shows.
+#[test]
+fn gantt_color_dialog() {
+    assert_snapshot("gantt-order", || {
+        vec![vec![key(' '), key('t')], vec![key('g'), enter()]]
+    });
+}
+
+/// The monochrome ASCII fallback: no colour, so the six palette slots have to
+/// be told apart by the bar texture alone.
+#[test]
+fn gantt_in_the_monochrome_ascii_theme() {
+    assert_snapshot_with(mono_config(), vec![120], "gantt-mono", || {
+        vec![vec![key(' '), key('t')], vec![key('g')]]
+    });
+}
+
+/// Six table columns at 80: the columns region hits its share cap, the
+/// clipped columns stay reachable by scrolling, and the legend runs out of
+/// border and says how much it dropped.
+///
+/// The chart being dropped entirely needs a terminal under about 32 columns;
+/// `a_pane_too_narrow_for_a_chart_says_so_instead_of_drawing_one` covers that.
+#[test]
+fn gantt_with_every_column_at_eighty() {
+    assert_snapshot_with(config(), vec![80], "gantt-many-columns", || {
+        vec![
+            vec![key(' '), key('t')],
+            vec![key('g'), key('>'), key('>'), key('>'), key('>')],
+        ]
+    });
+}
+
+/// Coloured by section rather than assignee.
+#[test]
+fn gantt_coloured_by_section() {
+    assert_snapshot("gantt-color-section", || {
+        vec![vec![key(' '), key('t')], vec![key('g'), key('c')]]
+    });
 }
 
 #[test]

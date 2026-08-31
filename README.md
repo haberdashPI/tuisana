@@ -109,6 +109,9 @@ Reading the screen:
   within three days takes the accent color.
 - In the task table the left gutter carries two markers: the cursor (`▍`) and
   multi-selection (`●`). An empty cell shows `—`.
+- `g` draws a Gantt chart beside the task table. With `variant = "mono"` its six
+  palette slots are told apart by the bar's texture rather than its colour, so
+  the chart still reads with no colour at all.
 - Editing a date filter opens a calendar overlay: it starts on the current month
   with today highlighted, `h`/`l` move by day, `j`/`k` flip months, and `enter`
   picks the highlighted day. Typed digits go straight into the filter field, and
@@ -145,7 +148,7 @@ The `[[bind]]` section maps keyboard input to command names.
 If you omit a command from your config, the built-in default binding for that command still applies.
 
 Each binding may include an optional `mode` field to restrict it to a specific UI context.
-Available modes are `any` (default), `project`, `project_search`, `filter`, `filter_edit`, `calendar`, and `task`.
+Available modes are `any` (default), `project`, `project_search`, `filter`, `filter_edit`, `calendar`, `task`, `gantt`, and `gantt_order`.
 
 Example:
 
@@ -262,6 +265,31 @@ All bindable commands:
 - `move_section_down`
 - `move_project_up`
 - `move_project_down`
+- `set_gantt_mode`
+
+**Gantt mode**
+
+- `gantt_scroll_left`
+- `gantt_scroll_right`
+- `gantt_zoom_in`
+- `gantt_zoom_out`
+- `gantt_zoom_fit`
+- `gantt_today`
+- `gantt_add_column`
+- `gantt_remove_column`
+- `cycle_gantt_color_key`
+- `gantt_open_order`
+- `toggle_gantt`
+
+**Gantt order mode** (the colour dialog)
+
+- `gantt_order_move_up`
+- `gantt_order_move_down`
+- `gantt_order_move_top`
+- `gantt_order_move_bottom`
+- `gantt_order_commit`
+- `gantt_order_cancel`
+- `cycle_gantt_color_key`
 
 ---
 
@@ -360,6 +388,114 @@ left alone.
 - `s` to cycle the task sort field, `^` to flip between ascending and descending
 - `[` and `]` to move by section
 - `{` and `}` to move by project
+- `g` to draw the Gantt chart and switch to gantt mode
+
+### Gantt chart
+
+`g` in task mode draws a timeline to the right of the task table and hands the
+chart its own mode. Each task keeps its own row: one line carries the table
+cells, a divider, and the bar, so the cursor, multi-selection, and scrolling
+behave exactly as they do without it.
+
+`esc` returns to task mode with the chart still drawn. `g` again hides it.
+
+**Gantt mode shortcuts**:
+
+- `h`/`l` to scroll the timeline by a quarter of the window
+- `-` and `=` (or `+`) to zoom out and in through a ladder of spans:
+  a week, a fortnight, a month, two, three, six, a year, two, five
+- `z` to go back to fitting whatever tasks are loaded
+- `t` to bring today to the left of the window
+- `<` and `>` to show fewer or more table columns, giving the space to the chart
+- `c` to colour the bars by the next dimension
+- `enter` to open the colour dialog
+
+Zooming holds the left of the window: the date near the left edge stays where
+it is and time is added or removed at the right, so what you are looking at
+does not move and later work comes into view or leaves it. `t` works the same
+way, bringing today to the left rather than to the middle. Both leave a small
+margin — a tenth of the window — so the anchored date is not flush against the
+divider.
+
+Scrolling and zooming move a viewport over the tasks already loaded. Neither
+fetches anything or changes a filter.
+
+Reading the chart:
+
+| | |
+| --- | --- |
+| `█` | a bar, from the start date to the due date |
+| `▒` | a bar whose value did not get one of the six colours |
+| `◆` | a milestone: a due date with no start date |
+| blank | the task has no dates at all |
+| `▼` `┊` | today, on the axis and drawn through rows with no bar there |
+| `·` | an axis mark, on group heading rows |
+| `░` | a Saturday or Sunday, wherever no bar covers it |
+| `‹` `›` | the bar runs past the window, or the task is entirely outside it |
+
+The axis marks whatever it has room for. A year or a quarter is marked by
+month; zoom in until a month fits the pane and it marks weeks; again and it
+marks individual days; again and each day gets its weekday name too, so the
+axis reads `Sat 22  Sun 23  Mon 24`. Every step adds to the one below it —
+zooming in never trades the date away for the weekday. The scale follows the
+pane's width as well as the span, so a wider terminal shows finer marks at the
+same zoom, and a month boundary is always named so a run of day numbers never
+leaves you wondering which month you are in.
+
+Once there is at least one column per day, Saturdays and Sundays are shaded.
+A bar drawn across a weekend covers the shading, so what shows through is
+exactly the weekends a piece of work did not run through.
+
+Fitted, the window covers every dated task, snapped out to whole months. It is
+deliberately not stretched to include today — tasks from two years ago would
+squash into a couple of columns to make room for a marker. Press `t` to go and
+look at today instead.
+
+**The colour dialog** (`enter` from gantt mode) lists the current dimension's
+values in the order they are given colours, with a rule where the palette runs
+out. Everything below the rule is drawn in the neutral colour, and an unset
+value — an unassigned task, a task with no section — is always neutral and can
+never be moved above the rule.
+
+- `j`/`k` to move the cursor
+- `ctrl-k`/`ctrl-j` to move the selected value up or down
+- `t`/`b` to send it to the top or the bottom
+- `c` to switch dimension and rebuild the list
+- `enter` to save and close, `esc` to cancel
+
+The chart behind the dialog recolours as you move values, so you can see the
+effect before saving. Saving writes the dimension and its order into
+`tuisana.toml`; cancelling writes nothing.
+
+### Gantt configuration
+
+The optional `[gantt]` section is where the dialog's result is stored. You can
+write it by hand, but you do not have to — the keys above set all of it except
+the starting visibility and column count.
+
+```toml
+[gantt]
+visible = false          # true to draw the chart at startup
+columns = 2              # table columns kept visible beside the chart
+color_by = "assignee"    # "assignee" | "section" | "state" | "field:<Name>"
+
+[gantt.order]
+assignee = ["Alex Chen", "Morgan Ellis"]
+"field:Priority" = ["High", "Medium", "Low"]
+```
+
+- `color_by` names the dimension the bars take their colour from. A custom field
+  is written `field:<Name>` so a field actually called "Section" cannot be
+  confused with the built-in dimension. Only enumerated custom fields — ones with
+  a small fixed set of values — can be cycled to with `c`.
+- `[gantt.order]` holds one list per dimension, keyed the same way as `color_by`.
+  Values it names are coloured first, in that order; anything else follows
+  alphabetically, so re-sorting or filtering the table never repaints a bar.
+- Exactly the first six values get a colour of their own. The rest share a
+  neutral one.
+- The chart's visibility, column count, and timeline window are not saved. They
+  are view state like sort and grouping; `visible` and `columns` only set where a
+  session starts.
 
 ### Project visibility
 

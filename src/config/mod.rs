@@ -5,12 +5,13 @@
 //! source path later when persisting project visibility changes back to disk.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
+use crate::domain::GanttColorKey;
 use crate::error::{Error, Result};
 
 /// Parsed application configuration.
@@ -24,6 +25,9 @@ pub struct Config {
     #[serde(default)]
     #[serde(skip_serializing_if = "ThemeConfig::is_default")]
     pub theme: ThemeConfig,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "GanttConfig::is_default")]
+    pub gantt: GanttConfig,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
@@ -40,6 +44,7 @@ impl PartialEq for Config {
     fn eq(&self, other: &Self) -> bool {
         self.header == other.header
             && self.theme == other.theme
+            && self.gantt == other.gantt
             && self.auth == other.auth
             && self.bind == other.bind
             && self.project_visibility == other.project_visibility
@@ -51,6 +56,7 @@ impl Default for Config {
         Self {
             header: Header::default(),
             theme: ThemeConfig::default(),
+            gantt: GanttConfig::default(),
             auth: None,
             bind: default_bindings(),
             project_visibility: Vec::new(),
@@ -121,6 +127,7 @@ impl Config {
         }
 
         self.theme.validate()?;
+        self.gantt.validate()?;
 
         if let Some(auth) = &self.auth {
             auth.validate()?;
@@ -224,6 +231,106 @@ impl ThemeConfig {
     }
 }
 
+/// Gantt chart appearance settings.
+///
+/// This is the *serialization* of what the gantt and colour-dialog modes set,
+/// not the way to set them. Committing the colour dialog writes `color_by` and
+/// that dimension's `order` back here; nothing else in the section is ever
+/// written by the app.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct GanttConfig {
+    /// Whether the chart is drawn when the app starts.
+    #[serde(default)]
+    pub visible: bool,
+    /// How many table columns stay visible beside the chart.
+    #[serde(default = "default_gantt_columns")]
+    pub columns: usize,
+    /// Which dimension colours the bars, in [`GanttColorKey`]'s spelling.
+    #[serde(default = "default_gantt_color_by")]
+    pub color_by: String,
+    /// Per-dimension colour order, keyed the same way as `color_by`.
+    ///
+    /// A `BTreeMap` rather than a `HashMap` so a config the app rewrites has a
+    /// stable key order and does not churn in version control.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub order: BTreeMap<String, Vec<String>>,
+}
+
+fn default_gantt_columns() -> usize {
+    2
+}
+
+fn default_gantt_color_by() -> String {
+    "assignee".to_string()
+}
+
+impl Default for GanttConfig {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            columns: default_gantt_columns(),
+            color_by: default_gantt_color_by(),
+            order: BTreeMap::new(),
+        }
+    }
+}
+
+impl GanttConfig {
+    /// Returns `true` when nothing has been customized.
+    ///
+    /// Keeps the `[gantt]` table out of configs the app rewrites when
+    /// persisting project visibility, exactly as `[theme]` is kept out.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// The parsed colour key, falling back to the default if it is unreadable.
+    ///
+    /// Validation rejects an unparseable value at load, so the fallback only
+    /// covers a `GanttConfig` built in code rather than read from disk.
+    pub fn color_key(&self) -> GanttColorKey {
+        self.color_by
+            .parse()
+            .unwrap_or(GanttColorKey::Assignee)
+    }
+
+    /// The configured colour order for one dimension, empty when unset.
+    pub fn order_for(&self, key: &GanttColorKey) -> &[String] {
+        self.order
+            .get(&key.to_string())
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.columns == 0 {
+            return Err(Error::ConfigValidation(
+                "gantt.columns must be at least 1".to_string(),
+            ));
+        }
+
+        if self.color_by.parse::<GanttColorKey>().is_err() {
+            return Err(Error::ConfigValidation(format!(
+                "gantt.color_by must be assignee, section, state, or field:<Name>, found {}",
+                self.color_by
+            )));
+        }
+
+        // A mistyped key would otherwise sit in the file looking effective
+        // while ordering nothing.
+        for key in self.order.keys() {
+            if key.parse::<GanttColorKey>().is_err() {
+                return Err(Error::ConfigValidation(format!(
+                    "gantt.order key must be assignee, section, state, or field:<Name>, found {key}"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// Keybinding lookup context.
 ///
 /// The concrete variants represent the current UI/input state. `Any` is only
@@ -238,6 +345,8 @@ pub enum Mode {
     FilterEdit,
     Calendar,
     Task,
+    Gantt,
+    GanttOrder,
 }
 
 impl Default for Mode {
@@ -264,6 +373,8 @@ impl Mode {
             Self::FilterEdit => "filter-edit",
             Self::Calendar => "calendar",
             Self::Task => "task",
+            Self::Gantt => "gantt",
+            Self::GanttOrder => "colors",
         }
     }
 }
@@ -489,6 +600,41 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("x", Mode::Task, "clear_task_selection"),
         Bind::with_mode("ctrl-x", Mode::Task, "clear_hidden_task_selection"),
         Bind::with_mode("y", Mode::Task, "copy_tasks_to_clipboard"),
+        Bind::with_mode("g", Mode::Task, "set_gantt_mode"),
+        // Punctuation and ctrl- pairs throughout, because
+        // KeyBinding::from_crossterm_event lowercases every char: `G` and `g`
+        // are the same key, so shift+letter is not an available namespace.
+        Bind::with_mode("esc", Mode::Gantt, "set_task_mode"),
+        Bind::with_mode("g", Mode::Gantt, "toggle_gantt"),
+        Bind::with_mode("<", Mode::Gantt, "gantt_remove_column"),
+        Bind::with_mode(">", Mode::Gantt, "gantt_add_column"),
+        Bind::with_mode("c", Mode::Gantt, "cycle_gantt_color_key"),
+        // h/l are bound in project and filter-edit mode, not globally, so
+        // taking them here costs nothing. left/right stay column scrolling:
+        // two horizontal scrolls on one pane is confusing enough without the
+        // arrow keys changing meaning as well.
+        Bind::with_mode("h", Mode::Gantt, "gantt_scroll_left"),
+        Bind::with_mode("l", Mode::Gantt, "gantt_scroll_right"),
+        Bind::with_mode("-", Mode::Gantt, "gantt_zoom_out"),
+        Bind::with_mode("=", Mode::Gantt, "gantt_zoom_in"),
+        Bind::with_mode("+", Mode::Gantt, "gantt_zoom_in"),
+        Bind::with_mode("z", Mode::Gantt, "gantt_zoom_fit"),
+        // `t` is today here rather than set_task_mode, which is what esc is
+        // for. Mode::Calendar already binds `t` to today, so the picker and
+        // the chart agree.
+        Bind::with_mode("t", Mode::Gantt, "gantt_today"),
+        Bind::with_mode("enter", Mode::Gantt, "gantt_open_order"),
+        // j/k are bound here so they shadow the global cursor movement; the
+        // dialog still falls back to the globals for ?, r, and q.
+        Bind::with_mode("j", Mode::GanttOrder, "move_down"),
+        Bind::with_mode("k", Mode::GanttOrder, "move_up"),
+        Bind::with_mode("ctrl-j", Mode::GanttOrder, "gantt_order_move_down"),
+        Bind::with_mode("ctrl-k", Mode::GanttOrder, "gantt_order_move_up"),
+        Bind::with_mode("t", Mode::GanttOrder, "gantt_order_move_top"),
+        Bind::with_mode("b", Mode::GanttOrder, "gantt_order_move_bottom"),
+        Bind::with_mode("c", Mode::GanttOrder, "cycle_gantt_color_key"),
+        Bind::with_mode("enter", Mode::GanttOrder, "gantt_order_commit"),
+        Bind::with_mode("esc", Mode::GanttOrder, "gantt_order_cancel"),
     ]
 }
 
@@ -937,7 +1083,150 @@ mod tests {
 
 #[cfg(test)]
 mod theme_config_tests {
-    use super::{Config, ThemeConfig, ThemeGlyphs, ThemeVariant};
+    use super::{Config, GanttConfig, ThemeConfig, ThemeGlyphs, ThemeVariant};
+    use crate::domain::GanttColorKey;
+
+    #[test]
+    fn parses_the_gantt_section() {
+        let config = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 1.0
+
+[gantt]
+visible = true
+columns = 4
+color_by = "field:Priority"
+
+[gantt.order]
+assignee = ["Alex Chen", "Priya Raman"]
+"field:Priority" = ["High", "Low"]
+"#,
+        )
+        .expect("gantt config parses");
+
+        assert!(config.gantt.visible);
+        assert_eq!(config.gantt.columns, 4);
+        assert_eq!(
+            config.gantt.color_key(),
+            GanttColorKey::Field("Priority".to_string())
+        );
+        assert_eq!(
+            config.gantt.order_for(&GanttColorKey::Field("Priority".to_string())),
+            ["High".to_string(), "Low".to_string()]
+        );
+        assert_eq!(
+            config.gantt.order_for(&GanttColorKey::Assignee),
+            ["Alex Chen".to_string(), "Priya Raman".to_string()]
+        );
+        assert!(
+            config.gantt.order_for(&GanttColorKey::Section).is_empty(),
+            "an unmentioned dimension has no order"
+        );
+    }
+
+    #[test]
+    fn an_omitted_gantt_section_falls_back_to_the_defaults() {
+        let config = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 1.0
+"#,
+        )
+        .expect("config parses");
+
+        assert_eq!(config.gantt, GanttConfig::default());
+        assert!(config.gantt.is_default());
+        assert!(!config.gantt.visible, "the chart is off until asked for");
+    }
+
+    #[test]
+    fn gantt_defaults_are_omitted_when_the_config_is_serialized() {
+        // The app rewrites the whole file when a project is starred, so an
+        // untouched section must not start appearing in the user's config.
+        let serialized = toml::to_string_pretty(&Config::default()).expect("serializes");
+
+        assert!(!serialized.contains("[gantt]"), "{serialized}");
+    }
+
+    #[test]
+    fn a_customized_gantt_section_survives_a_serialize_round_trip() {
+        let mut config = Config::default();
+        config.gantt.color_by = "section".to_string();
+        config.gantt.order.insert(
+            "section".to_string(),
+            vec!["Shipment".to_string(), "Study Kit Design".to_string()],
+        );
+
+        let serialized = toml::to_string_pretty(&config).expect("serializes");
+        let parsed = Config::from_toml_str(&serialized).expect("reparses");
+
+        assert_eq!(parsed.gantt, config.gantt);
+    }
+
+    #[test]
+    fn rejects_a_gantt_color_by_that_names_no_dimension() {
+        let error = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 1.0
+
+[gantt]
+color_by = "priority"
+"#,
+        )
+        .expect_err("an unknown dimension is rejected");
+
+        assert!(
+            error.to_string().contains("gantt.color_by"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_mistyped_gantt_order_key() {
+        // Left unchecked this sits in the file looking effective while
+        // ordering nothing.
+        let error = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 1.0
+
+[gantt.order]
+assigne = ["Alex Chen"]
+"#,
+        )
+        .expect_err("a mistyped key is rejected");
+
+        assert!(
+            error.to_string().contains("gantt.order"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_gantt_column_count_of_zero() {
+        let error = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 1.0
+
+[gantt]
+columns = 0
+"#,
+        )
+        .expect_err("zero columns is rejected");
+
+        assert!(
+            error.to_string().contains("gantt.columns"),
+            "unexpected error: {error}"
+        );
+    }
 
     #[test]
     fn theme_defaults_are_omitted_when_the_config_is_serialized() {

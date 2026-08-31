@@ -8,11 +8,9 @@
 //! The dates themselves, and the local-timezone [`today`], live in
 //! [`crate::domain::date`]. This module only decides how they read.
 
-pub use crate::domain::date::{today, CivilDate};
+pub use crate::domain::date::{month_name, today, CivilDate};
 
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
+use crate::domain::date::MONTHS;
 
 /// How urgently a date wants the reader's attention.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,11 +66,6 @@ pub fn format_relative(value: &str, today: CivilDate) -> RelativeDate {
     };
 
     RelativeDate { text, urgency }
-}
-
-/// The month's name, as shown on the calendar overlay's header.
-pub fn month_name(month: u32) -> &'static str {
-    MONTHS[((month - 1) as usize).min(11)]
 }
 
 #[cfg(test)]

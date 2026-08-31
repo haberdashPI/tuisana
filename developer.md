@@ -14,11 +14,13 @@ This file is the quickest way to understand the codebase without reading everyth
 8. `src/app.rs` owns top-level app mode, pane sizing, and task loading.
 9. `src/app/project_list.rs` manages project list state and selection behavior.
 10. `src/app/task.rs` manages task state, filters, sorting, and task-table data.
+11. `src/domain/gantt.rs` maps dates to chart columns and values to colours.
+12. `src/app/gantt.rs` owns the chart's session state and the colour dialog.
 
 The async task-data path is split across two modules:
 
 - `src/app.rs` owns the request lifecycle, generation tracking, and polling
-- `src/app/task_review.rs` owns the cached dataset, filters, and table rebuilds
+- `src/app/task.rs` owns the cached dataset, filters, and table rebuilds
 
 ## Reading Order
 
@@ -34,6 +36,13 @@ If you are trying to understand one user interaction end-to-end, read in this or
    - `src/app/task.rs` for task filtering, sorting, and navigation
 7. The matching UI module in `src/ui/` if you need to understand rendering details.
 
+The Gantt chart is the one renderer that does not own a region of the screen.
+`src/ui/gantt.rs` returns spans that `src/ui/task_table.rs` appends to each
+row's own `Line`, so a task and its bar are one line. That is what lets the
+cursor highlight, zebra striping, and vertical scroll cover the chart without
+knowing it exists — and why "one line per row" is a hard invariant rather than
+a convention.
+
 ## Core Concepts
 
 - `App` is the top-level state machine.
@@ -42,14 +51,28 @@ If you are trying to understand one user interaction end-to-end, read in this or
 - `Domain` owns the core data models and rules orchestration built on top of them.
 - `request_task_data` starts an async fetch; `poll_task_data` merges the results.
 - `Action` is the shared input vocabulary.
-- `KeyMap` is built from config bindings and resolves keys to actions.
+- `KeyMap` is built from config bindings and resolves keys to actions. A binding
+  with a `mode` shadows the global one, which is how `c`, `t`, and `h`/`l` mean
+  different things in different modes.
+- `Mode::Gantt` and `Mode::GanttOrder` drive the chart and its colour dialog.
+  Both are siblings of `Mode::Task`: the same pane, the same rows, different
+  keys. Both allow the `Any` fallback, so `j`/`k`, `q`, and `?` keep working.
+- `GanttViewState` is the chart's session state; only its colour order is ever
+  written back to config.
 - `FakeAsanaClient` is the test backend for deterministic state transitions.
 
 ## Common Change Paths
 
 - To add or rename a shortcut, update `src/input/mod.rs`, `src/config/mod.rs`, and any help text that mentions the key.
 - To change project-list behavior, update `src/app/project_list.rs` and the project list renderer in `src/ui/project_list.rs`.
-- To change task-review behavior, update `src/app/task_review.rs` and the task table renderer in `src/ui/task_table.rs`.
+- To change task-review behavior, update `src/app/task.rs` and the task table renderer in `src/ui/task_table.rs`.
+- To change the Gantt chart, start in `src/domain/gantt.rs` for anything about
+  dates or colour assignment, and `src/ui/gantt.rs` for how it is drawn. The
+  split between the table columns and the chart lives in `split_pane` in
+  `src/ui/task_table.rs`.
+- Snapshots in `tests/snapshots/` are the visual regression guard. Run
+  `UPDATE_SNAPSHOTS=1 cargo test --test ui_snapshot` and read the diff before
+  committing it.
 - To change how input is dispatched, update `src/ui/runtime.rs` and `src/app.rs`.
 
 ## Testing Strategy

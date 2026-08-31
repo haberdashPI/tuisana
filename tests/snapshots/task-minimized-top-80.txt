@@ -11,6 +11,11 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
 ┃                               No tasks loaded                                ┃
 ┃                        select projects, then press t                         ┃
 ┃                                                                              ┃
@@ -25,6 +30,11 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ⏎ open   ␣ select   f filters   s sort             r refresh   q quit
+j/k move   ⏎ open   ␣ select   f filters   s sort   g gantt   r refresh   q quit
  TASK

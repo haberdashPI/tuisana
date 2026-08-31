@@ -1,30 +1,40 @@
- TUISANA  ▸ 1 project ▸ 4 tasks
-┌ Projects ─────────────────────────────────────────────────────────┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓───────────────────────────────────────────── 3 shown · 1 selected ┐
-│  ● ★ Northwind BTX 4412                                           ┃Tasks                            Move                         ┃                                                                   │
-│▍   ★ Platform Infrastructure                                      ┃⏎           open in Asana        j/k         down / up        ┃                                                                   │
-│    ☆ Backlog                                                      ┃␣           select               ^d/^u       page down / up   ┃                                                                   │
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                                                                                                                                              │
+│▍   ★ Platform Infrastructure                                                                                                                                                                         │
+│    ☆ Backlog                                                                                                                                                                                         │
+│                                                                                                                                                                                                      │
+│                                                                   ┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                                                                   │
+│                                                                   ┃Tasks                            Move                         ┃                                                                   │
+│                                                                   ┃⏎           open in Asana        j/k         down / up        ┃                                                                   │
+│                                                                   ┃␣           select               ^d/^u       page down / up   ┃                                                                   │
 │                                                                   ┃a           select all           home/end    top / bottom     ┃                                                                   │
-│                                                                   ┃i           invert                                            ┃                                                                   │
-│                                                                   ┃x           clear                Modes                        ┃                                                                   │
-│                                                                   ┃^x          clear hidden         p           projects         ┃                                                                   │
-│                                                                   ┃y           copy links           f           filters          ┃                                                                   │
-│                                                                   ┃                                 t           tasks            ┃                                                                   │
-└───────────────────────────────────────────────────────────────────┃Group & sort                     m           toggle tasks     ┃───────────────────────────────────────────────────────────────────┘
-┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃[/]         jump section                                      ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4 tasks · row 1 ┓
-┃   Task                                                            ┃{/}         jump project         Panes                        ┃     │    Due▲ │ Start │ St │ Projects           │ Priority        ┃
-┃                                                                   ┃,           group by project     0           restore          ┃                                                                   ┃
-┃▌Northwind BTX 4412 ───────────────────────────────────────────────┃.           group by section                                  ┃───────────────────────────────────────────────────────────────────┃
-┃                                                                   ┃s           cycle sort field     App                          ┃                                                                   ┃
-┃   Study Kit Design ···············································┃^           asc / desc           r           refresh          ┃···································································┃
-┃▍  Review shipment requirements doc                                ┃                                 q ^c        quit             ┃vine │ !Aug 19 │ Aug 4 │ ○  │ Northwind BTX 4412 │ High            ┃
-┃   Ship release candidate to the study team                        ┃View                             ?           close this help  ┃n    │   Today │ Aug 4 │ ○  │ Northwind BTX 4412 │ High            ┃
-┃   Confirm carrier pickup window with the vendor                   ┃f           filter panel                                      ┃     │     Wed │ Aug 4 │ ○  │ Northwind BTX 4412 │ —               ┃
-┃                                                                   ┃c           open / done / all                                 ┃                                                                   ┃
-┃   Shipment ·······················································┃z           subtasks                                          ┃···································································┃
-┃   Close out packaging vendor contract                             ┃left/right  scroll columns                                    ┃n    │  Nov 14 │ Aug 4 │ ○  │ Northwind BTX 4412 │ Low             ┃
-┃                                                                   ┃                                                              ┃                                                                   ┃
+└───────────────────────────────────────────────────────────────────┃i           invert                                            ┃───────────────────────────────────────────────────────────────────┘
+┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃x           clear                Modes                        ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11 tasks · row 1 ┓
+┃   Task                                                            ┃^x          clear hidden         p           projects         ┃     │    Due▲ │  Start │ St │ Projects           │ Priority       ┃
+┃                                                                   ┃y           copy links           f           filters          ┃                                                                   ┃
+┃▌Northwind BTX 4412 ───────────────────────────────────────────────┃                                 t           tasks            ┃───────────────────────────────────────────────────────────────────┃
+┃                                                                   ┃Group & sort                     m           toggle tasks     ┃                                                                   ┃
+┃   Study Kit Design ···············································┃[/]         jump section                                      ┃···································································┃
+┃▍  Draft the assay validation protocol                             ┃{/}         jump project         Panes                        ┃man  │ !Jul 10 │ Jun 15 │ ○  │ Northwind BTX 4412 │ High           ┃
+┃   Review shipment requirements doc                                ┃,           group by project     0           restore          ┃vine │ !Aug 19 │  Aug 3 │ ○  │ Northwind BTX 4412 │ High           ┃
+┃   Ship release candidate to the study team                        ┃.           group by section                                  ┃n    │   Today │ Aug 10 │ ○  │ Northwind BTX 4412 │ High           ┃
+┃   Confirm carrier pickup window with the vendor                   ┃s           cycle sort field     App                          ┃     │     Wed │ Aug 17 │ ○  │ Northwind BTX 4412 │ —              ┃
+┃   Update the sample intake SOP                                    ┃^           asc / desc           r           refresh          ┃rez  │   Sep 4 │ Aug 20 │ ○  │ Northwind BTX 4412 │ Medium         ┃
+┃   Qualify the second reagent supplier                             ┃                                 q ^c        quit             ┃z    │  Sep 12 │  Jul 1 │ ○  │ Northwind BTX 4412 │ Medium         ┃
+┃                                                                   ┃View                             ?           close this help  ┃                                                                   ┃
+┃   Shipment ·······················································┃g           gantt chart                                       ┃···································································┃
+┃   Book the courier for the pilot run                              ┃f           filter panel                                      ┃or   │  Sep 15 │  Sep 1 │ ○  │ Northwind BTX 4412 │ Low            ┃
+┃   Label the retention samples                                     ┃c           open / done / all                                 ┃     │   Oct 9 │      — │ ○  │ Northwind BTX 4412 │ Medium         ┃
+┃   Reconcile the freight invoices                                  ┃z           subtasks                                          ┃x    │  Oct 30 │ Sep 20 │ ○  │ Northwind BTX 4412 │ Low            ┃
+┃   Close out packaging vendor contract                             ┃left/right  scroll columns                                    ┃n    │  Nov 14 │  Oct 1 │ ○  │ Northwind BTX 4412 │ Low            ┃
+┃   Close the quarter's shipping report                             ┃                                                              ┃man  │  Dec 18 │  Nov 2 │ ○  │ Northwind BTX 4412 │ Low            ┃
 ┃                                                                   ┃                                                    ? to close┃                                                                   ┃
 ┃                                                                   ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                                                                   ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ⏎ open   ␣ select   f filters   s sort   c completed   ? help                                                                                                              r refresh   q quit
+j/k move   ⏎ open   ␣ select   f filters   s sort   g gantt   c completed   ? help                                                                                                    r refresh   q quit
  TASK

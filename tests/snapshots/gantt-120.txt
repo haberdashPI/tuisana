@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                                                              │
+│▍   ★ Platform Infrastructure                                                                                         │
+│    ☆ Backlog                                                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11 tasks · row 1 ┓
+┃   Task                                          │ Assignee     │ Jun    Jul    Aug   ▼ Sep    Oct     Nov    Dec     ┃
+┃                                                                                                                      ┃
+┃▌Northwind BTX 4412 ─────────────────────────────────────────── │ ·      ·      ·     ┊ ·      ·       ·      ·       ┃
+┃                                                                                                                      ┃
+┃   Study Kit Design ··········································· │ ·      ·      ·     ┊ ·      ·       ·      ·       ┃
+┃▍  Draft the assay validation protocol           │ Priya Raman  │    ██████           ┊                               ┃
+┃   Review shipment requirements doc              │ Morgan Ellis │                ▒▒▒▒ ┊                               ┃
+┃   Ship release candidate to the study team      │ Alex Chen    │                  ███┊                               ┃
+┃   Confirm carrier pickup window with the vendor │ —            │                   ▒▒▒                               ┃
+┃   Update the sample intake SOP                  │ Kim Alvarez  │                    ████                             ┃
+┃   Qualify the second reagent supplier           │ Dana Ruiz    │        ██████████████████                           ┃
+┃                                                                                                                      ┃
+┃   Shipment ··················································· │ ·      ·      ·     ┊ ·      ·       ·      ·       ┃
+┃   Book the courier for the pilot run            │ Sam Okafor   │                     ┊ ▒▒▒▒                          ┃
+┃   Label the retention samples                   │ Jo Park      │                     ┊          ◆                    ┃
+┃   Reconcile the freight invoices                │ Robin Fox    │                     ┊     ██████████                ┃
+┃   Close out packaging vendor contract           │ Alex Chen    │                     ┊        ███████████            ┃
+┃   Close the quarter's shipping report           │ Priya Raman  │                     ┊                ███████████    ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Priya Raman  █ Robin Fox  ▒ other ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+h/l scroll   -/+ zoom   t today   </> columns   c color   ⏎ order   g close   ? help                  r refresh   q quit
+ GANTT                                                                              gantt · color assignee · columns 2/7

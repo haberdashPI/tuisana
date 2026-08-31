@@ -24,8 +24,8 @@ use crate::{
     input::KeyMap,
     ui::{
         chrome::{self, Chip, Tone},
-        calendar, filter_panel, help_overlay, hints, layout, project_list,
-        task_table::{self, TaskTableView, GUTTER_WIDTH},
+        calendar, filter_panel, gantt, gantt_order, help_overlay, hints, layout, project_list,
+        task_table::{self, TaskTableView},
         theme::Theme,
     },
 };
@@ -94,7 +94,7 @@ fn classify(event: Event) -> InputEvent {
 /// "where do my keys go" is visible at both ends of the screen.
 fn focused_pane(mode: Mode) -> FocusedPane {
     match mode {
-        Mode::Task => FocusedPane::Task,
+        Mode::Task | Mode::Gantt | Mode::GanttOrder => FocusedPane::Task,
         Mode::Project
         | Mode::ProjectSearch
         | Mode::Filter
@@ -141,11 +141,7 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
             // Resolved before drawing so the hint bar can tell whether there
             // are columns off-screen worth mentioning.
             let task_view = regions.task_pane.map(|area| {
-                task_table::render_task_table(
-                    &app.tasks,
-                    (pane_inner(area).width as usize).saturating_sub(GUTTER_WIDTH),
-                    &theme,
-                )
+                task_table::render_task_table(&app.tasks, pane_inner(area).width as usize, &theme)
             });
 
             if let (Some(area), Some(view)) = (regions.task_pane, task_view.as_ref()) {
@@ -176,6 +172,8 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
             // via `?`, so asking for it has to actually show it.
             if help_visible(app, mode) {
                 help_overlay::render(frame, regions.body, &theme, keymap, mode);
+            } else if let Some(dialog) = app.tasks.gantt().dialog() {
+                gantt_order::render(frame, regions.body, &theme, keymap, dialog);
             } else if let Some(view) = calendar::calendar_view(app.tasks.filter_calendar()) {
                 calendar::render(frame, regions.body, &theme, &view);
             }
@@ -187,7 +185,12 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
 /// inline help used before.
 fn help_visible<C: AsanaClient + Clone + Send + 'static>(app: &App<C>, mode: Mode) -> bool {
     match mode {
-        Mode::Task | Mode::Filter | Mode::FilterEdit | Mode::Calendar => {
+        Mode::Task
+        | Mode::Gantt
+        | Mode::GanttOrder
+        | Mode::Filter
+        | Mode::FilterEdit
+        | Mode::Calendar => {
             app.tasks.help_details_visible()
         }
         Mode::Project | Mode::ProjectSearch | Mode::Any => app.projects.help_details_visible(),
@@ -253,6 +256,7 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
         can_scroll: task_view.is_some_and(|view| view.max_scroll > 0),
         on_label_filter: app.tasks.filter_selected_is_labels(),
         on_date_range: app.tasks.filter_calendar_is_range(),
+        timeline_windowed: app.tasks.gantt().timeline_windowed(),
     };
 
     let line = hints::hint_line(
@@ -346,7 +350,18 @@ fn render_task_pane<C: AsanaClient + Clone + Send + 'static>(
     focused: bool,
     view: &TaskTableView,
 ) -> usize {
-    let block = chrome::pane_block(theme, focused, mode, &view.title, &view.counts);
+    let mut block = chrome::pane_block(theme, focused, mode, &view.title, &view.counts);
+    // The legend rides the bottom border, so turning the chart on costs no
+    // body lines and reflows nothing.
+    if let Some(chart) = &view.chart {
+        // Two cells for the border and two for the spaces that keep the
+        // legend off it, matching how pane_block pads its title chips.
+        let width = area.width.saturating_sub(4) as usize;
+        let mut spans = vec![ratatui::text::Span::raw(" ")];
+        spans.extend(gantt::legend_line(chart, theme, width).spans);
+        spans.push(ratatui::text::Span::raw(" "));
+        block = block.title_bottom(ratatui::text::Line::from(spans).left_aligned());
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

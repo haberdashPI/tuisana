@@ -1,4 +1,4 @@
- TUISANA  ▸ 1 project ▸ 4 tasks
+ TUISANA  ▸ 1 project ▸ 11 tasks
 ┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃▍   Title     fuzzy     —                                                                                                                                                                             ┃
 ┃    Assignee  contains  —                                                                                                                                                                             ┃
@@ -10,18 +10,28 @@
 ┃                                                                                                                                                                                                      ┃
 ┃                                                                                                                                                                                                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-┌ Tasks ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 4 tasks · row 1 ┐
-│   Task                                                                                                                  │ Assignee     │    Due▲ │ Start │ St │ Projects           │ Priority        │
+┌ Tasks ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 11 tasks · row 1 ┐
+│   Task                                                                                                                  │ Assignee     │    Due▲ │  Start │ St │ Projects           │ Priority       │
 │                                                                                                                                                                                                      │
 │▌Northwind BTX 4412 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│
 │                                                                                                                                                                                                      │
 │   Study Kit Design ··················································································································································································│
-│▍  Review shipment requirements doc                                                                                      │ Morgan Ellis │ !Aug 19 │ Aug 4 │ ○  │ Northwind BTX 4412 │ High            │
-│   Ship release candidate to the study team                                                                              │ Alex Chen    │   Today │ Aug 4 │ ○  │ Northwind BTX 4412 │ High            │
-│   Confirm carrier pickup window with the vendor                                                                         │ —            │     Wed │ Aug 4 │ ○  │ Northwind BTX 4412 │ —               │
+│▍  Draft the assay validation protocol                                                                                   │ Priya Raman  │ !Jul 10 │ Jun 15 │ ○  │ Northwind BTX 4412 │ High           │
+│   Review shipment requirements doc                                                                                      │ Morgan Ellis │ !Aug 19 │  Aug 3 │ ○  │ Northwind BTX 4412 │ High           │
+│   Ship release candidate to the study team                                                                              │ Alex Chen    │   Today │ Aug 10 │ ○  │ Northwind BTX 4412 │ High           │
+│   Confirm carrier pickup window with the vendor                                                                         │ —            │     Wed │ Aug 17 │ ○  │ Northwind BTX 4412 │ —              │
+│   Update the sample intake SOP                                                                                          │ Kim Alvarez  │   Sep 4 │ Aug 20 │ ○  │ Northwind BTX 4412 │ Medium         │
+│   Qualify the second reagent supplier                                                                                   │ Dana Ruiz    │  Sep 12 │  Jul 1 │ ○  │ Northwind BTX 4412 │ Medium         │
 │                                                                                                                                                                                                      │
 │   Shipment ··························································································································································································│
-│   Close out packaging vendor contract                                                                                   │ Alex Chen    │  Nov 14 │ Aug 4 │ ○  │ Northwind BTX 4412 │ Low             │
+│   Book the courier for the pilot run                                                                                    │ Sam Okafor   │  Sep 15 │  Sep 1 │ ○  │ Northwind BTX 4412 │ Low            │
+│   Label the retention samples                                                                                           │ Jo Park      │   Oct 9 │      — │ ○  │ Northwind BTX 4412 │ Medium         │
+│   Reconcile the freight invoices                                                                                        │ Robin Fox    │  Oct 30 │ Sep 20 │ ○  │ Northwind BTX 4412 │ Low            │
+│   Close out packaging vendor contract                                                                                   │ Alex Chen    │  Nov 14 │  Oct 1 │ ○  │ Northwind BTX 4412 │ Low            │
+│   Close the quarter's shipping report                                                                                   │ Priya Raman  │  Dec 18 │  Nov 2 │ ○  │ Northwind BTX 4412 │ Low            │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │

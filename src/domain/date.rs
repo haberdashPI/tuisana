@@ -16,6 +16,19 @@
 /// Weekday names, indexed from Monday.
 pub const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+/// Month abbreviations, indexed from January.
+pub const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// The month's abbreviated name, for a 1-based month number.
+///
+/// Out-of-range months clamp to December rather than panicking: a half-typed
+/// year in the calendar's text can reach here.
+pub fn month_name(month: u32) -> &'static str {
+    MONTHS[((month.max(1) - 1) as usize).min(11)]
+}
+
 /// A calendar date with no time or zone attached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CivilDate {

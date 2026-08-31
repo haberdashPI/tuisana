@@ -16,10 +16,11 @@ use ratatui::text::{Line, Span};
 
 use crate::{
     app::task::{TaskState, TaskStatus},
-    domain::{TaskRowKind, TaskSortField},
+    domain::{month_name, GanttModel, TaskRowKind, TaskSortField, TimelineView},
     ui::{
         chrome::{Chip, PaneMessage, Tone},
         date::{self, Urgency},
+        gantt,
         text::{
             fill, pad_cell, pad_cell_centered, pad_cell_right_aligned, pad_spans, slice_spans,
             spans_width, visible_width,
@@ -34,6 +35,13 @@ pub const GUTTER_WIDTH: usize = 3;
 const COLUMN_SEPARATOR_WIDTH: usize = 3;
 /// Share of the viewport the title column may occupy.
 const TITLE_SHARE: f64 = 0.6;
+/// Smallest chart worth drawing. Below this the bars say nothing.
+const MIN_CHART_WIDTH: usize = 24;
+/// Most of the pane the table columns may take when the chart is drawn.
+///
+/// The title column has no natural maximum, so one long task name would
+/// otherwise squeeze the chart down to [`MIN_CHART_WIDTH`] and keep it there.
+const COLUMNS_SHARE: f64 = 0.6;
 
 /// Horizontal alignment of a cell within its column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,6 +190,13 @@ pub struct TaskTableView {
     pub counts: Vec<Chip>,
     /// Set when there are no rows, explaining why.
     pub message: Option<PaneMessage>,
+    /// The Gantt chart drawn to the right of the columns, when it is on and
+    /// the pane is wide enough for it.
+    pub chart: Option<GanttModel>,
+    /// How many cells the chart is drawn across.
+    pub chart_width: usize,
+    /// How many of the table's columns are being drawn.
+    pub visible_columns: usize,
 }
 
 impl TaskTableView {
@@ -203,17 +218,85 @@ impl TaskTableView {
         }
         self
     }
+
+    /// Says so when the chart was asked for but could not be drawn.
+    ///
+    /// Silently omitting it would read as a broken toggle.
+    fn with_narrow_chart_warning(mut self, too_narrow: bool) -> Self {
+        if too_narrow {
+            self.counts
+                .push(Chip::toned("gantt too narrow", Tone::Warn));
+        }
+        self
+    }
+}
+
+/// How the pane's interior is divided between columns and chart.
+struct Split {
+    /// Cells for the table columns, after the gutter.
+    columns: usize,
+    /// Cells for the chart, zero when it is not drawn.
+    chart: usize,
+    /// How many of the table's columns are being drawn.
+    visible_columns: usize,
+    /// Set when the chart is on but the pane is too narrow for it.
+    too_narrow: bool,
+}
+
+/// Divides the pane's interior between the table columns and the chart.
+///
+/// With the chart off this is the behaviour that shipped before it existed:
+/// every column, and the whole interior after the gutter. With it on, the
+/// columns take only what the visible ones need and the chart takes the rest,
+/// so widening the terminal grows the chart rather than padding the table.
+fn split_pane(
+    state: &TaskState,
+    natural: &[usize],
+    inner_width: usize,
+    total_columns: usize,
+) -> Split {
+    let available = inner_width.saturating_sub(GUTTER_WIDTH);
+    let all = Split {
+        columns: available,
+        chart: 0,
+        visible_columns: total_columns,
+        too_narrow: false,
+    };
+
+    if !state.gantt().visible() {
+        return all;
+    }
+
+    let visible_columns = state.gantt().columns(total_columns);
+    let budget = available.saturating_sub(COLUMN_SEPARATOR_WIDTH + MIN_CHART_WIDTH);
+    if budget == 0 {
+        return Split {
+            too_narrow: true,
+            ..all
+        };
+    }
+
+    // The columns get what they naturally need, capped so the chart keeps its
+    // minimum and its fair share. A column squeezed out by the cap is still
+    // reachable with the existing horizontal scroll.
+    let wanted = total_width(&natural[..visible_columns.min(natural.len())]);
+    let share = ((available as f64) * COLUMNS_SHARE).floor() as usize;
+    let columns = wanted.clamp(1, budget.min(share).max(1));
+
+    Split {
+        columns,
+        chart: available - columns - COLUMN_SEPARATOR_WIDTH,
+        visible_columns,
+        too_narrow: false,
+    }
 }
 
 /// Resolves the task state into a drawable snapshot.
 ///
-/// `columns_width` is the space available to the columns themselves, i.e. the
-/// pane's inner width minus [`GUTTER_WIDTH`].
-pub fn render_task_table(
-    state: &TaskState,
-    columns_width: usize,
-    theme: &Theme,
-) -> TaskTableView {
+/// `inner_width` is the pane's whole interior. The split between table columns
+/// and chart is decided here, because this is the only place that knows both
+/// the columns' natural widths and whether the chart is on.
+pub fn render_task_table(state: &TaskState, inner_width: usize, theme: &Theme) -> TaskTableView {
     let model = state.table();
     let today = date::today();
     let sort_field = primary_sort_field(state);
@@ -243,9 +326,35 @@ pub fn render_task_table(
         .map(|row| resolve_row(row, today, theme))
         .collect::<Vec<_>>();
 
-    let column_widths = column_widths(&headers, &rows, columns_width);
+    let split = split_pane(
+        state,
+        &natural_widths(&headers, &rows),
+        inner_width,
+        headers.len(),
+    );
+
+    let headers = headers
+        .into_iter()
+        .take(split.visible_columns)
+        .collect::<Vec<_>>();
+    let fit = match split.chart {
+        0 => TitleFit::Share(TITLE_SHARE),
+        _ => TitleFit::Exact,
+    };
+    let column_widths = column_widths(&headers, &rows, split.columns, fit);
     let total_width = total_width(&column_widths);
-    let max_scroll = total_width.saturating_sub(columns_width);
+    let max_scroll = total_width.saturating_sub(split.columns);
+
+    let chart = (split.chart > 0).then(|| {
+        GanttModel::build(
+            model,
+            state.gantt().color_key(),
+            state.gantt().order(),
+            state.gantt().timeline(),
+            split.chart,
+            today,
+        )
+    });
 
     TaskTableView {
         title: "Tasks".to_string(),
@@ -266,13 +375,16 @@ pub fn render_task_table(
         counts: counts(state),
         message: message(state, rows.is_empty()),
         rows,
+        chart,
+        chart_width: split.chart,
+        visible_columns: split.visible_columns,
     }
     .with_scroll_count()
+    .with_narrow_chart_warning(split.too_narrow)
 }
 
 /// Renders the header row: bold, underlined, and marked with the sort column.
 pub fn task_header_line(view: &TaskTableView, theme: &Theme, width: usize) -> Line<'static> {
-    let columns_width = width.saturating_sub(GUTTER_WIDTH);
     let mut spans = vec![Span::styled(" ".repeat(GUTTER_WIDTH), theme.header)];
 
     let header_cells = view
@@ -282,9 +394,44 @@ pub fn task_header_line(view: &TaskTableView, theme: &Theme, width: usize) -> Li
         .collect::<Vec<_>>();
 
     let cells = cell_spans(&header_cells, view, theme, true);
-    spans.extend(slice_spans(&cells, view.scroll_offset, columns_width));
+    spans.extend(slice_spans(
+        &cells,
+        view.scroll_offset,
+        columns_width(view, width),
+    ));
+
+    // The axis is deliberately outside the header band: a reversed strip of
+    // month names reads as a second table header rather than as a ruler.
+    if let Some(chart) = &view.chart {
+        let mut spans = Line::from(spans).style(theme.header).spans;
+        spans.extend(divider(theme));
+        spans.extend(gantt::axis_spans(chart, theme, view.chart_width));
+        return Line::from(spans);
+    }
 
     Line::from(spans).style(theme.header)
+}
+
+/// Cells available to the table columns on one line of the pane.
+fn columns_width(view: &TaskTableView, width: usize) -> usize {
+    width.saturating_sub(GUTTER_WIDTH + view.chart_width + chart_gap(view))
+}
+
+/// Cells the divider costs, or zero when there is no chart.
+fn chart_gap(view: &TaskTableView) -> usize {
+    match view.chart {
+        Some(_) => COLUMN_SEPARATOR_WIDTH,
+        None => 0,
+    }
+}
+
+/// The rule separating the table columns from the chart.
+fn divider(theme: &Theme) -> Vec<Span<'static>> {
+    vec![
+        Span::raw(" "),
+        Span::styled(theme.glyphs.column_rule.to_string(), theme.border),
+        Span::raw(" "),
+    ]
 }
 
 /// Renders the table body, one line per row.
@@ -294,23 +441,38 @@ pub fn task_body_lines(
     theme: &Theme,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let columns_width = width.saturating_sub(GUTTER_WIDTH);
+    let columns = columns_width(view, width);
+    // A group heading's rule stops at the divider, so the chart region stays a
+    // chart even on a heading line.
+    let table_width = width.saturating_sub(view.chart_width + chart_gap(view));
     let mut lines = Vec::with_capacity(view.rows.len());
     let mut task_ordinal = 0usize;
 
     for (index, row) in view.rows.iter().enumerate() {
         let line = match row.kind {
             // Spacers exist to give the eye a break between groups; drawing
-            // column rules through them defeats that.
+            // column rules through them defeats that, and so would drawing
+            // gridlines past the divider.
             TaskRowKind::ProjectSeparator | TaskRowKind::SectionSpacer => {
                 Line::from(Span::raw(" ".repeat(width)))
             }
-            TaskRowKind::ProjectHeader => group_header_line(&row.label, theme, width, true),
-            TaskRowKind::SectionHeader => group_header_line(&row.label, theme, width, false),
+            TaskRowKind::ProjectHeader => with_chart(
+                group_header_line(&row.label, theme, table_width, true),
+                view,
+                theme,
+                None,
+            ),
+            TaskRowKind::SectionHeader => with_chart(
+                group_header_line(&row.label, theme, table_width, false),
+                view,
+                theme,
+                None,
+            ),
             TaskRowKind::Task => {
                 let is_cursor = Some(index) == cursor_index;
                 let is_selected = view.selected_task_ids.contains(&row.gid);
-                let line = task_line(row, view, theme, columns_width, is_cursor, is_selected);
+                let line = task_line(row, view, theme, columns, is_cursor, is_selected);
+                let line = with_chart(line, view, theme, Some(index));
                 task_ordinal += 1;
                 decorate_task_line(line, theme, is_cursor, task_ordinal)
             }
@@ -319,6 +481,34 @@ pub fn task_body_lines(
     }
 
     lines
+}
+
+/// Appends the divider and this row's chart cells.
+///
+/// The chart joins the row's own `Line` rather than being drawn as a second
+/// widget, which is what makes the cursor background, the zebra stripe, and
+/// the vertical scroll cover the bar without any of them knowing it exists.
+///
+/// `row_index` is `None` for group headings, which get gridlines instead of a
+/// track: one mark per month on every task row is noise on exactly the rows
+/// the reader is following.
+fn with_chart(
+    line: Line<'static>,
+    view: &TaskTableView,
+    theme: &Theme,
+    row_index: Option<usize>,
+) -> Line<'static> {
+    let Some(chart) = &view.chart else {
+        return line;
+    };
+
+    let mut spans = line.spans;
+    spans.extend(divider(theme));
+    spans.extend(match row_index.and_then(|index| chart.tracks.get(index)) {
+        Some(track) => gantt::track_spans(track, chart, theme, view.chart_width),
+        None => gantt::gridline_spans(chart, theme, view.chart_width),
+    });
+    Line::from(spans)
 }
 
 fn task_line(
@@ -601,7 +791,44 @@ pub fn settings_chips(state: &TaskState) -> Vec<Chip> {
         ));
     }
 
+    chips.extend(gantt_chips(state));
     chips
+}
+
+/// Chips describing the chart, and only when it is drawn.
+fn gantt_chips(state: &TaskState) -> Vec<Chip> {
+    let gantt = state.gantt();
+    if !gantt.visible() {
+        return Vec::new();
+    }
+
+    let total = state.table().columns.len();
+    let mut chips = vec![
+        Chip::toned("gantt", Tone::Accent),
+        Chip::toned(format!("color {}", gantt.color_key().label()), Tone::Accent),
+        Chip::toned(format!("columns {}/{total}", gantt.columns(total)), Tone::Accent),
+    ];
+
+    // A scrolled window is the one chart state the axis cannot report: it
+    // looks the same whether the user fitted there or scrolled there.
+    if let TimelineView::Window { start, days } = gantt.timeline() {
+        let end = start.add_days(*days as i64 - 1);
+        chips.push(Chip::toned(
+            format!("window {} – {}", short_date(*start), short_date(end)),
+            Tone::Accent,
+        ));
+    }
+
+    chips
+}
+
+/// `Jun 1`, or `Jun 1 2027` when the year is not this one.
+fn short_date(value: crate::domain::CivilDate) -> String {
+    let today = date::today();
+    match value.year == today.year {
+        true => format!("{} {}", month_name(value.month), value.day),
+        false => format!("{} {} {}", month_name(value.month), value.day, value.year),
+    }
 }
 
 fn counts(state: &TaskState) -> Vec<Chip> {
@@ -694,10 +921,14 @@ fn primary_sort_ascending(state: &TaskState) -> bool {
         .unwrap_or(true)
 }
 
-/// Measures each column, clamped to its role's bounds, then gives the title
-/// column whatever is left over.
-fn column_widths(headers: &[String], rows: &[RenderRow], viewport: usize) -> Vec<usize> {
-    let mut widths = headers
+/// Measures each column against its content, clamped to its role's bounds.
+///
+/// This is what the columns would like. [`column_widths`] then decides what
+/// they get, and the pane split asks this directly so it can size the chart
+/// against the columns' appetite rather than against a title already
+/// stretched to fill the pane.
+fn natural_widths(headers: &[String], rows: &[RenderRow]) -> Vec<usize> {
+    headers
         .iter()
         .enumerate()
         .map(|(index, header)| {
@@ -713,18 +944,46 @@ fn column_widths(headers: &[String], rows: &[RenderRow], viewport: usize) -> Vec
                 .unwrap_or(0);
             natural.clamp(min.min(max), max)
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+/// How the title column is sized against the space it has.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TitleFit {
+    /// Grow to fill, but never past this share of the viewport. Without a
+    /// chart the viewport is the whole pane, so a cap is what stops one long
+    /// task name from crowding out every other column.
+    Share(f64),
+    /// Fill the viewport exactly, truncating if the title is longer. The pane
+    /// split has already decided how wide the columns region is, so growing
+    /// past it would push the last column out of view and leaving a gap would
+    /// waste room the chart could have had.
+    Exact,
+}
+
+/// Measures each column, then gives the title column whatever is left over.
+fn column_widths(
+    headers: &[String],
+    rows: &[RenderRow],
+    viewport: usize,
+    fit: TitleFit,
+) -> Vec<usize> {
+    let mut widths = natural_widths(headers, rows);
 
     let others: usize = widths.iter().skip(1).copied().sum();
     let separators = COLUMN_SEPARATOR_WIDTH * widths.len().saturating_sub(1);
     let widest_other = widths.iter().skip(1).copied().max().unwrap_or(0);
-    let title_cap = ((viewport as f64) * TITLE_SHARE).floor() as usize;
+    let fill = viewport.saturating_sub(others + separators);
+    let (title_min, _) = ColumnRole::Title.width_bounds();
 
     if let Some(title) = widths.first_mut() {
-        *title = (*title)
-            .max(widest_other)
-            .max(viewport.saturating_sub(others + separators))
-            .min(title_cap.max(1));
+        *title = match fit {
+            TitleFit::Exact => fill.max(title_min),
+            TitleFit::Share(share) => {
+                let cap = ((viewport as f64) * share).floor() as usize;
+                (*title).max(widest_other).max(fill).min(cap.max(1))
+            }
+        };
     }
 
     widths
@@ -738,7 +997,7 @@ fn total_width(widths: &[usize]) -> usize {
 mod tests {
     use super::{
         render_task_table, settings_chips, task_body_lines, task_header_line, Align, ColumnRole,
-        GUTTER_WIDTH,
+        GUTTER_WIDTH, MIN_CHART_WIDTH,
     };
     use crate::{
         app::task::TaskState,
@@ -1168,5 +1427,233 @@ mod tests {
         assert_eq!(ColumnRole::for_index(5), ColumnRole::Projects);
         assert_eq!(ColumnRole::for_index(6), ColumnRole::Custom);
         assert_eq!(ColumnRole::for_index(20), ColumnRole::Custom);
+    }
+
+    /// A loaded state with the chart drawn.
+    fn charted_state(columns: usize) -> TaskState {
+        let mut state = state_with(vec![
+            task("t1", "Ship it", Some("2026-07-20"), false),
+            task("t2", "Pack it", Some("2026-08-20"), false),
+        ]);
+        state.gantt_mut().set_visible(true);
+        // Down to the title first, so the count is absolute rather than
+        // relative to whatever the config default happens to be.
+        for _ in 0..64 {
+            state.gantt_mut().remove_column(64);
+        }
+        for _ in 1..columns {
+            state.gantt_mut().add_column(64);
+        }
+        state
+    }
+
+    #[test]
+    fn the_chart_is_off_until_asked_for() {
+        let view = render_task_table(&state_with(vec![task("t1", "Ship it", None, false)]), 120, &Theme::default());
+
+        assert!(view.chart.is_none());
+        assert_eq!(view.chart_width, 0);
+    }
+
+    #[test]
+    fn every_line_is_exactly_the_pane_wide_at_each_terminal_size() {
+        let theme = Theme::default();
+
+        for width in [80usize, 120, 200] {
+            let state = charted_state(2);
+            let view = render_task_table(&state, width, &theme);
+            assert!(view.chart.is_some(), "a chart fits at {width}");
+
+            let header = task_header_line(&view, &theme, width).to_string();
+            assert_eq!(visible_width(&header), width, "header at {width}");
+
+            for line in task_body_lines(&view, Some(0), &theme, width) {
+                assert_eq!(
+                    visible_width(&line.to_string()),
+                    width,
+                    "body line at {width}: {line:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_divider_lands_in_the_same_column_on_every_kind_of_row() {
+        let theme = Theme::default();
+        let width = 120usize;
+        let view = render_task_table(&charted_state(2), width, &theme);
+        let expected = width - view.chart_width - 2;
+
+        let lines = task_body_lines(&view, Some(0), &theme, width);
+        let kinds = view.rows.iter().map(|row| row.kind.clone());
+        for (kind, line) in kinds.zip(lines) {
+            if matches!(
+                kind,
+                TaskRowKind::ProjectSeparator | TaskRowKind::SectionSpacer
+            ) {
+                continue;
+            }
+            let rendered = line.to_string();
+            let column = rule_column(&rendered, theme.glyphs.column_rule);
+            assert!(
+                rendered
+                    .chars()
+                    .nth(expected)
+                    .is_some_and(|ch| ch.to_string() == theme.glyphs.column_rule),
+                "{kind:?} has no divider at {expected} (first rule at {column:?}): {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn showing_more_columns_takes_the_space_from_the_chart() {
+        let theme = Theme::default();
+        let narrow = render_task_table(&charted_state(2), 160, &theme);
+        let wide = render_task_table(&charted_state(5), 160, &theme);
+
+        assert!(wide.headers.len() > narrow.headers.len());
+        assert!(
+            wide.chart_width < narrow.chart_width,
+            "{} vs {}",
+            wide.chart_width,
+            narrow.chart_width
+        );
+    }
+
+    #[test]
+    fn a_pane_too_narrow_for_a_chart_says_so_instead_of_drawing_one() {
+        let theme = Theme::default();
+        // Room for the gutter and one column, but not for a usable chart.
+        let view = render_task_table(&charted_state(4), GUTTER_WIDTH + MIN_CHART_WIDTH, &theme);
+
+        assert!(view.chart.is_none());
+        assert!(
+            view.counts
+                .iter()
+                .any(|chip| chip.text.contains("too narrow")),
+            "silently dropping the chart reads as a broken toggle: {:?}",
+            view.counts
+        );
+    }
+
+    #[test]
+    fn a_column_squeezed_out_by_the_chart_is_still_reachable_by_scrolling() {
+        let theme = Theme::default();
+        let view = render_task_table(&charted_state(6), 80, &theme);
+
+        assert!(view.chart.is_some());
+        assert!(
+            view.max_scroll > 0,
+            "the columns overflow their budget, so scrolling has somewhere to go"
+        );
+        assert!(view.headers.len() > 1);
+    }
+
+    #[test]
+    fn the_column_count_is_ignored_while_the_chart_is_off() {
+        let theme = Theme::default();
+        let mut state = charted_state(2);
+        state.gantt_mut().set_visible(false);
+
+        let view = render_task_table(&state, 120, &theme);
+
+        assert_eq!(
+            view.headers.len(),
+            view.rows
+                .iter()
+                .filter(|row| row.kind.is_task())
+                .map(|row| row.cells.len())
+                .max()
+                .expect("a task row"),
+            "every column draws when the chart is off"
+        );
+    }
+
+    #[test]
+    fn group_headings_draw_gridlines_rather_than_a_track() {
+        let theme = Theme::default();
+        let width = 120usize;
+        let view = render_task_table(&charted_state(2), width, &theme);
+        let lines = task_body_lines(&view, Some(0), &theme, width);
+
+        let heading = view
+            .rows
+            .iter()
+            .position(|row| matches!(row.kind, TaskRowKind::ProjectHeader))
+            .expect("a project heading");
+        let rendered = lines[heading].to_string();
+
+        assert!(rendered.contains(theme.glyphs.gridline), "{rendered}");
+        assert!(!rendered.contains(theme.glyphs.bar), "{rendered}");
+    }
+
+    #[test]
+    fn spacer_rows_stay_blank_across_the_whole_pane() {
+        let theme = Theme::default();
+        let width = 120usize;
+        let view = render_task_table(&charted_state(2), width, &theme);
+        let lines = task_body_lines(&view, Some(0), &theme, width);
+
+        for (row, line) in view.rows.iter().zip(lines) {
+            if matches!(
+                row.kind,
+                TaskRowKind::ProjectSeparator | TaskRowKind::SectionSpacer
+            ) {
+                assert_eq!(line.to_string(), " ".repeat(width));
+            }
+        }
+    }
+
+    #[test]
+    fn the_columns_take_exactly_what_they_need_and_no_more() {
+        let theme = Theme::default();
+        let width = 160usize;
+        let view = render_task_table(&charted_state(2), width, &theme);
+        let used = view.total_width;
+
+        assert_eq!(
+            width - GUTTER_WIDTH - used - 3,
+            view.chart_width,
+            "a gap here means the columns were given room they did not use"
+        );
+        assert_eq!(view.max_scroll, 0, "and nothing is scrolled out of reach");
+    }
+
+    #[test]
+    fn a_very_long_title_does_not_starve_the_chart() {
+        let theme = Theme::default();
+        let mut state = state_with(vec![task(
+            "t1",
+            "A task title long enough to swallow the whole pane if nothing stopped it \
+             from doing so, which is the situation this guards",
+            Some("2026-07-20"),
+            false,
+        )]);
+        state.gantt_mut().set_visible(true);
+
+        let view = render_task_table(&state, 160, &theme);
+
+        assert!(view.chart.is_some());
+        assert!(
+            view.chart_width > MIN_CHART_WIDTH,
+            "the chart kept more than its floor: {}",
+            view.chart_width
+        );
+    }
+
+    #[test]
+    fn the_visible_columns_all_fit_beside_the_chart_at_a_narrow_width() {
+        // The title has no natural maximum, so at 80 columns it used to take
+        // its full length and push the assignee column out of view even
+        // though the split had reserved room for it.
+        let theme = Theme::default();
+        let view = render_task_table(&charted_state(2), 80, &theme);
+
+        assert!(view.chart.is_some());
+        assert_eq!(view.headers.len(), 2);
+        assert_eq!(
+            view.max_scroll, 0,
+            "both columns fit, so there is nothing to scroll to"
+        );
     }
 }

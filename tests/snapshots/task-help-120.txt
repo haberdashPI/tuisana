@@ -1,30 +1,40 @@
- TUISANA  ▸ 1 project ▸ 4 tasks
-┌ Projects ─────────────────┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓───── 3 shown · 1 selected ┐
-│  ● ★ Northwind BTX 4412   ┃Tasks                            Move                         ┃                           │
-│▍   ★ Platform Infrastructu┃⏎           open in Asana        j/k         down / up        ┃                           │
-│    ☆ Backlog              ┃␣           select               ^d/^u       page down / up   ┃                           │
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                                                              │
+│▍   ★ Platform Infrastructure                                                                                         │
+│    ☆ Backlog                                                                                                         │
+│                                                                                                                      │
+│                           ┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                           │
+│                           ┃Tasks                            Move                         ┃                           │
+│                           ┃⏎           open in Asana        j/k         down / up        ┃                           │
+│                           ┃␣           select               ^d/^u       page down / up   ┃                           │
 │                           ┃a           select all           home/end    top / bottom     ┃                           │
-│                           ┃i           invert                                            ┃                           │
-│                           ┃x           clear                Modes                        ┃                           │
-│                           ┃^x          clear hidden         p           projects         ┃                           │
-│                           ┃y           copy links           f           filters          ┃                           │
-│                           ┃                                 t           tasks            ┃                           │
-└───────────────────────────┃Group & sort                     m           toggle tasks     ┃───────────────────────────┘
-┏ Tasks ━━━━━━━━━━━━━━━━━━━━┃[/]         jump section                                      ┃━━━━━━━━━━ 4 tasks · row 1 ┓
-┃   Task                    ┃{/}         jump project         Panes                        ┃ojects           │ Priority┃
-┃                           ┃,           group by project     0           restore          ┃                           ┃
-┃▌Northwind BTX 4412 ───────┃.           group by section                                  ┃───────────────────────────┃
-┃                           ┃s           cycle sort field     App                          ┃                           ┃
-┃   Study Kit Design ·······┃^           asc / desc           r           refresh          ┃···························┃
-┃▍  Review shipment requirem┃                                 q ^c        quit             ┃reterra PGI 7997 │ High    ┃
-┃   Ship release candidate t┃View                             ?           close this help  ┃reterra PGI 7997 │ High    ┃
-┃   Confirm carrier pickup w┃f           filter panel                                      ┃reterra PGI 7997 │ —       ┃
-┃                           ┃c           open / done / all                                 ┃                           ┃
-┃   Shipment ···············┃z           subtasks                                          ┃···························┃
-┃   Close out packaging vend┃left/right  scroll columns                                    ┃reterra PGI 7997 │ Low     ┃
-┃                           ┃                                                              ┃                           ┃
+└───────────────────────────┃i           invert                                            ┃───────────────────────────┘
+┏ Tasks ━━━━━━━━━━━━━━━━━━━━┃x           clear                Modes                        ┃asks · row 1 · columns 0/1 ┓
+┃   Task                    ┃^x          clear hidden         p           projects         ┃rojects           │ Priorit┃
+┃                           ┃y           copy links           f           filters          ┃                           ┃
+┃▌Northwind BTX 4412 ───────┃                                 t           tasks            ┃───────────────────────────┃
+┃                           ┃Group & sort                     m           toggle tasks     ┃                           ┃
+┃   Study Kit Design ·······┃[/]         jump section                                      ┃···························┃
+┃▍  Draft the assay validati┃{/}         jump project         Panes                        ┃oreterra PGI 7997 │ High   ┃
+┃   Review shipment requirem┃,           group by project     0           restore          ┃oreterra PGI 7997 │ High   ┃
+┃   Ship release candidate t┃.           group by section                                  ┃oreterra PGI 7997 │ High   ┃
+┃   Confirm carrier pickup w┃s           cycle sort field     App                          ┃oreterra PGI 7997 │ —      ┃
+┃   Update the sample intake┃^           asc / desc           r           refresh          ┃oreterra PGI 7997 │ Medium ┃
+┃   Qualify the second reage┃                                 q ^c        quit             ┃oreterra PGI 7997 │ Medium ┃
+┃                           ┃View                             ?           close this help  ┃                           ┃
+┃   Shipment ···············┃g           gantt chart                                       ┃···························┃
+┃   Book the courier for the┃f           filter panel                                      ┃oreterra PGI 7997 │ Low    ┃
+┃   Label the retention samp┃c           open / done / all                                 ┃oreterra PGI 7997 │ Medium ┃
+┃   Reconcile the freight in┃z           subtasks                                          ┃oreterra PGI 7997 │ Low    ┃
+┃   Close out packaging vend┃left/right  scroll columns                                    ┃oreterra PGI 7997 │ Low    ┃
+┃   Close the quarter's ship┃                                                              ┃oreterra PGI 7997 │ Low    ┃
 ┃                           ┃                                                    ? to close┃                           ┃
 ┃                           ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                           ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ⏎ open   ␣ select   f filters   s sort   c completed   ? help                              r refresh   q quit
+j/k move   ⏎ open   ␣ select   f filters   s sort   left/right columns   g gantt   c completed        r refresh   q quit
  TASK

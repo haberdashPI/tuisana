@@ -193,6 +193,15 @@ pub struct TaskRow {
     /// as a number rather than baked into the title cell so the domain model
     /// stays free of presentation strings.
     pub subtask_depth: usize,
+    /// The task's start date, parsed. `None` on header and spacer rows.
+    ///
+    /// The display cells stay strings, but the Gantt chart does arithmetic on
+    /// these, and re-parsing a cell that has already been through
+    /// `sanitize_display_text` would be one silent formatting change away from
+    /// breaking.
+    pub start: Option<CivilDate>,
+    /// The task's due date, parsed. `None` on header and spacer rows.
+    pub due: Option<CivilDate>,
     /// One cell per visible table column.
     pub cells: Vec<String>,
 }
@@ -207,6 +216,8 @@ impl TaskRow {
             section: None,
             section_order: None,
             subtask_depth: 0,
+            start: None,
+            due: None,
             cells,
         }
     }
@@ -220,6 +231,8 @@ impl TaskRow {
             section: None,
             section_order: None,
             subtask_depth: 0,
+            start: None,
+            due: None,
             cells: vec![String::new(); column_count],
         }
     }
@@ -236,6 +249,8 @@ impl TaskRow {
             section: None,
             section_order: None,
             subtask_depth: 0,
+            start: None,
+            due: None,
             cells,
         }
     }
@@ -252,6 +267,8 @@ impl TaskRow {
             section: None,
             section_order: None,
             subtask_depth: 0,
+            start: None,
+            due: None,
             cells,
         }
     }
@@ -265,10 +282,21 @@ impl TaskRow {
             section: None,
             section_order: None,
             subtask_depth: 0,
+            start: None,
+            due: None,
             cells: vec![String::new(); column_count],
         }
     }
 }
+
+/// Cell index of the assignee column.
+///
+/// The built-in columns are identified by position because the model always
+/// emits them in a fixed order and appends custom fields after them. Matching
+/// on the label would misfire on a custom field of the same name.
+pub const ASSIGNEE_COLUMN: usize = 1;
+/// Cell index of the completion-state column.
+pub const STATE_COLUMN: usize = 4;
 
 /// The fully assembled task table used by the renderer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -614,6 +642,18 @@ impl TaskTableModel {
             custom_field_columns,
             rows,
         }
+    }
+
+    /// The cell index of the custom-field column with this name.
+    ///
+    /// Searched among the custom columns only, so a custom field called
+    /// "Assignee" resolves to itself rather than to the built-in column.
+    pub fn custom_column_index(&self, name: &str) -> Option<usize> {
+        let offset = self.columns.len() - self.custom_field_columns.len();
+        self.custom_field_columns
+            .iter()
+            .position(|column| column.name == name)
+            .map(|index| offset + index)
     }
 
     /// Counts only the selectable task rows.
@@ -1182,6 +1222,8 @@ fn build_rows(
         row.section = Some(section);
         row.section_order = record.section_order;
         row.subtask_depth = record.subtask_depth;
+        row.start = record.start_date.as_deref().and_then(CivilDate::parse);
+        row.due = record.due_date.as_deref().and_then(CivilDate::parse);
         rows.push(row);
     }
 
@@ -1191,10 +1233,59 @@ fn build_rows(
 #[cfg(test)]
 mod tests {
     use super::{
-        CustomFieldDefinition, SortDirection, SubtaskVisibility, TaskDateRange, TaskFieldFilter,
-        TaskFilter, TaskRecord, TaskRowKind, TaskSort, TaskSortField, TaskSortRule,
-        TaskTableModel, TaskTableSettings,
+        CivilDate, CustomFieldDefinition, SortDirection, SubtaskVisibility, TaskDateRange,
+        TaskFieldFilter, TaskFilter, TaskRecord, TaskRowKind, TaskSort, TaskSortField,
+        TaskSortRule, TaskTableModel, TaskTableSettings,
     };
+
+    #[test]
+    fn task_rows_carry_parsed_dates_alongside_their_display_cells() {
+        let mut record = TaskRecord::new("t1", "Ship it");
+        record.start_date = Some("2026-06-15".to_string());
+        record.due_date = Some("2026-08-03".to_string());
+
+        let model = TaskTableModel::from_records(vec![record], Vec::new());
+        let row = model
+            .rows
+            .iter()
+            .find(|row| row.kind.is_task())
+            .expect("a task row");
+
+        assert_eq!(row.start, CivilDate::new(2026, 6, 15));
+        assert_eq!(row.due, CivilDate::new(2026, 8, 3));
+        assert_eq!(row.cells[2], "2026-08-03", "the display cell stays a string");
+    }
+
+    #[test]
+    fn a_date_the_api_sent_that_is_not_a_date_leaves_the_typed_field_empty() {
+        let mut record = TaskRecord::new("t1", "Ship it");
+        record.due_date = Some("someday".to_string());
+
+        let model = TaskTableModel::from_records(vec![record], Vec::new());
+        let row = model
+            .rows
+            .iter()
+            .find(|row| row.kind.is_task())
+            .expect("a task row");
+
+        assert_eq!(row.due, None, "the chart draws nothing rather than guessing");
+        assert_eq!(row.cells[2], "someday", "but the table still shows it");
+    }
+
+    #[test]
+    fn header_and_spacer_rows_carry_no_dates() {
+        let mut record = TaskRecord::new("t1", "Ship it");
+        record.projects = vec!["Project".to_string()];
+        record.sections = vec!["Section".to_string()];
+        record.due_date = Some("2026-08-03".to_string());
+
+        let model = TaskTableModel::from_records(vec![record], Vec::new());
+
+        for row in model.rows.iter().filter(|row| !row.kind.is_task()) {
+            assert_eq!(row.start, None);
+            assert_eq!(row.due, None);
+        }
+    }
 
     #[test]
     fn groups_custom_fields_by_name_keeping_every_id() {

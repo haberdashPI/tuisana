@@ -54,6 +54,8 @@ impl HelpGroup {
 pub fn groups_for(mode: Mode) -> Vec<HelpGroup> {
     let mut groups = match mode {
         Mode::Task => task_groups(),
+        Mode::Gantt => gantt_groups(),
+        Mode::GanttOrder => gantt_order_groups(),
         Mode::Filter | Mode::FilterEdit => filter_groups(),
         Mode::Calendar => calendar_groups(),
         Mode::Project | Mode::ProjectSearch | Mode::Any => project_groups(),
@@ -134,10 +136,76 @@ fn task_groups() -> Vec<HelpGroup> {
         HelpGroup::new(
             "View",
             vec![
+                Hint::new(&[Action::SetGanttMode], "gantt chart"),
                 Hint::new(&[Action::SetFilterMode], "filter panel"),
                 Hint::new(&[Action::ToggleCompletedFilter], "open / done / all"),
                 Hint::new(&[Action::ToggleSubtaskVisibility], "subtasks"),
                 Hint::new(&[Action::ScrollLeft, Action::ScrollRight], "scroll columns"),
+            ],
+        ),
+    ]
+}
+
+fn gantt_groups() -> Vec<HelpGroup> {
+    vec![
+        HelpGroup::new(
+            "Timeline",
+            vec![
+                Hint::new(&[Action::GanttScrollLeft], "scroll back"),
+                Hint::new(&[Action::GanttScrollRight], "scroll forward"),
+                Hint::new(&[Action::GanttZoomIn], "zoom in, shorter span"),
+                Hint::new(&[Action::GanttZoomOut], "zoom out, longer span"),
+                Hint::new(&[Action::GanttZoomFit], "zoom to fit the tasks"),
+                Hint::new(&[Action::GanttToday], "start at today"),
+            ],
+        ),
+        HelpGroup::new(
+            "Chart",
+            vec![
+                Hint::new(&[Action::GanttAddColumn], "one more table column"),
+                Hint::new(&[Action::GanttRemoveColumn], "one fewer table column"),
+                Hint::new(&[Action::CycleGanttColorKey], "colour by"),
+                Hint::new(&[Action::ToggleGantt], "hide the chart"),
+                Hint::literal("esc", "back to tasks, chart stays"),
+            ],
+        ),
+        // A legend explains the colours; nothing on screen explains the
+        // shapes, so the overlay does.
+        HelpGroup::new(
+            "Reading it",
+            vec![
+                Hint::literal("bar", "start to due"),
+                Hint::literal("milestone", "a due date with no start"),
+                Hint::literal("blank", "no dates at all"),
+                Hint::literal("marker", "today's column"),
+                Hint::literal("edge", "runs past the window"),
+                Hint::literal("axis", "months to weekdays, by zoom"),
+                Hint::literal("shaded", "a weekend, where no bar covers it"),
+            ],
+        ),
+    ]
+}
+
+fn gantt_order_groups() -> Vec<HelpGroup> {
+    vec![
+        HelpGroup::new(
+            "Order",
+            vec![
+                Hint::new(&[Action::MoveDown, Action::MoveUp], "move the cursor"),
+                Hint::new(&[Action::GanttOrderMoveUp], "move the value up"),
+                Hint::new(&[Action::GanttOrderMoveDown], "move the value down"),
+                Hint::new(&[Action::GanttOrderMoveTop], "move it to the top"),
+                Hint::new(&[Action::GanttOrderMoveBottom], "move it to the bottom"),
+            ],
+        ),
+        HelpGroup::new(
+            "Colours",
+            vec![
+                Hint::new(&[Action::CycleGanttColorKey], "colour by"),
+                Hint::new(&[Action::GanttOrderCommit], "save and close"),
+                Hint::new(&[Action::GanttOrderCancel], "cancel"),
+                Hint::literal("rule", "where the palette runs out"),
+                Hint::literal("below", "drawn in the neutral colour"),
             ],
         ),
     ]

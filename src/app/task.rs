@@ -9,16 +9,23 @@ use std::{
 };
 
 use crate::{
-    app::{calendar::CalendarState, debug_log},
+    app::{
+        calendar::CalendarState,
+        debug_log,
+        gantt::{GanttViewState, MoveTo},
+    },
     asana::{
         dto::{CustomFieldValueDto, TaskDto},
         AsanaClient, TaskLoadScope, TaskQuery, TaskTarget,
     },
     domain::{
-        date, group_custom_fields_by_name, merge_task_record, CivilDate, CustomFieldDefinition,
+        date, distinct_values, group_custom_fields_by_name, merge_task_record, CivilDate,
+        CustomFieldDefinition,
+        GanttColorKey, Timeline,
         DateQuery, Project, ProjectKind, TaskRecord, TaskRowKind, TaskTableModel,
         TaskTableSettings,
     },
+    config::GanttConfig,
     error::Result,
     input::Action,
     util::fuzzy_match,
@@ -65,6 +72,7 @@ struct TaskViewState {
     filter_vertical_scroll: usize,
     help_details_visible: bool,
     selected_task_ids: HashSet<String>,
+    gantt: GanttViewState,
 }
 
 /// Whether a task-data fetch is currently in flight.
@@ -867,6 +875,145 @@ impl TaskState {
 
     pub fn visible(&self) -> bool {
         self.view.visible
+    }
+
+    /// Seeds the chart's state from config, at startup.
+    pub fn apply_gantt_config(&mut self, config: &GanttConfig) {
+        self.view.gantt = GanttViewState::from_config(config);
+    }
+
+    /// The chart's state, for the renderer.
+    pub fn gantt(&self) -> &GanttViewState {
+        &self.view.gantt
+    }
+
+    /// The chart's state, for the actions that change it.
+    pub fn gantt_mut(&mut self) -> &mut GanttViewState {
+        &mut self.view.gantt
+    }
+
+    /// Every dimension the bars can be coloured by, in cycling order.
+    ///
+    /// The enumerated custom fields are taken from the filter editor, which
+    /// already decides which fields have a small enough set of values to be
+    /// treated as labels. There is no second place that answers that question.
+    pub fn available_color_keys(&self) -> Vec<GanttColorKey> {
+        let mut keys = vec![
+            GanttColorKey::Assignee,
+            GanttColorKey::Section,
+            GanttColorKey::State,
+        ];
+        keys.extend(
+            self.view
+                .filter_editor
+                .fields
+                .iter()
+                .filter(|field| {
+                    matches!(field.spec.kind, TaskFieldFilterKind::Labels)
+                        && field.spec.key.starts_with("custom:")
+                })
+                .map(|field| GanttColorKey::Field(field.spec.label.clone())),
+        );
+        keys
+    }
+
+    /// Colours the bars by the next available dimension.
+    ///
+    /// A dimension that has gone away with the loaded projects starts the
+    /// cycle over rather than getting stuck.
+    pub fn cycle_gantt_color_key(&mut self) {
+        let keys = self.available_color_keys();
+        let current = keys
+            .iter()
+            .position(|key| key == self.view.gantt.color_key());
+        let next = match current {
+            Some(index) => (index + 1) % keys.len(),
+            None => 0,
+        };
+        let Some(key) = keys.get(next).cloned() else {
+            return;
+        };
+        self.view.gantt.set_color_key(key.clone());
+
+        // Cycling from inside the dialog rebuilds it around the new dimension
+        // and commits nothing, so two dimensions can be compared in one press.
+        if self.view.gantt.dialog_open() {
+            let values = self.color_values();
+            self.view.gantt.dialog_reload(key, values);
+        }
+    }
+
+    /// Shows one more table column beside the chart.
+    pub fn gantt_add_column(&mut self) {
+        let total = self.view.table.columns.len();
+        self.view.gantt.add_column(total);
+    }
+
+    /// Shows one fewer table column beside the chart.
+    pub fn gantt_remove_column(&mut self) {
+        let total = self.view.table.columns.len();
+        self.view.gantt.remove_column(total);
+    }
+
+    /// The window a fitted chart would show, for the scroll and zoom verbs to
+    /// start from.
+    ///
+    /// Built at a nominal width because only the span matters here; the real
+    /// width is a rendering concern and the renderer resolves its own.
+    fn fitted_timeline(&self) -> Option<Timeline> {
+        Timeline::fit(
+            self.view
+                .table
+                .rows
+                .iter()
+                .filter(|row| row.kind.is_task())
+                .flat_map(|row| [row.start, row.due])
+                .flatten(),
+            1,
+        )
+    }
+
+    /// Moves the timeline window a quarter of its length.
+    pub fn gantt_scroll(&mut self, forward: bool) {
+        let fitted = self.fitted_timeline();
+        self.view.gantt.scroll_timeline(fitted, forward);
+    }
+
+    /// Steps the timeline's zoom ladder.
+    pub fn gantt_zoom(&mut self, in_: bool) {
+        let fitted = self.fitted_timeline();
+        self.view.gantt.zoom_timeline(fitted, in_);
+    }
+
+    /// Returns the timeline to fitting the loaded tasks.
+    pub fn gantt_fit(&mut self) {
+        self.view.gantt.fit_timeline();
+    }
+
+    /// Brings today to the left of the timeline.
+    pub fn gantt_today(&mut self) {
+        let fitted = self.fitted_timeline();
+        self.view.gantt.focus_timeline_on(date::today(), fitted);
+    }
+
+    /// Opens the colour dialog over the current dimension.
+    pub fn gantt_open_order(&mut self) {
+        let values = self.color_values();
+        self.view.gantt.open_dialog(values);
+    }
+
+    /// Moves the dialog's selected value.
+    pub fn gantt_order_move(&mut self, to: MoveTo) {
+        self.view.gantt.dialog_move_value(to);
+    }
+
+    /// The dimension's values with their task counts.
+    fn color_values(&self) -> Vec<(String, usize)> {
+        distinct_values(
+            &self.view.table,
+            self.view.gantt.color_key(),
+            self.view.gantt.order(),
+        )
     }
 
     pub fn set_visible(&mut self, visible: bool) {

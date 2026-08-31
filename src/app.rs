@@ -12,9 +12,11 @@ use std::{
 };
 
 pub mod calendar;
+pub mod gantt;
 pub mod project_list;
 pub mod task;
 
+use self::gantt::MoveTo;
 use self::project_list::ProjectListState;
 use self::task::TaskState;
 
@@ -149,10 +151,12 @@ struct TaskDataMessage {
 
 impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     pub fn new(config: Config, client: C) -> Self {
+        let mut tasks = TaskState::new();
+        tasks.apply_gantt_config(&config.gantt);
         Self {
             config,
             projects: ProjectListState::new(),
-            tasks: TaskState::new(),
+            tasks,
             mode: Mode::Project,
             panel_size: PaneSizeState::default(),
             client,
@@ -257,6 +261,18 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         self.mode = Mode::Calendar;
         self.tasks.set_visible(true);
         if !self.tasks.filter_panel_visible() {
+            self.tasks.toggle_filter_panel();
+        }
+    }
+
+    /// Enters gantt mode, drawing the chart. Follows `set_filter_mode`: the
+    /// mode and the thing it drives are turned on together.
+    fn set_gantt_mode(&mut self) {
+        self.prepare_mode_switch();
+        self.mode = Mode::Gantt;
+        self.tasks.set_visible(true);
+        self.tasks.gantt_mut().set_visible(true);
+        if self.tasks.filter_panel_visible() {
             self.tasks.toggle_filter_panel();
         }
     }
@@ -563,6 +579,101 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 self.ensure_task_data();
                 return Ok(None);
             }
+            Action::SetGanttMode => {
+                self.set_gantt_mode();
+                self.ensure_task_data();
+                return Ok(None);
+            }
+            Action::ToggleGantt => {
+                self.tasks.gantt_mut().toggle_visible();
+                // Turning the chart off leaves nothing for gantt mode to
+                // drive, so the mode goes with it.
+                if !self.tasks.gantt().visible() {
+                    self.set_task_mode();
+                }
+                return Ok(None);
+            }
+            Action::GanttAddColumn => {
+                self.tasks.gantt_add_column();
+                return Ok(None);
+            }
+            Action::GanttRemoveColumn => {
+                self.tasks.gantt_remove_column();
+                return Ok(None);
+            }
+            Action::CycleGanttColorKey => {
+                self.tasks.cycle_gantt_color_key();
+                return Ok(None);
+            }
+            // Scrolling and zooming move a viewport over the rows already in
+            // the table. None of these issues a request or changes a filter.
+            Action::GanttScrollLeft => {
+                self.tasks.gantt_scroll(false);
+                return Ok(None);
+            }
+            Action::GanttScrollRight => {
+                self.tasks.gantt_scroll(true);
+                return Ok(None);
+            }
+            Action::GanttZoomIn => {
+                self.tasks.gantt_zoom(true);
+                return Ok(None);
+            }
+            Action::GanttZoomOut => {
+                self.tasks.gantt_zoom(false);
+                return Ok(None);
+            }
+            Action::GanttZoomFit => {
+                self.tasks.gantt_fit();
+                return Ok(None);
+            }
+            Action::GanttToday => {
+                self.tasks.gantt_today();
+                return Ok(None);
+            }
+            Action::GanttOpenOrder => {
+                self.tasks.gantt_open_order();
+                self.mode = Mode::GanttOrder;
+                return Ok(None);
+            }
+            Action::GanttOrderMoveUp => {
+                self.tasks.gantt_order_move(MoveTo::Up);
+                return Ok(None);
+            }
+            Action::GanttOrderMoveDown => {
+                self.tasks.gantt_order_move(MoveTo::Down);
+                return Ok(None);
+            }
+            Action::GanttOrderMoveTop => {
+                self.tasks.gantt_order_move(MoveTo::Top);
+                return Ok(None);
+            }
+            Action::GanttOrderMoveBottom => {
+                self.tasks.gantt_order_move(MoveTo::Bottom);
+                return Ok(None);
+            }
+            Action::GanttOrderCommit => {
+                self.tasks.gantt_mut().dialog_commit();
+                self.mode = Mode::Gantt;
+                self.persist_gantt_colors()?;
+                return Ok(None);
+            }
+            Action::GanttOrderCancel => {
+                self.tasks.gantt_mut().dialog_cancel();
+                self.mode = Mode::Gantt;
+                return Ok(None);
+            }
+            // The dialog is a list of its own, so the cursor keys drive it
+            // rather than the task rows underneath. Same shape as the filter
+            // panel's interception of the same two actions.
+            Action::MoveUp if self.mode == Mode::GanttOrder => {
+                self.tasks.gantt_mut().dialog_move_cursor(-1);
+                return Ok(None);
+            }
+            Action::MoveDown if self.mode == Mode::GanttOrder => {
+                self.tasks.gantt_mut().dialog_move_cursor(1);
+                return Ok(None);
+            }
             Action::ToggleTaskMode => {
                 if self.mode == Mode::Task {
                     self.set_project_mode();
@@ -789,6 +900,19 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         Ok(())
     }
 
+    /// Writes the chart's colour choices back to the config file.
+    ///
+    /// Only the dimension and its value order: hand-ordering a team is real
+    /// work and losing it on exit would be worse than the cost of a write.
+    /// Visibility, the column count, and the timeline window are view state of
+    /// the same kind as sort and grouping, which have never persisted.
+    fn persist_gantt_colors(&mut self) -> Result<()> {
+        self.config.gantt.color_by = self.tasks.gantt().color_key().to_string();
+        self.config.gantt.order = self.tasks.gantt().orders().clone();
+        self.config.save_to_source_path()?;
+        Ok(())
+    }
+
     fn task_target_projects(&self) -> Vec<crate::domain::Project> {
         let selected_projects = self.projects.selected_projects();
 
@@ -895,7 +1019,7 @@ mod tests {
             fake::FakeAsanaClient,
         },
         config::{Config, ProjectVisibilityConfig},
-        domain::Project,
+        domain::{GanttColorKey, Project},
         input::{Action, KeyBinding},
     };
 
@@ -1061,6 +1185,343 @@ mod tests {
             .expect("switch to filter mode");
         assert!(app.panel_size().is_normal());
         assert_eq!(app.mode(), Mode::Filter);
+    }
+
+    /// An app with one selected project holding two dated tasks.
+    fn gantt_app() -> App<FakeAsanaClient> {
+        fn task(gid: &str, name: &str, due: &str) -> TaskDto {
+            TaskDto {
+                gid: gid.to_string(),
+                name: name.to_string(),
+                completed: false,
+                modified_at: None,
+                due_on: Some(due.to_string()),
+                start_on: Some("2026-06-01".to_string()),
+                assignee: Some(UserDto {
+                    gid: format!("u-{gid}"),
+                    name: Some(format!("Owner {gid}")),
+                    display_name: Some(format!("Owner {gid}")),
+                }),
+                num_subtasks: 0,
+                memberships: vec![TaskMembershipDto {
+                    project: TaskMembershipProjectDto {
+                        gid: "1".to_string(),
+                        name: "Inbox".to_string(),
+                    },
+                    section: None,
+                }],
+                custom_fields: Vec::new(),
+            }
+        }
+
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]).with_tasks(
+            "1",
+            vec![task("t1", "Ship it", "2026-07-20"), task("t2", "Pack it", "2026-08-20")],
+        );
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+        app.handle_action(&Action::ToggleSelection, 10)
+            .expect("select the project");
+        app
+    }
+
+    fn press(app: &mut App<FakeAsanaClient>, code: KeyCode) {
+        let keymap = app.keymap().expect("bindings parse");
+        app.handle_key_event(&keymap, KeyEvent::new(code, KeyModifiers::NONE), 10)
+            .expect("key handled");
+    }
+
+    fn settle(app: &mut App<FakeAsanaClient>) {
+        for _ in 0..100 {
+            app.poll_task_data();
+            if !matches!(app.tasks.status(), crate::app::task::TaskStatus::Loading) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn g_draws_the_chart_and_takes_its_controls() {
+        let mut app = gantt_app();
+
+        press(&mut app, KeyCode::Char('t'));
+        press(&mut app, KeyCode::Char('g'));
+
+        assert_eq!(app.mode(), Mode::Gantt);
+        assert!(app.tasks.gantt().visible());
+        assert!(app.tasks.visible());
+    }
+
+    #[test]
+    fn esc_leaves_gantt_mode_with_the_chart_still_drawn() {
+        let mut app = gantt_app();
+
+        press(&mut app, KeyCode::Char('t'));
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Esc);
+
+        assert_eq!(app.mode(), Mode::Task);
+        assert!(app.tasks.gantt().visible(), "esc is not a way to hide it");
+    }
+
+    #[test]
+    fn g_again_hides_the_chart_and_the_mode_goes_with_it() {
+        let mut app = gantt_app();
+
+        press(&mut app, KeyCode::Char('t'));
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Char('g'));
+
+        assert!(!app.tasks.gantt().visible());
+        assert_eq!(app.mode(), Mode::Task, "the mode has nothing left to drive");
+    }
+
+    #[test]
+    fn the_cursor_still_moves_through_tasks_while_in_gantt_mode() {
+        let mut app = gantt_app();
+
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('g'));
+        let before = app.tasks.selected_index();
+        press(&mut app, KeyCode::Char('j'));
+
+        assert_ne!(
+            app.tasks.selected_index(),
+            before,
+            "j/k are global bindings and gantt mode falls back to them"
+        );
+    }
+
+    #[test]
+    fn angle_brackets_change_how_many_table_columns_are_visible() {
+        let mut app = gantt_app();
+
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('g'));
+
+        let total = app.tasks.table().columns.len();
+        let before = app.tasks.gantt().columns(total);
+        press(&mut app, KeyCode::Char('>'));
+        assert_eq!(app.tasks.gantt().columns(total), before + 1);
+
+        press(&mut app, KeyCode::Char('<'));
+        assert_eq!(app.tasks.gantt().columns(total), before);
+    }
+
+    #[test]
+    fn c_cycles_the_colour_key_and_wraps() {
+        let mut app = gantt_app();
+
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('g'));
+
+        assert_eq!(app.tasks.gantt().color_key(), &GanttColorKey::Assignee);
+        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(app.tasks.gantt().color_key(), &GanttColorKey::Section);
+        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(app.tasks.gantt().color_key(), &GanttColorKey::State);
+        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(app.tasks.gantt().color_key(), &GanttColorKey::Assignee);
+    }
+
+    #[test]
+    fn c_still_cycles_the_completed_filter_in_task_mode() {
+        // `c` is bound in both modes; the mode-specific binding is what makes
+        // that safe, so a regression here would be silent.
+        let mut app = gantt_app();
+
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        let before = app.tasks.task_settings().filter.completed;
+        press(&mut app, KeyCode::Char('c'));
+
+        assert_ne!(app.tasks.task_settings().filter.completed, before);
+        assert_eq!(app.tasks.gantt().color_key(), &GanttColorKey::Assignee);
+    }
+
+    /// A config backed by a real file, so save_to_source_path has somewhere
+    /// to write.
+    fn config_on_disk() -> (Config, std::path::PathBuf) {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("tuisana-gantt-{unique}.toml"));
+        std::fs::write(
+            &path,
+            "[header]\ntype = \"tuisana\"\nversion = 1.0\n",
+        )
+        .expect("write config");
+        (Config::load_from_path(&path).expect("config loads"), path)
+    }
+
+    #[test]
+    fn the_dialog_opens_over_the_current_dimensions_values() {
+        let mut app = gantt_app();
+
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Enter);
+
+        assert_eq!(app.mode(), Mode::GanttOrder);
+        let dialog = app.tasks.gantt().dialog().expect("the dialog is open");
+        assert_eq!(dialog.key(), &GanttColorKey::Assignee);
+        assert_eq!(dialog.entries().len(), 2, "two assignees, none unassigned");
+    }
+
+    #[test]
+    fn j_and_k_drive_the_dialog_rather_than_the_task_rows() {
+        let mut app = gantt_app();
+
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('g'));
+        let row = app.tasks.selected_index();
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('j'));
+
+        assert_eq!(app.tasks.gantt().dialog().expect("open").selected(), 1);
+        assert_eq!(app.tasks.selected_index(), row, "the table did not move");
+    }
+
+    #[test]
+    fn saving_the_dialog_writes_the_order_to_the_config_file() {
+        let (config, path) = config_on_disk();
+        let mut app = gantt_app();
+        app.config = config;
+
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('b')); // send the first value to the bottom
+        press(&mut app, KeyCode::Enter);
+
+        assert_eq!(app.mode(), Mode::Gantt);
+        let written = std::fs::read_to_string(&path).expect("config was written");
+        let reloaded = Config::from_toml_str(&written).expect("it reparses");
+        assert_eq!(
+            reloaded.gantt.order_for(&GanttColorKey::Assignee),
+            ["Owner t2".to_string(), "Owner t1".to_string()],
+        );
+        assert_eq!(reloaded.gantt.color_by, "assignee");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn cancelling_the_dialog_writes_nothing() {
+        let (config, path) = config_on_disk();
+        let before = std::fs::read_to_string(&path).expect("config exists");
+        let mut app = gantt_app();
+        app.config = config;
+
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Esc);
+
+        assert_eq!(app.mode(), Mode::Gantt);
+        assert!(!app.tasks.gantt().dialog_open());
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("config exists"),
+            before
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_chart_visibility_and_column_count_are_not_persisted() {
+        // View state of the same kind as sort and grouping, which have never
+        // persisted. Only the colour choices are the user's own work.
+        let (config, path) = config_on_disk();
+        let mut app = gantt_app();
+        app.config = config;
+
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Char('>'));
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+
+        let written = std::fs::read_to_string(&path).expect("config was written");
+        let reloaded = Config::from_toml_str(&written).expect("it reparses");
+        assert!(!reloaded.gantt.visible);
+        assert_eq!(reloaded.gantt.columns, 2, "the default, not the session's 3");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn changing_project_visibility_after_using_the_chart_writes_no_gantt_table() {
+        // save_to_source_path rewrites the whole file, so an untouched section
+        // must not start appearing in the user's config just because the chart
+        // was opened.
+        let (config, path) = config_on_disk();
+        let mut app = gantt_app();
+        app.config = config;
+
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Char('>'));
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('p'));
+        // Hiding rather than starring: the fixture project starts starred, so
+        // a star toggle would return it to the default and write nothing.
+        press(&mut app, KeyCode::Char('h'));
+
+        let written = std::fs::read_to_string(&path).expect("config was written");
+        assert!(
+            written.contains("[[project]]"),
+            "the visibility change was saved: {written}"
+        );
+        assert!(!written.contains("[gantt]"), "{written}");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_saved_colour_order_is_in_effect_after_a_restart() {
+        let (config, path) = config_on_disk();
+        let mut app = gantt_app();
+        app.config = config;
+
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Enter);
+
+        let reloaded = Config::load_from_path(&path).expect("config reloads");
+        let restarted = App::new(reloaded, FakeAsanaClient::new(Vec::new()));
+
+        assert_eq!(
+            restarted.tasks.gantt().order(),
+            ["Owner t2".to_string(), "Owner t1".to_string()],
+            "no hand-editing needed between sessions"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn config_can_start_the_session_with_the_chart_already_drawn() {
+        let mut config = Config::default();
+        config.gantt.visible = true;
+        let app = App::new(config, FakeAsanaClient::new(Vec::new()));
+
+        assert!(app.tasks.gantt().visible());
     }
 
     #[test]

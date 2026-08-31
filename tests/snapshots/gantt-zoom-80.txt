@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                      │
+│▍   ★ Platform Infrastructure                                                 │
+│    ☆ Backlog                                                                 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11 tasks · row 1 ┓
+┃   Task                           │ Assignee     │ Jul     Aug    ▼ Sep       ┃
+┃                                                                              ┃
+┃▌Northwind BTX 4412 ──────────────────────────── │ ·       ·      ┊ ·        ·┃
+┃                                                                              ┃
+┃   Study Kit Design ···························· │ ·       ·      ┊ ·        ·┃
+┃▍  Draft the assay validation pr… │ Priya Raman  │ ‹              ┊           ┃
+┃   Review shipment requirements … │ Morgan Ellis │         ▒▒▒▒▒  ┊           ┃
+┃   Ship release candidate to the… │ Alex Chen    │           █████┊           ┃
+┃   Confirm carrier pickup window… │ —            │             ▒▒▒┊           ┃
+┃   Update the sample intake SOP   │ Kim Alvarez  │              █████         ┃
+┃   Qualify the second reagent su… │ Dana Ruiz    │ ‹████████████████████      ┃
+┃                                                                              ┃
+┃   Shipment ···································· │ ·       ·      ┊ ·        ·┃
+┃   Book the courier for the pilo… │ Sam Okafor   │                ┊ ▒▒▒▒      ┃
+┃   Label the retention samples    │ Jo Park      │                ┊          ›┃
+┃   Reconcile the freight invoices │ Robin Fox    │                ┊       ███›┃
+┃   Close out packaging vendor co… │ Alex Chen    │                ┊          ›┃
+┃   Close the quarter's shipping … │ Priya Raman  │                ┊          ›┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Priya Raman  +2 more ━━┛
+h/l scroll   -/+ zoom   z fit   t today   </> columns         r refresh   q quit
+ GANTT               gantt · color assignee · columns 2/7 · window Jul 5 – Oct 2

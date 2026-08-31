@@ -1,8 +1,13 @@
- TUISANA  ▸ 1 project ▸ 4 tasks
+ TUISANA  ▸ 1 project ▸ 11 tasks
 ┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ editing ┓
 ┃    Title     fuzzy     —                                                     ┃
 ┃    Assignee  contains  —                                                     ┃
 ┃▍   Due       date                                                            ┃
+┃    Start     date      —                                                     ┃
+┃    State     labels    —                                                     ┃
+┃    Projects  contains  —                                                     ┃
+┃    Priority  labels    —                                                     ┃
+┃                                                                              ┃
 ┏ Help · calendar mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃Move the date                              Edit the text                      ┃
 ┃h/l         day                            0-9 - ..    typed into the filter f┃
@@ -21,7 +26,12 @@
 ┃                                                                              ┃
 ┃                                                                        ? to c┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-│   Close out packaging vendor contract           │ Alex Chen    │  Nov 14 │ Au│
+│   Reconcile the freight invoices                │ Robin Fox    │  Oct 30 │ Se│
+│   Close out packaging vendor contract           │ Alex Chen    │  Nov 14 │  O│
+│   Close the quarter's shipping report           │ Priya Raman  │  Dec 18 │  N│
+│                                                                              │
+│                                                                              │
+│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │

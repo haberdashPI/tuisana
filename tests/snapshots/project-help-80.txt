@@ -1,6 +1,11 @@
  TUISANA  ▸ Northwind BTX 4412
-┏ Pro┏ Help · project mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓own ┓
-┃▍   ┃Select                              Move                            ┃    ┃
+┏ Projects ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3 shown ┓
+┃▍   ★ Northwind BTX 4412                                                      ┃
+┃    ★ Platform Infrastructure                                                 ┃
+┃    ☆ Backlog                                                                 ┃
+┃                                                                              ┃
+┃    ┏ Help · project mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓    ┃
+┃    ┃Select                              Move                            ┃    ┃
 ┃    ┃␣         select, then move down    j/k       down / up             ┃    ┃
 ┃    ┃a         select all visible        ^d/^u     page down / up        ┃    ┃
 ┃    ┃!         select starred            home/end  top / bottom          ┃    ┃
@@ -25,6 +30,11 @@
 ┃    ┃                                                                    ┃    ┃
 ┃    ┃                                                          ? to close┃    ┃
 ┃    ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛    ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 j/k move   ␣ select   t tasks   / search   v show hidden      r refresh   q quit
  PROJECT
