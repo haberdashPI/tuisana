@@ -35,6 +35,6 @@
 ┃                                                                                                                      ┃
 ┃                                                                                                                      ┃
 ┃                                                                                                                      ┃
-┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Priya Raman  █ Robin Fox  ▒ other ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Morgan Ellis  █ Priya Raman  ▒ other ━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 h/l scroll   -/+ zoom   z fit   t today   </> columns   c color   ⏎ order   g close   ? help          r refresh   q quit
  GANTT                                                     gantt · color assignee · columns 2/7 · window Jun 19 – Jul 18

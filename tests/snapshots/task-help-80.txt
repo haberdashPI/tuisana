@@ -13,7 +13,7 @@
 ┏ Tasks ┃x           clear                Modes                        ┃s 0/41 ┓
 ┃   Task┃^x          clear hidden         p           projects         ┃e▲ │  S┃
 ┃       ┃y           copy links           f           filters          ┃       ┃
-┃▌Corete┃                                 t           tasks            ┃───────┃
+┃▌Northw┃                                 t           tasks            ┃───────┃
 ┃       ┃Group & sort                     m           toggle tasks     ┃       ┃
 ┃   Stud┃[/]         jump section                                      ┃·······┃
 ┃▍  Draf┃{/}         jump project         Panes                        ┃10 │ Ju┃

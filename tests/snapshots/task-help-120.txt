@@ -16,19 +16,19 @@
 ┃▌Northwind BTX 4412 ───────┃                                 t           tasks            ┃───────────────────────────┃
 ┃                           ┃Group & sort                     m           toggle tasks     ┃                           ┃
 ┃   Study Kit Design ·······┃[/]         jump section                                      ┃···························┃
-┃▍  Draft the assay validati┃{/}         jump project         Panes                        ┃oreterra PGI 7997 │ High   ┃
-┃   Review shipment requirem┃,           group by project     0           restore          ┃oreterra PGI 7997 │ High   ┃
-┃   Ship release candidate t┃.           group by section                                  ┃oreterra PGI 7997 │ High   ┃
-┃   Confirm carrier pickup w┃s           cycle sort field     App                          ┃oreterra PGI 7997 │ —      ┃
-┃   Update the sample intake┃^           asc / desc           r           refresh          ┃oreterra PGI 7997 │ Medium ┃
-┃   Qualify the second reage┃                                 q ^c        quit             ┃oreterra PGI 7997 │ Medium ┃
+┃▍  Draft the assay validati┃{/}         jump project         Panes                        ┃orthwind BTX 4412 │ High   ┃
+┃   Review shipment requirem┃,           group by project     0           restore          ┃orthwind BTX 4412 │ High   ┃
+┃   Ship release candidate t┃.           group by section                                  ┃orthwind BTX 4412 │ High   ┃
+┃   Confirm carrier pickup w┃s           cycle sort field     App                          ┃orthwind BTX 4412 │ —      ┃
+┃   Update the sample intake┃^           asc / desc           r           refresh          ┃orthwind BTX 4412 │ Medium ┃
+┃   Qualify the second reage┃                                 q ^c        quit             ┃orthwind BTX 4412 │ Medium ┃
 ┃                           ┃View                             ?           close this help  ┃                           ┃
 ┃   Shipment ···············┃g           gantt chart                                       ┃···························┃
-┃   Book the courier for the┃f           filter panel                                      ┃oreterra PGI 7997 │ Low    ┃
-┃   Label the retention samp┃c           open / done / all                                 ┃oreterra PGI 7997 │ Medium ┃
-┃   Reconcile the freight in┃z           subtasks                                          ┃oreterra PGI 7997 │ Low    ┃
-┃   Close out packaging vend┃left/right  scroll columns                                    ┃oreterra PGI 7997 │ Low    ┃
-┃   Close the quarter's ship┃                                                              ┃oreterra PGI 7997 │ Low    ┃
+┃   Book the courier for the┃f           filter panel                                      ┃orthwind BTX 4412 │ Low    ┃
+┃   Label the retention samp┃c           open / done / all                                 ┃orthwind BTX 4412 │ Medium ┃
+┃   Reconcile the freight in┃z           subtasks                                          ┃orthwind BTX 4412 │ Low    ┃
+┃   Close out packaging vend┃left/right  scroll columns                                    ┃orthwind BTX 4412 │ Low    ┃
+┃   Close the quarter's ship┃                                                              ┃orthwind BTX 4412 │ Low    ┃
 ┃                           ┃                                                    ? to close┃                           ┃
 ┃                           ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                           ┃
 ┃                                                                                                                      ┃

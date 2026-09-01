@@ -17,7 +17,7 @@
 ┃                                                                              ┃
 ┃   Study Kit Design ···························· │ ·  ·   ·  ┊·   ·   ·   ·   ┃
 ┃▍  Draft the a… │ Priya Raman  │ !Jul 10 │ Jun 1 │  ████     ┊                ┃
-┃   Review ship… │ Morgan Ellis │ !Aug 19 │  Aug  │        ▒▒▒┊                ┃
+┃   Review ship… │ Morgan Ellis │ !Aug 19 │  Aug  │        ███┊                ┃
 ┃   Ship releas… │ Alex Chen    │   Today │ Aug 1 │         ██┊                ┃
 ┃   Confirm car… │ —            │     Wed │ Aug 1 │          ▒┊                ┃
 ┃   Update the … │ Kim Alvarez  │   Sep 4 │ Aug 2 │           ██               ┃
@@ -26,7 +26,7 @@
 ┃   Shipment ···································· │ ·  ·   ·  ┊·   ·   ·   ·   ┃
 ┃   Book the co… │ Sam Okafor   │  Sep 15 │  Sep  │           ┊▒▒              ┃
 ┃   Label the r… │ Jo Park      │   Oct 9 │       │           ┊     ◆          ┃
-┃   Reconcile t… │ Robin Fox    │  Oct 30 │ Sep 2 │           ┊   █████        ┃
+┃   Reconcile t… │ Robin Fox    │  Oct 30 │ Sep 2 │           ┊   ▒▒▒▒▒        ┃
 ┃   Close out p… │ Alex Chen    │  Nov 14 │  Oct  │           ┊    ██████      ┃
 ┃   Close the q… │ Priya Raman  │  Dec 18 │  Nov  │           ┊        ██████  ┃
 ┃                                                                              ┃
@@ -35,6 +35,6 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
-┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Priya Raman  +2 more ━━┛
+┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Morgan Ellis  +2 more ━┛
 h/l scroll   -/+ zoom   t today   </> columns   c color       r refresh   q quit
  GANTT                                      gantt · color assignee · columns 4/7

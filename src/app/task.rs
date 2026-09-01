@@ -420,6 +420,12 @@ impl TaskFilterEditorState {
         self.visible = previous.visible;
         self.editing = previous.editing && self.visible;
         self.selected = previous.selected.min(self.fields.len().saturating_sub(1));
+        // A reload rebuilds every field from scratch, so the in-progress edit
+        // state has to be carried across as well as the queries themselves.
+        // Loading streams in one project at a time, and each one rebuilds the
+        // editor; without this the caret snapped back to 0 between keystrokes
+        // and the open date picker vanished mid-edit.
+        self.calendar = if self.editing { previous.calendar } else { None };
         for field in &mut self.fields {
             if let Some(old) = previous.fields.iter().find(|old| old.spec.key == field.spec.key) {
                 field.string_mode = old.string_mode;
@@ -437,6 +443,9 @@ impl TaskFilterEditorState {
                         field.query = old.query.clone();
                     }
                 }
+                // Clamped because a custom field can change kind between loads
+                // as values arrive, which rewrites `query` under the caret.
+                field.query_caret = old.query_caret.min(field.query.chars().count());
             }
         }
     }
@@ -3518,6 +3527,70 @@ mod tests {
                 .find(|row| row.selected)
                 .map(|row| row.label_values),
             Some(vec!["done".to_string()])
+        );
+    }
+
+    #[test]
+    fn editing_a_filter_keeps_its_caret_while_projects_stream_in() {
+        let projects = vec![Project::new("p1", "Inbox", true)];
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_sections(
+                "p1",
+                vec![SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_tasks(
+                "p1",
+                vec![task(
+                    "t1", "Open task", "p1", "Inbox", "s1", "Today", "cf1", "Priority", "High",
+                )],
+            );
+
+        let query = crate::asana::TaskQuery::for_project("p1", TaskLoadScope::All);
+        let dataset = TaskState::build_dataset_for_projects(&client, &projects, &query)
+            .expect("dataset builds");
+
+        let mut state = TaskState::new();
+        state.begin_loading(&projects);
+        state.finish_loading_dataset(dataset.clone());
+        state.set_visible(true);
+
+        // Park the caret mid-word in the Assignee filter, the way a user would
+        // after arrowing back to correct a typo.
+        state.toggle_filter_panel();
+        state.move_filter_down();
+        assert_eq!(state.filter_panel_entries()[state.view.filter_editor.selected].label, "Assignee");
+        state.filter_edit_begin();
+        for ch in "alice".chars() {
+            state.filter_push_char(ch);
+        }
+        state.filter_move_caret(-2);
+
+        // A project finishing its fetch rebuilds the filter editor underneath
+        // the edit. The caret used to snap back to 0 here.
+        state.begin_loading(&projects);
+        state.ingest_loaded_project("p1", query, dataset);
+
+        let row = state
+            .filter_panel_entries()
+            .into_iter()
+            .find(|row| row.selected)
+            .expect("a filter row stays selected");
+        assert_eq!(row.query, "alice");
+        assert_eq!(row.caret, Some(3));
+
+        // The caret is still where the user left it, so the next keystroke
+        // lands mid-word instead of at the front.
+        state.filter_push_char('X');
+        assert_eq!(
+            state
+                .filter_panel_entries()
+                .into_iter()
+                .find(|row| row.selected)
+                .map(|row| row.query),
+            Some("aliXce".to_string())
         );
     }
 

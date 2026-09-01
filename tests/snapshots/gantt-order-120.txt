@@ -15,18 +15,18 @@
 ┃                            ┃   2  █  Dana Ruiz                                    1 task┃                            ┃
 ┃▌Northwind BTX 4412 ────────┃   3  █  Jo Park                                      1 task┃     ·       ·      ·       ┃
 ┃                            ┃   4  █  Kim Alvarez                                  1 task┃                            ┃
-┃   Study Kit Design ········┃   5  █  Priya Raman                                 2 tasks┃     ·       ·      ·       ┃
-┃▍  Draft the assay validatio┃   6  █  Robin Fox                                    1 task┃                            ┃
+┃   Study Kit Design ········┃   5  █  Morgan Ellis                                 1 task┃     ·       ·      ·       ┃
+┃▍  Draft the assay validatio┃   6  █  Priya Raman                                 2 tasks┃                            ┃
 ┃   Review shipment requireme┃ ───────────────────── neutral below ────────────────────── ┃                            ┃
-┃   Ship release candidate to┃   7  ▒  Sam Okafor                                   1 task┃                            ┃
-┃   Confirm carrier pickup wi┃   8  ▒  Morgan Ellis                                 1 task┃                            ┃
+┃   Ship release candidate to┃   7  ▒  Robin Fox                                    1 task┃                            ┃
+┃   Confirm carrier pickup wi┃   8  ▒  Sam Okafor                                   1 task┃                            ┃
 ┃   Update the sample intake ┃      ▒  (no assignee)                                1 task┃                            ┃
 ┃   Qualify the second reagen┃                                                            ┃█                           ┃
 ┃                            ┃  ^k / ^j  move    t / b  to top / bottom                   ┃                            ┃
 ┃   Shipment ················┃  c  colour by    ⏎  save    esc  cancel                    ┃     ·       ·      ·       ┃
 ┃   Book the courier for the ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛▒▒                          ┃
 ┃   Label the retention samples                   │ Jo Park      │                     ┊          ◆                    ┃
-┃   Reconcile the freight invoices                │ Robin Fox    │                     ┊     ██████████                ┃
+┃   Reconcile the freight invoices                │ Robin Fox    │                     ┊     ▒▒▒▒▒▒▒▒▒▒                ┃
 ┃   Close out packaging vendor contract           │ Alex Chen    │                     ┊        ███████████            ┃
 ┃   Close the quarter's shipping report           │ Priya Raman  │                     ┊                ███████████    ┃
 ┃                                                                                                                      ┃
@@ -35,6 +35,6 @@
 ┃                                                                                                                      ┃
 ┃                                                                                                                      ┃
 ┃                                                                                                                      ┃
-┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Priya Raman  █ Robin Fox  ▒ other ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Morgan Ellis  █ Priya Raman  ▒ other ━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 j/k cursor   ^k/^j move   t/b top/bottom   c color by   ⏎ save   esc cancel                           r refresh   q quit
  COLORS                                                                             gantt · color assignee · columns 2/7

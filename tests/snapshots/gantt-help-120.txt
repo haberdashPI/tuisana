@@ -13,7 +13,7 @@
 ┏ Tasks ━━━━━━━━━━┃z          zoom to fit the tasks                Modes                             ┃11 tasks · row 1 ┓
 ┃   Task          ┃t          start at today                       p          projects               ┃  Nov    Dec     ┃
 ┃                 ┃                                                f          filters                ┃                 ┃
-┃▌Northwind PGI 79┃Chart                                           esc        tasks                  ┃  ·      ·       ┃
+┃▌Northwind BTX 44┃Chart                                           esc        tasks                  ┃  ·      ·       ┃
 ┃                 ┃>          one more table column                m          toggle tasks           ┃                 ┃
 ┃   Study Kit Desi┃<          one fewer table column                                                 ┃  ·      ·       ┃
 ┃▍  Draft the assa┃c          colour by                            Panes                             ┃                 ┃
@@ -26,7 +26,7 @@
 ┃   Shipment ·····┃blank      no dates at all                      r          refresh                ┃  ·      ·       ┃
 ┃   Book the couri┃marker     today's column                       q ^c       quit                   ┃                 ┃
 ┃   Label the rete┃edge       runs past the window                 ?          close this help        ┃                 ┃
-┃   Reconcile the ┃axis       months to weekdays, by zoom                                            ┃█                ┃
+┃   Reconcile the ┃axis       months to weekdays, by zoom                                            ┃▒                ┃
 ┃   Close out pack┃shaded     a weekend, where no bar covers it                                      ┃█████            ┃
 ┃   Close the quar┃                                                                                  ┃  ███████████    ┃
 ┃                 ┃                                                                        ? to close┃                 ┃
@@ -35,6 +35,6 @@
 ┃                                                                                                                      ┃
 ┃                                                                                                                      ┃
 ┃                                                                                                                      ┃
-┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Priya Raman  █ Robin Fox  ▒ other ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Morgan Ellis  █ Priya Raman  ▒ other ━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 h/l scroll   -/+ zoom   t today   </> columns   c color   ⏎ order   g close   ? help                  r refresh   q quit
  GANTT                                                                              gantt · color assignee · columns 2/7

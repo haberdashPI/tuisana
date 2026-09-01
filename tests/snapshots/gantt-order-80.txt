@@ -13,20 +13,20 @@
 ┏ Tasks ━┃                                                            ┃· row 1 ┓
 ┃   Task ┃▍  1  █  Alex Chen                                   2 tasks┃Nov Dec ┃
 ┃        ┃   2  █  Dana Ruiz                                    1 task┃        ┃
-┃▌Coreter┃   3  █  Jo Park                                      1 task┃·   ·   ┃
+┃▌Northwi┃   3  █  Jo Park                                      1 task┃·   ·   ┃
 ┃        ┃   4  █  Kim Alvarez                                  1 task┃        ┃
-┃   Study┃   5  █  Priya Raman                                 2 tasks┃·   ·   ┃
-┃▍  Draft┃   6  █  Robin Fox                                    1 task┃        ┃
+┃   Study┃   5  █  Morgan Ellis                                 1 task┃·   ·   ┃
+┃▍  Draft┃   6  █  Priya Raman                                 2 tasks┃        ┃
 ┃   Revie┃ ───────────────────── neutral below ────────────────────── ┃        ┃
-┃   Ship ┃   7  ▒  Sam Okafor                                   1 task┃        ┃
-┃   Confi┃   8  ▒  Morgan Ellis                                 1 task┃        ┃
+┃   Ship ┃   7  ▒  Robin Fox                                    1 task┃        ┃
+┃   Confi┃   8  ▒  Sam Okafor                                   1 task┃        ┃
 ┃   Updat┃      ▒  (no assignee)                                1 task┃        ┃
 ┃   Quali┃                                                            ┃        ┃
 ┃        ┃  ^k / ^j  move    t / b  to top / bottom                   ┃        ┃
 ┃   Shipm┃  c  colour by    ⏎  save    esc  cancel                    ┃·   ·   ┃
 ┃   Book ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛        ┃
 ┃   Label the retention samples    │ Jo Park      │           ┊     ◆          ┃
-┃   Reconcile the freight invoices │ Robin Fox    │           ┊   █████        ┃
+┃   Reconcile the freight invoices │ Robin Fox    │           ┊   ▒▒▒▒▒        ┃
 ┃   Close out packaging vendor co… │ Alex Chen    │           ┊    ██████      ┃
 ┃   Close the quarter's shipping … │ Priya Raman  │           ┊        ██████  ┃
 ┃                                                                              ┃
@@ -35,6 +35,6 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
-┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Priya Raman  +2 more ━━┛
+┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Morgan Ellis  +2 more ━┛
 j/k cursor   ^k/^j move   t/b top/bottom   c color by   ⏎ saver refresh   q quit
  COLORS                                     gantt · color assignee · columns 2/7
