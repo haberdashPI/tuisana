@@ -7,7 +7,9 @@ version = 1.0
 personal_access_token = "your-asana-pat-here"
 # Optional. Leave this out if you want to list projects without narrowing to a workspace.
 # The "No Project (Assigned to Me)" row appears automatically once tuisana can resolve your
-# logged-in user; this field is only needed to load its tasks after you select it.
+# logged-in user; this field is only needed to load its tasks after you select it. Its tasks are
+# grouped under whichever project they actually live in — for a subtask, the project of the
+# nearest parent that has one — and only tasks outside every project stay under the row's name.
 workspace_gid = "your-workspace-gid-here"
 
 # Appearance. Every value is optional; these are the defaults.

@@ -1,6 +1,6 @@
 //! In-memory Asana client used by tests.
 
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap};
 
 use crate::{
     asana::{
@@ -21,6 +21,8 @@ pub struct FakeAsanaClient {
     subtasks_by_task: HashMap<String, Vec<TaskDto>>,
     sections_by_project: HashMap<String, Vec<SectionDto>>,
     custom_field_settings_by_project: HashMap<String, Vec<ProjectCustomFieldSettingDto>>,
+    standalone_tasks: HashMap<String, TaskDto>,
+    get_task_calls: RefCell<Vec<String>>,
 }
 
 impl FakeAsanaClient {
@@ -59,6 +61,22 @@ impl FakeAsanaClient {
     pub fn with_subtasks(mut self, task_gid: impl Into<String>, subtasks: Vec<TaskDto>) -> Self {
         self.subtasks_by_task.insert(task_gid.into(), subtasks);
         self
+    }
+
+    /// Adds tasks that only `get_task` can reach.
+    ///
+    /// Use this for a task no list request returns — the parent of a subtask
+    /// that is filtered out of every project and assignee query, for instance.
+    pub fn with_standalone_tasks(mut self, tasks: Vec<TaskDto>) -> Self {
+        for task in tasks {
+            self.standalone_tasks.insert(task.gid.clone(), task);
+        }
+        self
+    }
+
+    /// The gids `get_task` has been called with, in order.
+    pub fn get_task_calls(&self) -> Vec<String> {
+        self.get_task_calls.borrow().clone()
     }
 
     /// Adds section fixtures for a project.
@@ -145,6 +163,23 @@ impl AsanaClient for FakeAsanaClient {
                 task
             })
             .collect())
+    }
+
+    fn get_task(&self, task_gid: &str) -> Result<TaskDto> {
+        self.get_task_calls.borrow_mut().push(task_gid.to_string());
+        self.standalone_tasks
+            .get(task_gid)
+            .cloned()
+            .or_else(|| {
+                self.tasks_by_project
+                    .values()
+                    .chain(self.subtasks_by_task.values())
+                    .flatten()
+                    .chain(self.assigned_to_me_tasks.iter())
+                    .find(|task| task.gid == task_gid)
+                    .cloned()
+            })
+            .ok_or_else(|| Error::Backend(format!("no fake task {task_gid}")))
     }
 
     fn list_sections(&self, project_gid: &str) -> Result<Vec<SectionDto>> {

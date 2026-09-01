@@ -59,6 +59,7 @@ fn make_task() -> TaskDto {
                 name: "Today".to_string(),
             }),
         }],
+        parent: None,
         custom_fields: vec![CustomFieldValueDto {
             gid: "custom-1".to_string(),
             name: "Priority".to_string(),
@@ -167,6 +168,7 @@ fn task_view_scrolls_to_keep_the_selected_row_visible() {
                     name: "Today".to_string(),
                 }),
             }],
+            parent: None,
             custom_fields: vec![],
         })
         .collect::<Vec<_>>();
@@ -241,6 +243,7 @@ fn changing_the_completed_filter_updates_the_visible_task_rows() {
                             name: "Today".to_string(),
                         }),
                     }],
+                    parent: None,
                     custom_fields: vec![CustomFieldValueDto {
                         gid: "custom-1".to_string(),
                         name: "Priority".to_string(),

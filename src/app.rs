@@ -1210,6 +1210,7 @@ mod tests {
                     },
                     section: None,
                 }],
+                parent: None,
                 custom_fields: Vec::new(),
             }
         }
@@ -1633,6 +1634,7 @@ mod tests {
                                 name: "Today".to_string(),
                             }),
                         }],
+                        parent: None,
                         custom_fields: vec![CustomFieldValueDto {
                             gid: "cf1".to_string(),
                             name: "Priority".to_string(),
@@ -1663,6 +1665,7 @@ mod tests {
                                 name: "Today".to_string(),
                             }),
                         }],
+                        parent: None,
                         custom_fields: vec![CustomFieldValueDto {
                             gid: "cf1".to_string(),
                             name: "Priority".to_string(),
@@ -1693,6 +1696,7 @@ mod tests {
                                 name: "Today".to_string(),
                             }),
                         }],
+                        parent: None,
                         custom_fields: vec![CustomFieldValueDto {
                             gid: "cf1".to_string(),
                             name: "Priority".to_string(),
@@ -1723,6 +1727,7 @@ mod tests {
                                 name: "Today".to_string(),
                             }),
                         }],
+                        parent: None,
                         custom_fields: vec![CustomFieldValueDto {
                             gid: "cf1".to_string(),
                             name: "Priority".to_string(),
@@ -1795,6 +1800,7 @@ mod tests {
                                 name: "Today".to_string(),
                             }),
                         }],
+                        parent: None,
                         custom_fields: vec![],
                     },
                     TaskDto {
@@ -1816,6 +1822,7 @@ mod tests {
                                 name: "Today".to_string(),
                             }),
                         }],
+                        parent: None,
                         custom_fields: vec![],
                     },
                 ],
@@ -1883,6 +1890,7 @@ mod tests {
                                 name: "Today".to_string(),
                             }),
                         }],
+                        parent: None,
                         custom_fields: vec![],
                     },
                     TaskDto {
@@ -1904,6 +1912,7 @@ mod tests {
                                 name: "Today".to_string(),
                             }),
                         }],
+                        parent: None,
                         custom_fields: vec![],
                     },
                 ],
@@ -2107,6 +2116,7 @@ mod tests {
                 assignee: None,
                 num_subtasks: 0,
                 memberships: vec![],
+                parent: None,
                 custom_fields: vec![],
             }]);
 

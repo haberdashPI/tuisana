@@ -85,6 +85,13 @@ pub struct TaskMembershipDto {
     pub section: Option<TaskMembershipSectionDto>,
 }
 
+/// The parent portion of a task payload.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskParentDto {
+    /// The parent task id.
+    pub gid: String,
+}
+
 /// Enum option payload used by custom fields.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EnumOptionDto {
@@ -134,6 +141,13 @@ pub struct TaskDto {
     /// The number of subtasks.
     #[serde(default)]
     pub num_subtasks: usize,
+    /// The task this one is a subtask of, if any.
+    ///
+    /// Asana only reports project memberships a task holds directly, and a
+    /// subtask usually holds none — the parent is the only way to find out
+    /// which project such a task lives in.
+    #[serde(default)]
+    pub parent: Option<TaskParentDto>,
     /// All membership records for the task.
     #[serde(default)]
     pub memberships: Vec<TaskMembershipDto>,

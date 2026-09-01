@@ -1814,15 +1814,31 @@ impl TaskState {
                 project.id,
                 tasks.len()
             ));
+            // Tasks fetched for a real project all belong to it. Tasks fetched
+            // by assignee come from all over the workspace, so the row's own
+            // name is only a fallback for the ones that genuinely sit outside
+            // every project.
+            let mut ancestors = AncestorPlacements::default();
+
             for task in tasks {
+                let placement = if is_assigned_to_me {
+                    ancestors.placement(client, &task)
+                } else {
+                    None
+                };
+                let (project_name, inherited_section) = match placement {
+                    Some(placement) => (placement.project, placement.section),
+                    None => (project.name.clone(), None),
+                };
+
                 add_task_tree(
                     client,
                     &project.id,
-                    &project.name,
+                    &project_name,
                     query_template.scope,
                     &section_map,
                     &section_order_map,
-                    None,
+                    inherited_section,
                     None,
                     None,
                     0,
@@ -2266,9 +2282,105 @@ impl TaskState {
     }
 }
 
+/// Where a task belongs in the project/section hierarchy, as resolved from the
+/// task's own project membership or from the nearest ancestor that has one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TaskPlacement {
+    project: String,
+    section: Option<String>,
+}
+
+/// Resolves the project a task fetched by assignee belongs to.
+///
+/// Tasks fetched by assignee arrive from all over the workspace, and a subtask
+/// normally holds no project membership of its own — the nearest ancestor that
+/// *is* in a project decides where it is grouped. Ancestors are fetched one at
+/// a time because they are often absent from the loaded set entirely (completed,
+/// outside the date window, or assigned to someone else), and memoized because
+/// siblings share them.
+#[derive(Debug, Default)]
+struct AncestorPlacements {
+    by_gid: HashMap<String, Option<TaskPlacement>>,
+}
+
+impl AncestorPlacements {
+    /// How many parent hops to follow before giving up, so a cycle or a
+    /// pathologically deep tree can't stall a load.
+    const MAX_HOPS: usize = 8;
+
+    /// The placement for `task`, or `None` when neither it nor any ancestor
+    /// within [`Self::MAX_HOPS`] belongs to a project.
+    fn placement<C: AsanaClient>(&mut self, client: &C, task: &TaskDto) -> Option<TaskPlacement> {
+        if let Some(placement) = membership_placement(task) {
+            return Some(placement);
+        }
+
+        // Every gid walked over holds no membership of its own, so they all
+        // resolve to whatever the walk ends up finding — cache them together.
+        let mut walked: Vec<String> = Vec::new();
+        let mut next = task.parent.as_ref().map(|parent| parent.gid.clone());
+        let mut resolved = None;
+
+        while let Some(gid) = next.take() {
+            if let Some(cached) = self.by_gid.get(&gid) {
+                resolved = cached.clone();
+                break;
+            }
+            if walked.len() >= Self::MAX_HOPS || walked.contains(&gid) {
+                debug_log(&format!("assigned-to-me parent walk gave up at task={gid}"));
+                break;
+            }
+            walked.push(gid.clone());
+
+            let parent = match client.get_task(&gid) {
+                Ok(parent) => parent,
+                Err(err) => {
+                    debug_log(&format!("assigned-to-me parent lookup failed task={gid}: {err}"));
+                    break;
+                }
+            };
+            if let Some(placement) = membership_placement(&parent) {
+                resolved = Some(placement);
+                break;
+            }
+            next = parent.parent.as_ref().map(|parent| parent.gid.clone());
+        }
+
+        for gid in walked {
+            self.by_gid.insert(gid, resolved.clone());
+        }
+        resolved
+    }
+}
+
+/// The placement a task's own memberships give it, if any.
+fn membership_placement(task: &TaskDto) -> Option<TaskPlacement> {
+    task.memberships.iter().find_map(|membership| {
+        let project = membership.project.name.clone();
+        if project.trim().is_empty() {
+            return None;
+        }
+        Some(TaskPlacement {
+            project,
+            section: membership
+                .section
+                .as_ref()
+                .map(|section| section.name.clone())
+                .filter(|section| !section.trim().is_empty()),
+        })
+    })
+}
+
+/// Records `task` and its subtasks.
+///
+/// `target_gid` is the id the records are cached under — a project gid, or the
+/// current user's gid for the assigned-to-me row. It is deliberately separate
+/// from `project_name`, which is the project the rows are *grouped* under and
+/// for assigned-to-me tasks comes from the task's own placement rather than
+/// from the target.
 fn add_task_tree<C: AsanaClient>(
     client: &C,
-    project_gid: &str,
+    target_gid: &str,
     project_name: &str,
     scope: TaskLoadScope,
     section_map: &HashMap<String, String>,
@@ -2294,7 +2406,7 @@ fn add_task_tree<C: AsanaClient>(
     record.start_date = task.start_on;
     record.natural_order = *natural_order;
     *natural_order = (*natural_order).saturating_add(1);
-    record.project_gids.push(project_gid.to_string());
+    record.project_gids.push(target_gid.to_string());
     record.projects.push(project_name.to_string());
 
     let mut section_name = inherited_section;
@@ -2342,7 +2454,7 @@ fn add_task_tree<C: AsanaClient>(
         for subtask in subtasks {
             add_task_tree(
                 client,
-                project_gid,
+                target_gid,
                 project_name,
                 scope,
                 section_map,
@@ -2376,12 +2488,12 @@ mod tests {
             dto::{
                 CustomFieldDto, CustomFieldValueDto, EnumOptionDto, ProjectCustomFieldSettingDto,
                 SectionDto, TaskDto, TaskMembershipDto, TaskMembershipProjectDto,
-                TaskMembershipSectionDto, UserDto,
+                TaskMembershipSectionDto, TaskParentDto, UserDto,
             },
             fake::FakeAsanaClient,
             TaskLoadScope,
         },
-        domain::Project,
+        domain::{Project, TaskRowKind, TaskTableModel},
     };
 
     use super::{TaskDataset, TaskFieldFilterKind, TaskFilterEditorState, TaskState, TaskStatus};
@@ -2420,6 +2532,7 @@ mod tests {
                     name: section_name.to_string(),
                 }),
             }],
+            parent: None,
             custom_fields: vec![CustomFieldValueDto {
                 gid: field_gid.to_string(),
                 name: field_name.to_string(),
@@ -2939,6 +3052,7 @@ mod tests {
                     }),
                     num_subtasks: 0,
                     memberships: vec![],
+                    parent: None,
                     custom_fields: vec![CustomFieldValueDto {
                         gid: "cf1".to_string(),
                         name: "Priority".to_string(),
@@ -3519,6 +3633,7 @@ mod tests {
                     name: "Today".to_string(),
                 }),
             }],
+            parent: None,
             custom_fields: vec![],
         }
     }
@@ -3713,6 +3828,7 @@ mod tests {
             assignee: None,
             num_subtasks: 0,
             memberships: vec![],
+            parent: None,
             custom_fields: vec![],
         };
         let late = TaskDto {
@@ -3725,6 +3841,7 @@ mod tests {
             assignee: None,
             num_subtasks: 0,
             memberships: vec![],
+            parent: None,
             custom_fields: vec![],
         };
         let no_due = TaskDto {
@@ -3737,6 +3854,7 @@ mod tests {
             assignee: None,
             num_subtasks: 0,
             memberships: vec![],
+            parent: None,
             custom_fields: vec![],
         };
 
@@ -3764,5 +3882,231 @@ mod tests {
         // early (Feb) excluded; late (Nov) included; no-due excluded
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].gid, "t2");
+    }
+
+    /// A task assigned to the current user but sitting in no project of its own
+    /// is placed by its parent, which is often not part of the loaded set at
+    /// all — completed, outside the date window, or assigned to someone else.
+    fn assigned_subtask(gid: &str, name: &str, parent_gid: Option<&str>) -> TaskDto {
+        let mut task = task(gid, name, "", "", "", "", "cf", "Tag", "red");
+        task.memberships.clear();
+        task.parent = parent_gid.map(|gid| TaskParentDto {
+            gid: gid.to_string(),
+        });
+        task
+    }
+
+    fn project_headers(table: &TaskTableModel) -> Vec<String> {
+        table
+            .rows
+            .iter()
+            .filter(|row| row.kind == TaskRowKind::ProjectHeader)
+            .map(|row| row.cells[0].clone())
+            .collect()
+    }
+
+    fn assigned_to_me_projects() -> Vec<Project> {
+        vec![
+            Project::assigned_to_me("user-1"),
+            Project::new("pz", "Zeta", false),
+        ]
+    }
+
+    #[test]
+    fn an_assigned_subtask_groups_under_its_parents_project_when_the_parent_is_filtered_out() {
+        let projects = assigned_to_me_projects();
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_current_user_gid("user-1")
+            .with_assigned_to_me_tasks(vec![assigned_subtask("s1", "Assigned subtask", Some("t1"))])
+            // The parent is in Zeta but no list request returns it, so only a
+            // direct lookup can place the subtask.
+            .with_standalone_tasks(vec![task(
+                "t1", "Parent in Zeta", "pz", "Zeta", "sz", "Doing", "cf", "Tag", "red",
+            )]);
+
+        let table = TaskState::build_table_for_projects(&client, &projects).expect("table");
+
+        let row = table
+            .rows
+            .iter()
+            .find(|row| row.cells[0] == "Assigned subtask")
+            .expect("the assigned subtask is shown");
+        assert_eq!(row.project.as_deref(), Some("Zeta"));
+        assert_eq!(row.cells[5], "Zeta", "the Projects column follows the grouping");
+        assert_eq!(
+            project_headers(&table),
+            vec!["Zeta".to_string()],
+            "no assigned-to-me group is left behind"
+        );
+        assert_eq!(client.get_task_calls(), vec!["t1".to_string()]);
+    }
+
+    #[test]
+    fn an_assigned_task_groups_under_the_project_it_is_a_member_of() {
+        let projects = assigned_to_me_projects();
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_current_user_gid("user-1")
+            .with_assigned_to_me_tasks(vec![task(
+                "t1", "Own membership", "pz", "Zeta", "sz", "Doing", "cf", "Tag", "red",
+            )]);
+
+        let table = TaskState::build_table_for_projects(&client, &projects).expect("table");
+
+        assert_eq!(project_headers(&table), vec!["Zeta".to_string()]);
+        assert!(
+            client.get_task_calls().is_empty(),
+            "a task with its own membership needs no parent lookup"
+        );
+    }
+
+    #[test]
+    fn an_assigned_task_outside_every_project_stays_in_the_assigned_to_me_group() {
+        let projects = assigned_to_me_projects();
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_current_user_gid("user-1")
+            .with_assigned_to_me_tasks(vec![assigned_subtask("s1", "Loose task", None)]);
+
+        let table = TaskState::build_table_for_projects(&client, &projects).expect("table");
+
+        assert_eq!(
+            project_headers(&table),
+            vec!["No Project (Assigned to Me)".to_string()]
+        );
+    }
+
+    #[test]
+    fn placement_walks_past_ancestors_that_are_in_no_project_themselves() {
+        let projects = assigned_to_me_projects();
+        let mut middle = assigned_subtask("t2", "Middle", Some("t1"));
+        middle.assignee = None;
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_current_user_gid("user-1")
+            .with_assigned_to_me_tasks(vec![assigned_subtask("s1", "Deep subtask", Some("t2"))])
+            .with_standalone_tasks(vec![
+                middle,
+                task("t1", "Top", "pz", "Zeta", "sz", "Doing", "cf", "Tag", "red"),
+            ]);
+
+        let table = TaskState::build_table_for_projects(&client, &projects).expect("table");
+
+        assert_eq!(project_headers(&table), vec!["Zeta".to_string()]);
+        assert_eq!(
+            client.get_task_calls(),
+            vec!["t2".to_string(), "t1".to_string()],
+            "the walk stops at the first ancestor with a project"
+        );
+    }
+
+    #[test]
+    fn siblings_share_one_lookup_of_the_parent_they_have_in_common() {
+        let projects = assigned_to_me_projects();
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_current_user_gid("user-1")
+            .with_assigned_to_me_tasks(vec![
+                assigned_subtask("s1", "First subtask", Some("t1")),
+                assigned_subtask("s2", "Second subtask", Some("t1")),
+            ])
+            .with_standalone_tasks(vec![task(
+                "t1", "Parent in Zeta", "pz", "Zeta", "sz", "Doing", "cf", "Tag", "red",
+            )]);
+
+        let table = TaskState::build_table_for_projects(&client, &projects).expect("table");
+
+        assert_eq!(project_headers(&table), vec!["Zeta".to_string()]);
+        assert_eq!(
+            client.get_task_calls(),
+            vec!["t1".to_string()],
+            "the second sibling reuses the memoized placement"
+        );
+    }
+
+    #[test]
+    fn a_parent_lookup_that_fails_leaves_the_task_in_the_assigned_to_me_group() {
+        let projects = assigned_to_me_projects();
+        // No fixture for "t1": the lookup errors the way a revoked permission
+        // or a deleted task would.
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_current_user_gid("user-1")
+            .with_assigned_to_me_tasks(vec![assigned_subtask("s1", "Orphan", Some("t1"))]);
+
+        let table = TaskState::build_table_for_projects(&client, &projects).expect("table");
+
+        assert_eq!(
+            project_headers(&table),
+            vec!["No Project (Assigned to Me)".to_string()],
+            "a failed lookup must not fail the whole load"
+        );
+    }
+
+    #[test]
+    fn a_parent_cycle_does_not_loop_forever() {
+        let projects = assigned_to_me_projects();
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_current_user_gid("user-1")
+            .with_assigned_to_me_tasks(vec![assigned_subtask("s1", "Cyclic", Some("t1"))])
+            .with_standalone_tasks(vec![
+                assigned_subtask("t1", "One", Some("t2")),
+                assigned_subtask("t2", "Two", Some("t1")),
+            ]);
+
+        let table = TaskState::build_table_for_projects(&client, &projects).expect("table");
+
+        assert_eq!(
+            project_headers(&table),
+            vec!["No Project (Assigned to Me)".to_string()]
+        );
+        assert_eq!(client.get_task_calls(), vec!["t1".to_string(), "t2".to_string()]);
+    }
+
+    #[test]
+    fn loading_a_real_project_never_looks_a_parent_up() {
+        let projects = vec![Project::new("pz", "Zeta", false)];
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_tasks(
+                "pz",
+                vec![task(
+                    "t1", "Parent", "pz", "Zeta", "sz", "Doing", "cf", "Tag", "red",
+                )],
+            )
+            .with_subtasks("t1", vec![assigned_subtask("s1", "Subtask", Some("t1"))]);
+
+        let table = TaskState::build_table_for_projects(&client, &projects).expect("table");
+
+        assert_eq!(project_headers(&table), vec!["Zeta".to_string()]);
+        assert!(
+            client.get_task_calls().is_empty(),
+            "tasks fetched for a project already know which project they are in"
+        );
+    }
+
+    /// The same subtask arrives twice when its project is selected alongside
+    /// the assigned-to-me row. Merging used to leave it with both "Zeta" and
+    /// "No Project (Assigned to Me)", and grouping picked whichever sorted
+    /// first — so any project named after "No Project" lost.
+    #[test]
+    fn a_subtask_loaded_from_both_its_project_and_the_assigned_to_me_row_groups_once() {
+        let projects = assigned_to_me_projects();
+        let subtask = assigned_subtask("s1", "Assigned subtask", Some("t1"));
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_current_user_gid("user-1")
+            .with_assigned_to_me_tasks(vec![subtask.clone()])
+            .with_tasks(
+                "pz",
+                vec![task(
+                    "t1", "Parent in Zeta", "pz", "Zeta", "sz", "Doing", "cf", "Tag", "red",
+                )],
+            )
+            .with_subtasks("t1", vec![subtask]);
+
+        let table = TaskState::build_table_for_projects(&client, &projects).expect("table");
+
+        let row = table
+            .rows
+            .iter()
+            .find(|row| row.cells[0] == "Assigned subtask")
+            .expect("the assigned subtask is shown");
+        assert_eq!(row.project.as_deref(), Some("Zeta"));
+        assert_eq!(row.cells[5], "Zeta");
+        assert_eq!(project_headers(&table), vec!["Zeta".to_string()]);
     }
 }

@@ -65,6 +65,7 @@ fn task(gid: &str, assignee: &str, start: &str, due: &str) -> TaskDto {
             },
             section: None,
         }],
+        parent: None,
         custom_fields: Vec::new(),
     }
 }

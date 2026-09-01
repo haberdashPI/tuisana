@@ -120,6 +120,13 @@ pub trait AsanaClient {
     fn list_projects(&self) -> Result<Vec<Project>>;
     fn list_tasks(&self, query: &TaskQuery) -> Result<Vec<TaskDto>>;
     fn list_subtasks(&self, task_gid: &str, scope: TaskLoadScope) -> Result<Vec<TaskDto>>;
+    /// Fetches a single task by gid, regardless of project or assignee.
+    ///
+    /// Needed to look up a task that no list request returned — notably the
+    /// parent of a subtask fetched by assignee, which decides the project the
+    /// subtask is grouped under even when the parent itself is filtered out of
+    /// the loaded set.
+    fn get_task(&self, task_gid: &str) -> Result<TaskDto>;
     fn list_sections(&self, project_gid: &str) -> Result<Vec<SectionDto>>;
     fn list_project_custom_field_settings(
         &self,

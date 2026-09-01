@@ -103,6 +103,7 @@ fn task(
                 name: section.to_string(),
             }),
         }],
+        parent: None,
         custom_fields: priority
             .map(|value| {
                 vec![CustomFieldValueDto {

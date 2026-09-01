@@ -21,6 +21,14 @@ use crate::{
 
 const ASANA_API_BASE_URL: &str = "https://app.asana.com/api/1.0";
 
+/// The task fields every task request asks Asana for.
+///
+/// Shared by the list, subtask, and single-task endpoints so a record built
+/// from any of them carries the same information — in particular `parent.gid`,
+/// which is what lets a subtask fetched by assignee be traced back to the
+/// project its parent lives in.
+const TASK_OPT_FIELDS: &str = "gid,name,completed,modified_at,due_on,start_on,assignee.gid,assignee.name,num_subtasks,parent.gid,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.enum_value.gid,custom_fields.enum_value.name";
+
 /// Minimal transport abstraction for JSON GET requests.
 pub trait Transport {
     fn get_json(&self, path: &str, query: &[(&str, String)], token: &str) -> Result<Value>;
@@ -126,11 +134,7 @@ impl<T: Transport> HttpAsanaClient<T> {
         offset: Option<&str>,
     ) -> Result<CollectionResponse<TaskDto>> {
         let mut query = vec![
-            (
-                "opt_fields",
-                "gid,name,completed,modified_at,due_on,start_on,assignee.gid,assignee.name,num_subtasks,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.enum_value.gid,custom_fields.enum_value.name"
-                    .to_string(),
-            ),
+            ("opt_fields", TASK_OPT_FIELDS.to_string()),
             ("limit", "100".to_string()),
         ];
         if matches!(task_query.scope, TaskLoadScope::OpenOnly) {
@@ -175,11 +179,7 @@ impl<T: Transport> HttpAsanaClient<T> {
         offset: Option<&str>,
     ) -> Result<CollectionResponse<TaskDto>> {
         let mut query = vec![
-            (
-                "opt_fields",
-                "gid,name,completed,modified_at,due_on,start_on,assignee.gid,assignee.name,num_subtasks,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.enum_value.gid,custom_fields.enum_value.name"
-                    .to_string(),
-            ),
+            ("opt_fields", TASK_OPT_FIELDS.to_string()),
             ("limit", "100".to_string()),
         ];
         if matches!(scope, TaskLoadScope::OpenOnly) {
@@ -303,6 +303,18 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
         Ok(tasks)
     }
 
+    fn get_task(&self, task_gid: &str) -> Result<TaskDto> {
+        let json = self.transport.get_json(
+            &format!("tasks/{task_gid}"),
+            &[("opt_fields", TASK_OPT_FIELDS.to_string())],
+            &self.personal_access_token,
+        )?;
+
+        let response: ResourceResponse<TaskDto> = serde_json::from_value(json)
+            .map_err(|err| Error::Backend(format!("failed to decode task {task_gid}: {err}")))?;
+        Ok(response.data)
+    }
+
     fn list_sections(&self, project_gid: &str) -> Result<Vec<SectionDto>> {
         let mut sections = Vec::new();
         let mut offset: Option<String> = None;
@@ -359,7 +371,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{HttpAsanaClient, Transport};
+    use super::{HttpAsanaClient, Transport, TASK_OPT_FIELDS};
     use crate::asana::{AsanaClient, TaskLoadScope, TaskQuery};
     use crate::error::{Error, Result};
 
@@ -441,6 +453,39 @@ mod tests {
             .expect_err("missing workspace_gid should fail");
 
         assert!(matches!(err, Error::Backend(message) if message.contains("workspace_gid")));
+    }
+
+    #[test]
+    fn get_task_fetches_one_task_with_its_parent_and_memberships() {
+        let transport = MockTransport::new(vec![json!({
+            "data": {
+                "gid": "t1",
+                "name": "Parent in Zeta",
+                "parent": { "gid": "t0" },
+                "memberships": [
+                    { "project": { "gid": "pz", "name": "Zeta" }, "section": null }
+                ]
+            }
+        })]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        let task = client.get_task("t1").expect("task resolves");
+
+        assert_eq!(task.name, "Parent in Zeta");
+        assert_eq!(task.parent.expect("a parent").gid, "t0");
+        assert_eq!(task.memberships[0].project.name, "Zeta");
+
+        let requests = client.transport.requests.borrow();
+        let (path, query, _) = &requests[0];
+        assert_eq!(path, "tasks/t1");
+        assert!(query.contains(&("opt_fields".to_string(), TASK_OPT_FIELDS.to_string())));
+    }
+
+    /// A subtask can only be traced back to its parent's project when the
+    /// parent id comes back with the task, so every task request must ask for it.
+    #[test]
+    fn task_requests_ask_for_the_parent_id() {
+        assert!(TASK_OPT_FIELDS.contains("parent.gid"));
     }
 
     #[test]

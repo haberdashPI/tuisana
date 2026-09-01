@@ -351,6 +351,7 @@ mod tests {
                             name: "Today".to_string(),
                         }),
                     }],
+                    parent: None,
                     custom_fields: vec![],
                 }],
             );

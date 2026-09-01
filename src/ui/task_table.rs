@@ -1051,6 +1051,7 @@ mod tests {
                     name: "Today".to_string(),
                 }),
             }],
+            parent: None,
             custom_fields: vec![CustomFieldValueDto {
                 gid: "cf1".to_string(),
                 name: "Priority".to_string(),
