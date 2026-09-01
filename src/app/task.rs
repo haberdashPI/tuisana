@@ -1046,12 +1046,23 @@ impl TaskState {
 
     /// Mark the task pane as loading data for the given projects.
     pub fn begin_loading(&mut self, projects: &[Project]) {
+        self.set_project_group_order(projects);
         self.loading.status = TaskStatus::Loading;
         self.loading.progress = LoadProgress::Active {
             started_at: Instant::now(),
             target_names: projects.iter().map(|project| project.name.clone()).collect(),
             target_ids: projects.iter().map(|project| project.id.clone()).collect(),
         };
+    }
+
+    /// Groups the table's projects in the order they were handed to us.
+    ///
+    /// The targets arrive in project-list order, so recording it here is what
+    /// keeps the two panes reading down in the same order — including the
+    /// "No Project (Assigned to Me)" row the list pins to the top.
+    fn set_project_group_order(&mut self, projects: &[Project]) {
+        self.view.settings.sort.project_order =
+            projects.iter().map(|project| project.name.clone()).collect();
     }
 
     /// Replace the visible table with a fully built table model.
@@ -1526,6 +1537,20 @@ impl TaskState {
             .collect()
     }
 
+    /// Discard cached task records and load bookkeeping so the next fetch
+    /// pulls fresh data instead of treating the current selection as already
+    /// covered.
+    ///
+    /// Cached records are merged with incoming ones rather than replaced (see
+    /// `merge_task_record`), so a plain re-fetch can't clear a field that
+    /// changed to "unset" upstream (a task reopened, or dropped from a
+    /// project). Wiping the cache first forces a clean rebuild.
+    pub fn invalidate_cache(&mut self) {
+        self.loading.cache = TaskCache::default();
+        self.loading.loaded_project_queries.clear();
+        self.loading.loaded_target_ids.clear();
+    }
+
     pub fn mark_out_of_date(&mut self, message: impl Into<String>) {
         if matches!(self.loading.status, TaskStatus::Idle) {
             return;
@@ -1738,6 +1763,7 @@ impl TaskState {
         let query_template = self.desired_task_query();
         let dataset = Self::build_dataset_for_projects(client, projects, &query_template)?;
         self.loading.cache.merge_dataset(dataset);
+        self.set_project_group_order(projects);
         self.loading.loaded_target_ids = projects.iter().map(|project| project.id.clone()).collect();
         for project in projects {
             let query = TaskQuery { target: TaskTarget::for_project(project), ..query_template.clone() };
@@ -1759,10 +1785,12 @@ impl TaskState {
     ) -> Result<TaskTableModel> {
         let query_template = TaskQuery::for_project("", TaskLoadScope::All);
         let dataset = Self::build_dataset_for_projects(client, projects, &query_template)?;
+        let mut settings = TaskTableSettings::default();
+        settings.sort.project_order = projects.iter().map(|project| project.name.clone()).collect();
         Ok(TaskTableModel::from_records_with_settings(
             dataset.records,
             dataset.custom_field_definitions,
-            &TaskTableSettings::default(),
+            &settings,
         ))
     }
 
@@ -1825,8 +1853,10 @@ impl TaskState {
             ));
             // Tasks fetched for a real project all belong to it. Tasks fetched
             // by assignee come from all over the workspace, so the row's own
-            // name is only a fallback for the ones that genuinely sit outside
-            // every project.
+            // id and name are only a fallback for the ones that genuinely sit
+            // outside every project. Anything the placement walk does resolve is
+            // cached under *that* project's gid, which is what keeps it out of
+            // the view until the project it belongs to is selected too.
             let mut ancestors = AncestorPlacements::default();
 
             for task in tasks {
@@ -1835,14 +1865,14 @@ impl TaskState {
                 } else {
                     None
                 };
-                let (project_name, inherited_section) = match placement {
-                    Some(placement) => (placement.project, placement.section),
-                    None => (project.name.clone(), None),
+                let (target_gid, project_name, inherited_section) = match placement {
+                    Some(placement) => (placement.project_gid, placement.project, placement.section),
+                    None => (project.id.clone(), project.name.clone(), None),
                 };
 
                 add_task_tree(
                     client,
-                    &project.id,
+                    &target_gid,
                     &project_name,
                     query_template.scope,
                     &section_map,
@@ -2295,6 +2325,7 @@ impl TaskState {
 /// task's own project membership or from the nearest ancestor that has one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TaskPlacement {
+    project_gid: String,
     project: String,
     section: Option<String>,
 }
@@ -2365,11 +2396,13 @@ impl AncestorPlacements {
 /// The placement a task's own memberships give it, if any.
 fn membership_placement(task: &TaskDto) -> Option<TaskPlacement> {
     task.memberships.iter().find_map(|membership| {
+        let project_gid = membership.project.gid.clone();
         let project = membership.project.name.clone();
-        if project.trim().is_empty() {
+        if project_gid.trim().is_empty() || project.trim().is_empty() {
             return None;
         }
         Some(TaskPlacement {
+            project_gid,
             project,
             section: membership
                 .section
@@ -2382,11 +2415,11 @@ fn membership_placement(task: &TaskDto) -> Option<TaskPlacement> {
 
 /// Records `task` and its subtasks.
 ///
-/// `target_gid` is the id the records are cached under — a project gid, or the
-/// current user's gid for the assigned-to-me row. It is deliberately separate
-/// from `project_name`, which is the project the rows are *grouped* under and
-/// for assigned-to-me tasks comes from the task's own placement rather than
-/// from the target.
+/// `target_gid` is the id the records are cached under, and the id the view
+/// filters on: a project gid, or the current user's gid for assigned-to-me
+/// tasks that belong to no project at all. An assigned-to-me task the placement
+/// walk *did* resolve is cached under its resolved project's gid, so it appears
+/// only while that project is one of the selected targets.
 fn add_task_tree<C: AsanaClient>(
     client: &C,
     target_gid: &str,
@@ -2748,27 +2781,29 @@ mod tests {
         assert!(state.table().columns.iter().any(|column| column == "Effort"));
         assert_eq!(state.table().task_count(), 2);
         assert_eq!(state.table().rows.len(), 10);
+        // The groups follow the order the projects were handed to us in, not
+        // the alphabet: Inbox was listed first.
         assert_eq!(state.table().rows[0].kind, crate::domain::TaskRowKind::ProjectSeparator);
         assert_eq!(state.table().rows[1].kind, crate::domain::TaskRowKind::ProjectHeader);
-        assert_eq!(state.table().rows[1].cells[0], "Backlog");
+        assert_eq!(state.table().rows[1].cells[0], "Inbox");
         assert_eq!(state.table().rows[2].kind, crate::domain::TaskRowKind::SectionSpacer);
         assert_eq!(state.table().rows[3].kind, crate::domain::TaskRowKind::SectionHeader);
-        assert_eq!(state.table().rows[3].cells[0], "Later");
+        assert_eq!(state.table().rows[3].cells[0], "Today");
         assert_eq!(state.table().rows[4].kind, crate::domain::TaskRowKind::Task);
-        assert_eq!(state.table().rows[4].cells[0], "Ship release");
-        assert_eq!(state.table().rows[4].cells[1], "Alex");
-        assert_eq!(state.table().rows[4].cells[2], "2026-06-01");
-        assert_eq!(state.table().rows[4].cells[3], "2026-05-28");
-        assert_eq!(state.table().rows[4].cells[4], "open");
-        assert_eq!(state.table().rows[4].cells[5], "Backlog | Inbox");
+        assert_eq!(state.table().rows[4].cells[0], "Write docs");
         assert_eq!(state.table().rows[5].kind, crate::domain::TaskRowKind::ProjectSeparator);
         assert_eq!(state.table().rows[6].kind, crate::domain::TaskRowKind::ProjectHeader);
-        assert_eq!(state.table().rows[6].cells[0], "Inbox");
+        assert_eq!(state.table().rows[6].cells[0], "Backlog");
         assert_eq!(state.table().rows[7].kind, crate::domain::TaskRowKind::SectionSpacer);
         assert_eq!(state.table().rows[8].kind, crate::domain::TaskRowKind::SectionHeader);
-        assert_eq!(state.table().rows[8].cells[0], "Today");
+        assert_eq!(state.table().rows[8].cells[0], "Later");
         assert_eq!(state.table().rows[9].kind, crate::domain::TaskRowKind::Task);
-        assert_eq!(state.table().rows[9].cells[0], "Write docs");
+        assert_eq!(state.table().rows[9].cells[0], "Ship release");
+        assert_eq!(state.table().rows[9].cells[1], "Alex");
+        assert_eq!(state.table().rows[9].cells[2], "2026-06-01");
+        assert_eq!(state.table().rows[9].cells[3], "2026-05-28");
+        assert_eq!(state.table().rows[9].cells[4], "open");
+        assert_eq!(state.table().rows[9].cells[5], "Backlog | Inbox");
     }
 
     #[test]
@@ -3969,6 +4004,15 @@ mod tests {
         task
     }
 
+    fn task_names(table: &TaskTableModel) -> Vec<String> {
+        table
+            .rows
+            .iter()
+            .filter(|row| row.kind == TaskRowKind::Task)
+            .map(|row| row.cells[0].clone())
+            .collect()
+    }
+
     fn project_headers(table: &TaskTableModel) -> Vec<String> {
         table
             .rows
@@ -4181,5 +4225,124 @@ mod tests {
         assert_eq!(row.project.as_deref(), Some("Zeta"));
         assert_eq!(row.cells[5], "Zeta");
         assert_eq!(project_headers(&table), vec!["Zeta".to_string()]);
+    }
+
+    /// A subtask of a task in Zeta holds no project membership of its own, so
+    /// the assignee query returns it even though Zeta is not selected. Grouping
+    /// it under a "Zeta" header the user never asked for is worse than leaving
+    /// it out: the assigned-to-me row is for work that sits outside every
+    /// project, not a back door into every project the user touches.
+    #[test]
+    fn an_assigned_subtask_of_an_unselected_project_stays_out_of_the_view() {
+        let projects = assigned_to_me_projects();
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_current_user_gid("user-1")
+            .with_assigned_to_me_tasks(vec![
+                assigned_subtask("s1", "Assigned subtask", Some("t1")),
+                assigned_subtask("s2", "Loose task", None),
+            ])
+            .with_standalone_tasks(vec![task(
+                "t1", "Parent in Zeta", "pz", "Zeta", "sz", "Doing", "cf", "Tag", "red",
+            )]);
+
+        let mut state = TaskState::new();
+        state
+            .load_task_dataset_for_projects(&client, &[Project::assigned_to_me("user-1")])
+            .expect("tasks load");
+
+        assert_eq!(
+            project_headers(state.table()),
+            vec!["No Project (Assigned to Me)".to_string()]
+        );
+        let names = task_names(state.table());
+        assert_eq!(
+            names,
+            vec!["Loose task".to_string()],
+            "only the task that is in no project at all survives"
+        );
+    }
+
+    #[test]
+    fn an_assigned_subtask_returns_to_the_view_once_its_project_is_selected() {
+        let projects = assigned_to_me_projects();
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_current_user_gid("user-1")
+            .with_assigned_to_me_tasks(vec![assigned_subtask("s1", "Assigned subtask", Some("t1"))])
+            // Zeta's own task list does not reach the subtask — its parent is
+            // outside the loaded set — so the assigned-to-me copy is the only
+            // one there is.
+            .with_standalone_tasks(vec![task(
+                "t1", "Parent in Zeta", "pz", "Zeta", "sz", "Doing", "cf", "Tag", "red",
+            )]);
+
+        let mut state = TaskState::new();
+        state
+            .load_task_dataset_for_projects(&client, &projects)
+            .expect("tasks load");
+
+        assert_eq!(project_headers(state.table()), vec!["Zeta".to_string()]);
+        assert_eq!(task_names(state.table()), vec!["Assigned subtask".to_string()]);
+    }
+
+    /// The same rule applies to a task that holds the membership itself: the
+    /// assignee query reaches it, but it belongs to a project the user has not
+    /// selected.
+    #[test]
+    fn an_assigned_task_in_an_unselected_project_stays_out_of_the_view() {
+        let projects = assigned_to_me_projects();
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_current_user_gid("user-1")
+            .with_assigned_to_me_tasks(vec![task(
+                "t1", "Own membership", "pz", "Zeta", "sz", "Doing", "cf", "Tag", "red",
+            )]);
+
+        let mut state = TaskState::new();
+        state
+            .load_task_dataset_for_projects(&client, &[Project::assigned_to_me("user-1")])
+            .expect("tasks load");
+
+        assert_eq!(state.table().task_count(), 0);
+    }
+
+    /// The project list pins "No Project (Assigned to Me)" to the top and hands
+    /// the targets over in that order, so the table's groups have to lead with
+    /// it too — sorting the headers by name used to bury it under every project
+    /// named earlier in the alphabet.
+    #[test]
+    fn project_groups_lead_with_the_assigned_to_me_row_like_the_project_list_does() {
+        let projects = vec![
+            Project::assigned_to_me("user-1"),
+            Project::new("pa", "Alpha", false),
+            Project::new("pz", "Zeta", false),
+        ];
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_current_user_gid("user-1")
+            .with_assigned_to_me_tasks(vec![assigned_subtask("s1", "Loose task", None)])
+            .with_tasks(
+                "pa",
+                vec![task(
+                    "t1", "Task in Alpha", "pa", "Alpha", "sa", "Doing", "cf", "Tag", "red",
+                )],
+            )
+            .with_tasks(
+                "pz",
+                vec![task(
+                    "t2", "Task in Zeta", "pz", "Zeta", "sz", "Doing", "cf", "Tag", "red",
+                )],
+            );
+
+        let mut state = TaskState::new();
+        state
+            .load_task_dataset_for_projects(&client, &projects)
+            .expect("tasks load");
+
+        assert_eq!(
+            project_headers(state.table()),
+            vec![
+                "No Project (Assigned to Me)".to_string(),
+                "Alpha".to_string(),
+                "Zeta".to_string(),
+            ]
+        );
     }
 }

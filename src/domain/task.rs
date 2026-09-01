@@ -440,6 +440,13 @@ pub struct TaskSort {
     pub group_by_project: bool,
     /// Whether rows are grouped by section.
     pub group_by_section: bool,
+    /// Project names in the order the project list shows them.
+    ///
+    /// Project groups follow this order so the table reads down in the same
+    /// order the user picked the projects in — notably the pinned
+    /// "No Project (Assigned to Me)" row stays at the top. A project missing
+    /// from the list sorts after every listed one, by name.
+    pub project_order: Vec<String>,
     /// The ordered list of sort rules.
     pub rules: Vec<TaskSortRule>,
 }
@@ -449,6 +456,7 @@ impl Default for TaskSort {
         Self {
             group_by_project: true,
             group_by_section: true,
+            project_order: Vec::new(),
             rules: vec![
                 TaskSortRule {
                     field: TaskSortField::Date,
@@ -609,6 +617,7 @@ impl TaskTableModel {
         let mut merged = merge_records(records);
         merged.sort_by(|left, right| settings.sort.compare(left, right));
         merged = apply_task_filter(merged, &settings.filter);
+        let merged = arrange_hierarchy(merged, &settings.sort);
 
         let custom_field_columns = group_custom_fields_by_name(&custom_field_definitions)
             .into_iter()
@@ -934,21 +943,37 @@ fn record_sort_key(record: &TaskRecord) -> (usize, String) {
     (record.natural_order, record.gid.clone())
 }
 
-impl TaskSort {
-    fn compare(&self, left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
-        match (left.parent_gid.is_some(), right.parent_gid.is_some()) {
-            (false, true) => return std::cmp::Ordering::Less,
-            (true, false) => return std::cmp::Ordering::Greater,
-            _ => {}
-        }
+/// The project name a record is grouped under, matching what [`build_rows`]
+/// puts in the group's header.
+fn group_project(record: &TaskRecord) -> &str {
+    record.projects.first().map(String::as_str).unwrap_or_default()
+}
 
+impl TaskSort {
+    /// Where `project` sits in the project list, or last when it isn't listed.
+    fn project_rank(&self, project: &str) -> usize {
+        self.project_order
+            .iter()
+            .position(|listed| listed == project)
+            .unwrap_or(usize::MAX)
+    }
+
+    /// Orders two records by the grouping and sort rules alone.
+    ///
+    /// Nesting is not its business: [`arrange_hierarchy`] runs afterwards and
+    /// puts each subtask back under its parent, so a rule here that pushed
+    /// subtasks down would only decide where an *orphan* — a subtask whose
+    /// parent is not on screen — lands among the rows it is grouped with.
+    fn compare(&self, left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
         if self.group_by_project {
-            let ordering = left
-                .projects
-                .first()
-                .cloned()
-                .unwrap_or_default()
-                .cmp(&right.projects.first().cloned().unwrap_or_default());
+            let left_project = group_project(left);
+            let right_project = group_project(right);
+            // Rank first so groups appear in project-list order; the name is
+            // only a tie-break for projects the list didn't mention.
+            let ordering = self
+                .project_rank(left_project)
+                .cmp(&self.project_rank(right_project))
+                .then_with(|| left_project.cmp(right_project));
             if ordering != std::cmp::Ordering::Equal {
                 return ordering;
             }
@@ -1154,6 +1179,79 @@ fn record_matches(record: &TaskRecord, filter: &TaskFilter) -> bool {
     true
 }
 
+/// Lays the records out parent-first, each subtask directly under its parent.
+///
+/// A subtask only reads as one while its parent is on screen, and plenty of
+/// them arrive without it: the assignee query returns subtasks whose parents
+/// belong to someone else, and the filters drop parents out from under their
+/// children. Such an orphan is the root of everything the user can actually
+/// see, so it is laid out as a root — grouped under its own project and
+/// section, unindented — instead of trailing the table under whichever project
+/// header happened to come last.
+///
+/// Depth is recomputed from the parent chain that survived rather than trusted
+/// from the loader, so nesting stays relative to the outermost visible task.
+fn arrange_hierarchy(records: Vec<TaskRecord>, sort: &TaskSort) -> Vec<TaskRecord> {
+    let index_by_gid: HashMap<&str, usize> = records
+        .iter()
+        .enumerate()
+        .map(|(index, record)| (record.gid.as_str(), index))
+        .collect();
+
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); records.len()];
+    let mut roots: Vec<usize> = Vec::new();
+    for (index, record) in records.iter().enumerate() {
+        let parent = record
+            .parent_gid
+            .as_deref()
+            .and_then(|gid| index_by_gid.get(gid).copied())
+            .filter(|parent| *parent != index);
+        match parent {
+            Some(parent) => children[parent].push(index),
+            None => roots.push(index),
+        }
+    }
+
+    let by_sort = |left: &usize, right: &usize| sort.compare(&records[*left], &records[*right]);
+    roots.sort_by(by_sort);
+    for siblings in children.iter_mut() {
+        siblings.sort_by(by_sort);
+    }
+
+    let mut layout: Vec<(usize, usize)> = Vec::with_capacity(records.len());
+    let mut placed = vec![false; records.len()];
+    let mut stack: Vec<(usize, usize)> = roots.iter().rev().map(|index| (*index, 0)).collect();
+    while let Some((index, depth)) = stack.pop() {
+        if placed[index] {
+            continue;
+        }
+        placed[index] = true;
+        layout.push((index, depth));
+        for child in children[index].iter().rev() {
+            stack.push((*child, depth + 1));
+        }
+    }
+
+    // A parent cycle the API should never have sent would leave records
+    // unreachable from any root. Show them as roots rather than lose them.
+    let mut unreachable: Vec<usize> = (0..records.len()).filter(|index| !placed[*index]).collect();
+    unreachable.sort_by(by_sort);
+    layout.extend(unreachable.into_iter().map(|index| (index, 0)));
+
+    let mut slots: Vec<Option<TaskRecord>> = records.into_iter().map(Some).collect();
+    layout
+        .into_iter()
+        .filter_map(|(index, depth)| {
+            let mut record = slots[index].take()?;
+            record.subtask_depth = depth;
+            if depth == 0 {
+                record.parent_gid = None;
+            }
+            Some(record)
+        })
+        .collect()
+}
+
 fn build_rows(
     merged: &[TaskRecord],
     custom_field_columns: &[CustomFieldColumn],
@@ -1165,7 +1263,7 @@ fn build_rows(
     let mut current_section: Option<String> = None;
 
     for (index, record) in merged.iter().enumerate() {
-        let project = record.projects.first().cloned().unwrap_or_default();
+        let project = group_project(record).to_string();
         let section = record.sections.first().cloned().unwrap_or_default();
         let has_section = !section.trim().is_empty();
         let is_subtask = record.subtask_depth > 0;
@@ -1524,6 +1622,7 @@ mod tests {
             sort: TaskSort {
                 group_by_project: true,
                 group_by_section: true,
+                project_order: Vec::new(),
                 rules: vec![
                     TaskSortRule {
                         field: TaskSortField::Completed,
@@ -1643,6 +1742,7 @@ mod tests {
             sort: TaskSort {
                 group_by_project: true,
                 group_by_section: true,
+                project_order: Vec::new(),
                 rules: vec![TaskSortRule {
                     field: TaskSortField::Natural,
                     direction: SortDirection::Asc,
@@ -1683,6 +1783,7 @@ mod tests {
             sort: TaskSort {
                 group_by_project: true,
                 group_by_section: false,
+                project_order: Vec::new(),
                 rules: vec![TaskSortRule {
                     field: TaskSortField::Date,
                     direction: SortDirection::Asc,
@@ -1719,6 +1820,7 @@ mod tests {
             sort: TaskSort {
                 group_by_project: false,
                 group_by_section: false,
+                project_order: Vec::new(),
                 rules: vec![TaskSortRule {
                     field: TaskSortField::Date,
                     direction,
@@ -1832,6 +1934,7 @@ mod tests {
         let mut sort = TaskSort {
             group_by_project: false,
             group_by_section: false,
+            project_order: Vec::new(),
             rules: vec![],
         };
 
@@ -1865,6 +1968,7 @@ mod tests {
             sort: TaskSort {
                 group_by_project: false,
                 group_by_section: false,
+                project_order: Vec::new(),
                 rules: vec![TaskSortRule {
                     field: TaskSortField::Date,
                     direction: SortDirection::Asc,
@@ -1887,6 +1991,92 @@ mod tests {
 
         assert_eq!(task_rows, vec!["b", "a"]);
         assert!(model.rows.iter().all(|row| row.kind.is_task()));
+    }
+
+    /// Project groups read down in the order the project list shows them, so
+    /// the two panes agree — the pinned "No Project (Assigned to Me)" row
+    /// leads the table even though its name sorts last alphabetically.
+    #[test]
+    fn project_groups_follow_the_project_list_order() {
+        let record = |gid: &str, project: &str| {
+            let mut record = TaskRecord::new(gid, format!("Task in {project}"));
+            record.projects = vec![project.to_string()];
+            record
+        };
+
+        let settings = TaskTableSettings {
+            filter: TaskFilter::default(),
+            sort: TaskSort {
+                group_by_project: true,
+                group_by_section: false,
+                project_order: vec![
+                    "No Project (Assigned to Me)".to_string(),
+                    "Zeta".to_string(),
+                    "Alpha".to_string(),
+                ],
+                rules: vec![],
+            },
+        };
+
+        let model = TaskTableModel::from_records_with_settings(
+            vec![
+                record("a", "Alpha"),
+                record("n", "No Project (Assigned to Me)"),
+                record("z", "Zeta"),
+            ],
+            vec![],
+            &settings,
+        );
+
+        let headers = model
+            .rows
+            .iter()
+            .filter(|row| row.kind == TaskRowKind::ProjectHeader)
+            .map(|row| row.cells[0].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            headers,
+            vec!["No Project (Assigned to Me)", "Zeta", "Alpha"]
+        );
+    }
+
+    /// A project the order says nothing about still needs a stable home: after
+    /// every listed one, and alphabetical among its own kind.
+    #[test]
+    fn project_groups_missing_from_the_order_trail_the_listed_ones_by_name() {
+        let record = |gid: &str, project: &str| {
+            let mut record = TaskRecord::new(gid, format!("Task in {project}"));
+            record.projects = vec![project.to_string()];
+            record
+        };
+
+        let settings = TaskTableSettings {
+            filter: TaskFilter::default(),
+            sort: TaskSort {
+                group_by_project: true,
+                group_by_section: false,
+                project_order: vec!["Zeta".to_string()],
+                rules: vec![],
+            },
+        };
+
+        let model = TaskTableModel::from_records_with_settings(
+            vec![
+                record("b", "Beta"),
+                record("z", "Zeta"),
+                record("a", "Alpha"),
+            ],
+            vec![],
+            &settings,
+        );
+
+        let headers = model
+            .rows
+            .iter()
+            .filter(|row| row.kind == TaskRowKind::ProjectHeader)
+            .map(|row| row.cells[0].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(headers, vec!["Zeta", "Alpha", "Beta"]);
     }
 
     #[test]
@@ -1918,6 +2108,7 @@ mod tests {
             sort: TaskSort {
                 group_by_project: true,
                 group_by_section: false,
+                project_order: Vec::new(),
                 rules: vec![],
             },
         };
@@ -1938,6 +2129,176 @@ mod tests {
         // "Alpha" must appear exactly once — the subtask with project "Beta"
         // must not split the Alpha group or trigger a second Alpha header.
         assert_eq!(project_headers.iter().filter(|&&h| h == "Alpha").count(), 1, "Alpha header appeared more than once");
+    }
+
+    /// Regression test: a subtask whose parent is not in the record set — the
+    /// assignee query returns these, and the filter panel makes more of them by
+    /// dropping parents assigned to other people — used to sort to the very
+    /// bottom of the table and render with no header of its own, so it read as
+    /// part of whichever project group came last.
+    #[test]
+    fn an_orphan_subtask_is_grouped_under_its_own_project_not_the_last_header() {
+        let mut root = TaskRecord::new("root", "Task in Zeta");
+        root.projects = vec!["Zeta".to_string()];
+
+        let mut orphan = TaskRecord::new("orphan", "Subtask in Alpha");
+        orphan.parent_gid = Some("absent-parent".to_string());
+        orphan.projects = vec!["Alpha".to_string()];
+        orphan.subtask_depth = 1;
+
+        let settings = TaskTableSettings {
+            filter: TaskFilter {
+                subtasks: SubtaskVisibility::Show,
+                ..TaskFilter::default()
+            },
+            sort: TaskSort {
+                group_by_project: true,
+                group_by_section: false,
+                project_order: Vec::new(),
+                rules: vec![],
+            },
+        };
+
+        let model =
+            TaskTableModel::from_records_with_settings(vec![root, orphan], vec![], &settings);
+
+        let headers = model
+            .rows
+            .iter()
+            .filter(|row| row.kind == TaskRowKind::ProjectHeader)
+            .map(|row| row.cells[0].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(headers, vec!["Alpha", "Zeta"]);
+
+        let orphan_row = model
+            .rows
+            .iter()
+            .find(|row| row.gid == "orphan")
+            .expect("the orphan still has a row");
+        assert_eq!(orphan_row.project.as_deref(), Some("Alpha"));
+        assert_eq!(
+            orphan_row.subtask_depth, 0,
+            "with no parent on screen there is nothing to indent under"
+        );
+
+        let task_gids = model
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            task_gids,
+            vec!["orphan", "root"],
+            "the orphan sorts with its own project group instead of trailing the table"
+        );
+    }
+
+    #[test]
+    fn a_subtask_stays_under_its_parent_even_when_its_own_project_sorts_first() {
+        let mut root = TaskRecord::new("root", "Task in Alpha");
+        root.projects = vec!["Alpha".to_string()];
+
+        let mut parent = TaskRecord::new("parent", "Parent in Zeta");
+        parent.projects = vec!["Zeta".to_string()];
+
+        let mut child = TaskRecord::new("child", "Subtask in Alpha");
+        child.parent_gid = Some("parent".to_string());
+        child.projects = vec!["Alpha".to_string()];
+        child.subtask_depth = 1;
+
+        let settings = TaskTableSettings {
+            filter: TaskFilter {
+                subtasks: SubtaskVisibility::Show,
+                ..TaskFilter::default()
+            },
+            sort: TaskSort {
+                group_by_project: true,
+                group_by_section: false,
+                project_order: Vec::new(),
+                rules: vec![],
+            },
+        };
+
+        let model = TaskTableModel::from_records_with_settings(
+            vec![child, root, parent],
+            vec![],
+            &settings,
+        );
+
+        let layout = model
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| (row.gid.as_str(), row.subtask_depth))
+            .collect::<Vec<_>>();
+        assert_eq!(layout, vec![("root", 0), ("parent", 0), ("child", 1)]);
+    }
+
+    #[test]
+    fn nesting_depth_counts_from_the_outermost_visible_task() {
+        // The grandparent is missing, so the parent it left behind is the top of
+        // the tree the user can see and its own child indents one level in.
+        let mut parent = TaskRecord::new("parent", "Orphaned parent");
+        parent.parent_gid = Some("absent-grandparent".to_string());
+        parent.projects = vec!["Alpha".to_string()];
+        parent.subtask_depth = 1;
+
+        let mut child = TaskRecord::new("child", "Grandchild");
+        child.parent_gid = Some("parent".to_string());
+        child.projects = vec!["Alpha".to_string()];
+        child.subtask_depth = 2;
+
+        let settings = TaskTableSettings {
+            filter: TaskFilter {
+                subtasks: SubtaskVisibility::Show,
+                ..TaskFilter::default()
+            },
+            sort: TaskSort::default(),
+        };
+
+        let model =
+            TaskTableModel::from_records_with_settings(vec![parent, child], vec![], &settings);
+
+        let layout = model
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| (row.gid.as_str(), row.subtask_depth))
+            .collect::<Vec<_>>();
+        assert_eq!(layout, vec![("parent", 0), ("child", 1)]);
+    }
+
+    /// A parent cycle is not something the API should ever send, but losing rows
+    /// over it would be worse than showing them side by side.
+    #[test]
+    fn records_in_a_parent_cycle_are_still_shown() {
+        let mut first = TaskRecord::new("a", "First");
+        first.parent_gid = Some("b".to_string());
+        first.projects = vec!["Alpha".to_string()];
+
+        let mut second = TaskRecord::new("b", "Second");
+        second.parent_gid = Some("a".to_string());
+        second.projects = vec!["Alpha".to_string()];
+
+        let settings = TaskTableSettings {
+            filter: TaskFilter {
+                subtasks: SubtaskVisibility::Show,
+                ..TaskFilter::default()
+            },
+            sort: TaskSort::default(),
+        };
+
+        let model =
+            TaskTableModel::from_records_with_settings(vec![first, second], vec![], &settings);
+
+        let task_gids = model
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(task_gids.len(), 2, "both records survive the layout pass");
     }
 
     #[test]

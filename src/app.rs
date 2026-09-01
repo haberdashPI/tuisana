@@ -189,6 +189,28 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         Ok(())
     }
 
+    /// Reload the project list and force a fresh task fetch for the current
+    /// selection.
+    ///
+    /// A plain `ensure_task_data` call would see the selection already
+    /// "covered" by the cache and skip fetching, so a manual refresh needs to
+    /// invalidate that cache first — otherwise pressing refresh on a project
+    /// that's already loaded looks like it does nothing.
+    pub fn refresh(&mut self) -> Result<()> {
+        self.load_projects()?;
+        self.tasks.invalidate_cache();
+        if self.task_data_receiver.is_some() {
+            self.task_data_generation = self.task_data_generation.wrapping_add(1);
+        }
+        if self.tasks.visible() {
+            self.start_task_data_fetch();
+        } else {
+            self.tasks
+                .mark_out_of_date("refreshed; switch to task view to reload");
+        }
+        Ok(())
+    }
+
     pub fn keymap(&self) -> Result<KeyMap> {
         KeyMap::from_bindings(&self.config.effective_bindings())
     }
@@ -1555,6 +1577,37 @@ mod tests {
         assert_eq!(command, Some(crate::input::AppCommand::Refresh));
     }
 
+    /// Once a project's tasks are loaded, the cache reports the query as
+    /// already covered — so a naive refresh that only checks
+    /// `task_data_needs_refresh` would see nothing to do and skip fetching
+    /// entirely. `App::refresh` has to invalidate that cache itself.
+    #[test]
+    fn refresh_reloads_tasks_even_when_the_cache_already_covers_the_query() {
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]);
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+        app.handle_action(&Action::SelectAllVisible, 10)
+            .expect("select every project");
+        app.tasks.set_visible(true);
+        app.request_task_data().expect("tasks load");
+        settle(&mut app);
+
+        let targets = app.task_target_projects();
+        let query = app.tasks.desired_task_query();
+        assert!(
+            app.tasks.can_serve_query_for_targets(&targets, &query),
+            "cache should already cover the loaded selection"
+        );
+
+        app.refresh().expect("refresh");
+
+        assert_eq!(
+            app.tasks.status(),
+            &crate::app::task::TaskStatus::Loading,
+            "refresh must force a fetch instead of trusting the cache"
+        );
+    }
+
     #[test]
     fn app_marks_tasks_out_of_date_when_project_selection_changes() {
         let client = FakeAsanaClient::new(vec![
@@ -2126,5 +2179,62 @@ mod tests {
             .expect("tasks load");
 
         assert_eq!(app.tasks.table().task_count(), 1);
+    }
+
+    /// The project list pins starred projects above the rest, so the task
+    /// table's project groups have to lead with them too — otherwise the two
+    /// panes disagree about the order and the eye has to hunt for the group.
+    #[test]
+    fn task_project_groups_follow_the_project_list_order() {
+        fn task(gid: &str, name: &str, project_gid: &str, project: &str) -> TaskDto {
+            TaskDto {
+                gid: gid.to_string(),
+                name: name.to_string(),
+                completed: false,
+                modified_at: None,
+                due_on: None,
+                start_on: None,
+                assignee: None,
+                num_subtasks: 0,
+                memberships: vec![TaskMembershipDto {
+                    project: TaskMembershipProjectDto {
+                        gid: project_gid.to_string(),
+                        name: project.to_string(),
+                    },
+                    section: None,
+                }],
+                parent: None,
+                custom_fields: vec![],
+            }
+        }
+
+        let client = FakeAsanaClient::new(vec![
+            Project::new("pa", "Alpha", false),
+            Project::new("pz", "Zeta", true),
+        ])
+        .with_tasks("pa", vec![task("t1", "Task in Alpha", "pa", "Alpha")])
+        .with_tasks("pz", vec![task("t2", "Task in Zeta", "pz", "Zeta")]);
+
+        let mut app = App::new(Config::default(), client);
+        app.load_projects().expect("projects load");
+        app.handle_action(&Action::SelectAllVisible, 10)
+            .expect("select every project");
+        app.tasks.set_visible(true);
+        app.request_task_data().expect("tasks load");
+        settle(&mut app);
+
+        let headers = app
+            .tasks
+            .table()
+            .rows
+            .iter()
+            .filter(|row| row.kind == crate::domain::TaskRowKind::ProjectHeader)
+            .map(|row| row.cells[0].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            headers,
+            vec!["Zeta".to_string(), "Alpha".to_string()],
+            "starred Zeta leads the project list, so it leads the table too"
+        );
     }
 }

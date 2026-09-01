@@ -82,6 +82,21 @@ impl ProjectListState {
         visibility: &[ProjectVisibilityConfig],
     ) -> Result<()> {
         self.status = ProjectListStatus::Loading;
+        // A reload (e.g. the refresh command) re-fetches the same workspace
+        // from Asana; keep whichever projects the user had checked and where
+        // the cursor sat instead of wiping the selection out from under them.
+        let previous_selected_ids = self.selected_ids.clone();
+        let previous_cursor_id = self.selected_project().map(|project| project.id.clone());
+        // The "No Project (Assigned to Me)" row is synthetic — `list_projects`
+        // never returns it, a follow-up `set_assigned_to_me` call puts it back.
+        // Carry it over here too, or it vanishes from `all_projects` for the
+        // moment in between and loses its spot in the selection and cursor
+        // restores below.
+        let previous_assigned_to_me = self
+            .all_projects
+            .iter()
+            .find(|project| matches!(project.kind, ProjectKind::AssignedToMe))
+            .cloned();
         let mut projects = match client.list_projects() {
             Ok(projects) => projects,
             Err(err) => {
@@ -101,13 +116,20 @@ impl ProjectListState {
             project.hidden = true;
         }
         apply_project_visibility_config(&mut projects, visibility);
+        if let Some(assigned_to_me) = previous_assigned_to_me {
+            projects.push(assigned_to_me);
+        }
         sort_projects(&mut projects);
         self.all_projects = projects;
-        self.selected_ids.clear();
+        let live_ids: HashSet<String> =
+            self.all_projects.iter().map(|project| project.id.clone()).collect();
+        self.selected_ids = previous_selected_ids
+            .into_iter()
+            .filter(|id| live_ids.contains(id))
+            .collect();
         self.undo_selection_history.clear();
         self.redo_selection_history.clear();
-        self.selected = None;
-        self.rebuild_visible_projects(None);
+        self.rebuild_visible_projects(previous_cursor_id);
         self.status = if self.all_projects.is_empty() {
             ProjectListStatus::Empty
         } else {
@@ -912,6 +934,84 @@ mod tests {
         assert_eq!(state.apply_action(&Action::Quit, 5), Some(AppCommand::Quit));
         assert_eq!(state.apply_action(&Action::Refresh, 5), Some(AppCommand::Refresh));
         assert_eq!(state.apply_action(&Action::ToggleSelection, 5), None);
+    }
+
+    /// The refresh command reloads the project list via this same path, so a
+    /// reload has to leave the user's checked projects (and cursor) alone —
+    /// otherwise refreshing while projects are selected silently empties the
+    /// task view underneath them.
+    #[test]
+    fn reloading_preserves_selected_projects_and_cursor() {
+        let client = FakeAsanaClient::new(vec![
+            Project::new("1", "Inbox", true),
+            Project::new("2", "Backlog", false),
+        ]);
+        let mut state = ProjectListState::new();
+        state
+            .load_with_visibility(&client, &[])
+            .expect("projects load");
+        state.toggle_current_selection();
+        state.move_down();
+
+        state
+            .load_with_visibility(&client, &[])
+            .expect("reload");
+
+        assert_eq!(state.selected_projects().len(), 1);
+        assert_eq!(state.selected_projects()[0].id, "1");
+        assert_eq!(
+            state.selected_project().map(|project| project.id.as_str()),
+            Some("2")
+        );
+    }
+
+    /// `list_projects` never returns the "No Project (Assigned to Me)" row —
+    /// `App::load_projects` re-adds it with a second call, `set_assigned_to_me`,
+    /// right after `load_with_visibility` returns. That handoff must not drop
+    /// the row's selection along the way.
+    #[test]
+    fn reloading_preserves_the_assigned_to_me_selection() {
+        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]);
+        let mut state = ProjectListState::new();
+        state
+            .load_with_visibility(&client, &[])
+            .expect("projects load");
+        state.set_assigned_to_me(Some(Project::assigned_to_me("user_1")));
+        state.select_all_visible();
+        assert!(state.is_selected("user_1"));
+
+        state
+            .load_with_visibility(&client, &[])
+            .expect("reload");
+        state.set_assigned_to_me(Some(Project::assigned_to_me("user_1")));
+
+        assert!(
+            state.is_selected("user_1"),
+            "the assigned-to-me row should stay selected across a reload"
+        );
+    }
+
+    /// A project the reload no longer returns has to drop out of the
+    /// selection rather than linger as a phantom target.
+    #[test]
+    fn reloading_drops_selections_for_projects_that_disappeared() {
+        let client = FakeAsanaClient::new(vec![
+            Project::new("1", "Inbox", true),
+            Project::new("2", "Backlog", false),
+        ]);
+        let mut state = ProjectListState::new();
+        state
+            .load_with_visibility(&client, &[])
+            .expect("projects load");
+        state.select_all_visible();
+
+        let client_after_deletion = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]);
+        state
+            .load_with_visibility(&client_after_deletion, &[])
+            .expect("reload");
+
+        assert_eq!(state.selected_projects().len(), 1);
+        assert_eq!(state.selected_projects()[0].id, "1");
     }
 
     #[test]

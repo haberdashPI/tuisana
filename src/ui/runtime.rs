@@ -465,7 +465,7 @@ where
                 match app.handle_key_event(&keymap, key_event, page_size) {
                     Ok(Some(crate::input::AppCommand::Quit)) => break,
                     Ok(Some(crate::input::AppCommand::Refresh)) => {
-                        app.load_projects()
+                        app.refresh()
                             .map_err(|err| io::Error::other(err.to_string()))?;
                         page_size = draw(terminal, app, &keymap)?;
                     }
