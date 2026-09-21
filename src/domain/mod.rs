@@ -22,6 +22,6 @@ pub use project::{Project, ProjectKind};
 pub use task::{
     group_custom_fields_by_name, CustomFieldColumn, CustomFieldDefinition, Section, SortDirection,
     SubtaskVisibility, ASSIGNEE_COLUMN, STATE_COLUMN,
-    TaskDateRange, TaskFieldFilter, TaskFilter, TaskRecord, TaskRow, TaskRowKind, TaskSort,
+    TaskFilter, TaskRecord, TaskRow, TaskRowKind, TaskSort,
     TaskSortField, TaskSortRule, TaskTableModel, TaskTableSettings, merge_task_record,
 };

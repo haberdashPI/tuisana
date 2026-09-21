@@ -327,19 +327,15 @@ impl Default for TaskTableSettings {
     }
 }
 
-/// The active task filter state.
+/// The settings-level task filter: the two toggles the task view owns.
+///
+/// Text, assignee, date, and custom-field filtering all live in the filter
+/// panel (`TaskState`'s `TaskFilterEditorState`), which applies itself before
+/// records reach this module. This holds only what the `c` and `z` keys drive.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskFilter {
-    /// Free-text filtering for task titles or other textual fields.
-    pub text: Option<String>,
-    /// A single named field filter.
-    pub field: Option<TaskFieldFilter>,
-    /// The assignee filter.
-    pub assignee: Option<String>,
     /// `Some(false)` = open, `Some(true)` = done, `None` = all.
     pub completed: Option<bool>,
-    /// Date-range filtering for due/start dates.
-    pub date_range: Option<TaskDateRange>,
     /// Whether subtasks should be shown or hidden.
     pub subtasks: SubtaskVisibility,
 }
@@ -347,11 +343,7 @@ pub struct TaskFilter {
 impl Default for TaskFilter {
     fn default() -> Self {
         Self {
-            text: None,
-            field: None,
-            assignee: None,
             completed: Some(false),
-            date_range: None,
             subtasks: SubtaskVisibility::Show,
         }
     }
@@ -374,24 +366,6 @@ impl TaskFilter {
             SubtaskVisibility::Hide => SubtaskVisibility::Show,
         };
     }
-}
-
-/// A single field/value filter used by the task filter UI.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TaskFieldFilter {
-    /// The field name.
-    pub name: String,
-    /// The selected value, if any.
-    pub value: Option<String>,
-}
-
-/// A date range used by the task filter UI.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TaskDateRange {
-    /// Inclusive start date, if set.
-    pub start: Option<String>,
-    /// Inclusive end date, if set.
-    pub end: Option<String>,
 }
 
 /// Whether subtasks are included in the task table.
@@ -1068,11 +1042,28 @@ fn compare_rule(rule: &TaskSortRule, left: &TaskRecord, right: &TaskRecord) -> s
     }
 }
 
+/// Whether a record satisfies the completed-state filter.
+fn completion_matches(record: &TaskRecord, filter: &TaskFilter) -> bool {
+    filter
+        .completed
+        .is_none_or(|completed| record.completed == completed)
+}
+
+/// Applies the settings-level filter: completion state and subtask visibility.
+///
+/// This is only what the `c` and `z` keys drive. Everything the filter panel
+/// asks for was already applied by `TaskState::apply_filter_panel`, before the
+/// records reached this module.
+///
+/// The `Show` branch's grouping is load-bearing and must not be simplified away:
+/// `TaskSort::compare` sorts *every* parent before *every* subtask, so emitting
+/// one parent-group at a time is the only thing putting a subtask underneath its
+/// own parent rather than in a heap at the bottom of the table.
 fn apply_task_filter(records: Vec<TaskRecord>, filter: &TaskFilter) -> Vec<TaskRecord> {
     match filter.subtasks {
         SubtaskVisibility::Hide => records
             .into_iter()
-            .filter(|record| !record.is_subtask() && record_matches(record, filter))
+            .filter(|record| !record.is_subtask() && completion_matches(record, filter))
             .collect(),
         SubtaskVisibility::Show => {
             let mut group_order = Vec::new();
@@ -1089,94 +1080,14 @@ fn apply_task_filter(records: Vec<TaskRecord>, filter: &TaskFilter) -> Vec<TaskR
                 groups.entry(key).or_default().push(record);
             }
 
-            let mut output = Vec::new();
-            for key in group_order {
-                let Some(group) = groups.remove(&key) else {
-                    continue;
-                };
-
-                if group.iter().any(|record| record_matches(record, filter)) {
-                    // Include the group, but always enforce the completed filter
-                    // per-record — a parent matching doesn't bring in completed subtasks.
-                    output.extend(group.into_iter().filter(|record| {
-                        filter.completed.map_or(true, |want| record.completed == want)
-                    }));
-                }
-            }
-
-            output
-        }
-    }
-}
-
-fn record_matches(record: &TaskRecord, filter: &TaskFilter) -> bool {
-    if let Some(completed) = filter.completed {
-        if record.completed != completed {
-            return false;
-        }
-    }
-
-    if let Some(assignee) = &filter.assignee {
-        let assignee = assignee.to_ascii_lowercase();
-        let candidate = record
-            .assignee
-            .as_deref()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if !candidate.contains(&assignee) {
-            return false;
-        }
-    }
-
-    if let Some(range) = &filter.date_range {
-        let date = record.due_date.as_ref().or(record.start_date.as_ref());
-        let Some(date) = date else {
-            return false;
-        };
-        if range.start.as_deref().is_some_and(|start| date.as_str() < start) {
-            return false;
-        }
-        if range.end.as_deref().is_some_and(|end| date.as_str() > end) {
-            return false;
-        }
-    }
-
-    if let Some(field_filter) = &filter.field {
-        let Some(values) = record.custom_fields.get(&field_filter.name) else {
-            return false;
-        };
-        if let Some(expected) = &field_filter.value {
-            let needle = expected.to_ascii_lowercase();
-            if !values.iter().any(|value| value.to_ascii_lowercase().contains(&needle)) {
-                return false;
-            }
-        }
-    }
-
-    if let Some(text) = &filter.text {
-        let needle = text.to_ascii_lowercase();
-        let haystacks = vec![
-            record.name.clone(),
-            record.assignee.clone().unwrap_or_default(),
-            record.due_date.clone().unwrap_or_default(),
-            record.start_date.clone().unwrap_or_default(),
-            record.sections.join(" "),
-            record.projects.join(" "),
-        ];
-        if !haystacks
-            .iter()
-            .any(|value| value.to_ascii_lowercase().contains(&needle))
-            && !record
-                .custom_fields
-                .values()
+            group_order
+                .into_iter()
+                .filter_map(|key| groups.remove(&key))
                 .flatten()
-                .any(|value| value.to_ascii_lowercase().contains(&needle))
-        {
-            return false;
+                .filter(|record| completion_matches(record, filter))
+                .collect()
         }
     }
-
-    true
 }
 
 /// Lays the records out parent-first, each subtask directly under its parent.
@@ -1331,10 +1242,20 @@ fn build_rows(
 #[cfg(test)]
 mod tests {
     use super::{
-        CivilDate, CustomFieldDefinition, SortDirection, SubtaskVisibility, TaskDateRange,
-        TaskFieldFilter, TaskFilter, TaskRecord, TaskRowKind, TaskSort, TaskSortField,
-        TaskSortRule, TaskTableModel, TaskTableSettings,
+        CivilDate, CustomFieldDefinition, SortDirection, SubtaskVisibility, TaskFilter,
+        TaskRecord, TaskRowKind, TaskSort, TaskSortField, TaskSortRule, TaskTableModel,
+        TaskTableSettings,
     };
+
+    /// The gids of the task rows a model holds, in table order.
+    fn task_gids(model: &TaskTableModel) -> Vec<&str> {
+        model
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.as_str())
+            .collect()
+    }
 
     #[test]
     fn task_rows_carry_parsed_dates_alongside_their_display_cells() {
@@ -1497,92 +1418,83 @@ mod tests {
     }
 
     #[test]
-    fn filters_by_text_field_owner_completion_and_date() {
-        let mut matching = TaskRecord::new("1", "Ship release");
-        matching.assignee = Some("Alex".to_string());
-        matching.due_date = Some("2026-06-10".to_string());
-        matching.sections = vec!["Today".to_string()];
-        matching.projects = vec!["Inbox".to_string()];
-        matching
-            .custom_fields
-            .insert("cf-1".to_string(), vec!["High".to_string()]);
+    fn filters_by_completion_state() {
+        let mut open = TaskRecord::new("1", "Ship release");
+        open.projects = vec!["Inbox".to_string()];
+        let mut done = TaskRecord::new("2", "Write docs");
+        done.completed = true;
+        done.projects = vec!["Inbox".to_string()];
 
-        let mut hidden = TaskRecord::new("2", "Write docs");
-        hidden.assignee = Some("Jordan".to_string());
-        hidden.due_date = Some("2026-07-10".to_string());
-        hidden.sections = vec!["Later".to_string()];
-        hidden.projects = vec!["Inbox".to_string()];
-        hidden
-            .custom_fields
-            .insert("cf-1".to_string(), vec!["Low".to_string()]);
-
-        let settings = TaskTableSettings {
-            filter: TaskFilter {
-                text: Some("ship".to_string()),
-                field: Some(TaskFieldFilter {
-                    name: "cf-1".to_string(),
-                    value: Some("high".to_string()),
-                }),
-                assignee: Some("alex".to_string()),
-                completed: Some(false),
-                date_range: Some(TaskDateRange {
-                    start: Some("2026-06-01".to_string()),
-                    end: Some("2026-06-30".to_string()),
-                }),
-                subtasks: SubtaskVisibility::Show,
-            },
-            sort: TaskSort::default(),
-        };
-
-        let model = TaskTableModel::from_records_with_settings(
-            vec![matching, hidden],
-            vec![CustomFieldDefinition::new("cf-1", "Priority")],
-            &settings,
-        );
-
-        assert_eq!(model.task_count(), 1);
-        assert_eq!(model.rows.iter().filter(|row| row.kind.is_task()).count(), 1);
-        assert_eq!(model.rows.iter().find(|row| row.kind.is_task()).unwrap().gid, "1");
-    }
-
-    #[test]
-    fn keeps_parent_and_subtasks_together_when_visible() {
-        let mut parent = TaskRecord::new("parent", "Parent");
-        parent.sections = vec!["Today".to_string()];
-        parent.projects = vec!["Inbox".to_string()];
-
-        let mut child = TaskRecord::new("child", "Child match");
-        child.parent_gid = Some("parent".to_string());
-        child.sections = vec!["Today".to_string()];
-        child.projects = vec!["Inbox".to_string()];
-
-        let settings = TaskTableSettings {
-            filter: TaskFilter {
-                text: Some("match".to_string()),
-                subtasks: SubtaskVisibility::Show,
-                ..TaskFilter::default()
-            },
-            sort: TaskSort::default(),
-        };
-
-        let model = TaskTableModel::from_records_with_settings(
-            vec![parent.clone(), child.clone()],
-            vec![],
-            &settings,
-        );
-
-        let task_rows = model
+        let gids = |completed| {
+            let settings = TaskTableSettings {
+                filter: TaskFilter {
+                    completed,
+                    ..TaskFilter::default()
+                },
+                sort: TaskSort::default(),
+            };
+            TaskTableModel::from_records_with_settings(
+                vec![open.clone(), done.clone()],
+                Vec::new(),
+                &settings,
+            )
             .rows
             .iter()
             .filter(|row| row.kind.is_task())
-            .map(|row| row.gid.as_str())
-            .collect::<Vec<_>>();
+            .map(|row| row.gid.clone())
+            .collect::<Vec<_>>()
+        };
 
-        assert_eq!(task_rows, vec!["parent", "child"]);
+        assert_eq!(gids(Some(false)), vec!["1"]);
+        assert_eq!(gids(Some(true)), vec!["2"]);
+        assert_eq!(gids(None).len(), 2);
+    }
 
-        let hidden_model = TaskTableModel::from_records_with_settings(
-            vec![parent, child],
-            vec![],
+    #[test]
+    fn subtasks_sit_under_their_own_parent_rather_than_in_a_heap_at_the_bottom() {
+        // TaskSort::compare puts every parent before every subtask, so the
+        // grouping in apply_task_filter is the only thing interleaving them. With
+        // one parent and one child this passes either way — hence two.
+        //
+        // Both parents share one project and section, so the table inserts a
+        // single pair of header rows ahead of all four tasks and `task_gids`
+        // sees the task order alone.
+        let parent = |gid: &str, name: &str| {
+            let mut record = TaskRecord::new(gid, name);
+            record.projects = vec!["Inbox".to_string()];
+            record.sections = vec!["Today".to_string()];
+            record
+        };
+        let child = |gid: &str, name: &str, parent_gid: &str| {
+            let mut record = parent(gid, name);
+            record.parent_gid = Some(parent_gid.to_string());
+            record
+        };
+
+        let records = vec![
+            parent("p1", "Alpha parent"),
+            parent("p2", "Beta parent"),
+            child("c1", "Alpha child", "p1"),
+            child("c2", "Beta child", "p2"),
+        ];
+
+        let model = TaskTableModel::from_records_with_settings(
+            records.clone(),
+            Vec::new(),
+            &TaskTableSettings {
+                filter: TaskFilter {
+                    subtasks: SubtaskVisibility::Show,
+                    ..TaskFilter::default()
+                },
+                sort: TaskSort::default(),
+            },
+        );
+
+        assert_eq!(task_gids(&model), vec!["p1", "c1", "p2", "c2"]);
+
+        let hidden = TaskTableModel::from_records_with_settings(
+            records,
+            Vec::new(),
             &TaskTableSettings {
                 filter: TaskFilter {
                     subtasks: SubtaskVisibility::Hide,
@@ -1592,14 +1504,7 @@ mod tests {
             },
         );
 
-        let hidden_task_rows = hidden_model
-            .rows
-            .iter()
-            .filter(|row| row.kind.is_task())
-            .map(|row| row.gid.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(hidden_task_rows, vec!["parent"]);
+        assert_eq!(task_gids(&hidden), vec!["p1", "p2"]);
     }
 
     #[test]
