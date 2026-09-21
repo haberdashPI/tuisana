@@ -23,6 +23,11 @@ use crate::{
 
 /// Width of the marker gutter: cursor glyph, gap, active glyph, gap.
 pub const MARKER_WIDTH: usize = 4;
+/// What a require-empty filter shows as its value.
+///
+/// A word rather than the `empty` glyph: that glyph already means "unset" in
+/// this column, and "unset" and "require unset" are opposites.
+pub const EMPTY_REQUIRED_TEXT: &str = "(none)";
 /// Widest a field label column will grow to.
 const LABEL_CAP: usize = 16;
 /// Widest the match-mode column will grow to.
@@ -38,6 +43,8 @@ pub enum FilterValue {
         values: Vec<String>,
         cursor: Option<usize>,
     },
+    /// The field must have no value at all.
+    RequireEmpty,
 }
 
 impl FilterValue {
@@ -46,8 +53,21 @@ impl FilterValue {
         match self {
             FilterValue::Text(query) => !query.trim().is_empty(),
             FilterValue::Labels { values, .. } => !values.is_empty(),
+            FilterValue::RequireEmpty => true,
         }
     }
+}
+
+/// One tab in the filter pane's tab strip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FilterTab {
+    /// The tab's number, as shown: `1`, `2`, ...
+    pub label: String,
+    /// Whether this is the set the keys act on.
+    pub active: bool,
+    /// How many of its fields filter anything, so a working set is visible from
+    /// another tab.
+    pub filters: usize,
 }
 
 /// One row in the filter panel.
@@ -78,6 +98,8 @@ pub struct FilterPanelView {
     pub counts: Vec<Chip>,
     /// The filter rows, in navigation order.
     pub rows: Vec<FilterRow>,
+    /// One tab per filter set, or empty when there is only one.
+    pub tabs: Vec<FilterTab>,
     /// Whether the selected row is being edited.
     pub editing: bool,
     /// Set when there are no filter fields at all.
@@ -106,6 +128,28 @@ pub fn render_filter_panel(state: &TaskState) -> Option<FilterPanelView> {
         counts.push(Chip::toned("editing", Tone::Warn));
     }
 
+    // A lone `1` tab is noise, and with one set the pane then renders
+    // byte-identically to how it did before sets existed.
+    let (active_set, total_sets) = state.filter_set_position();
+    let tabs = if total_sets > 1 {
+        counts.push(Chip::toned(
+            format!("set {}/{total_sets}", active_set + 1),
+            Tone::Info,
+        ));
+        state
+            .filter_set_counts()
+            .into_iter()
+            .enumerate()
+            .map(|(index, filters)| FilterTab {
+                label: (index + 1).to_string(),
+                active: index == active_set,
+                filters,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     Some(FilterPanelView {
         title: "Filters".to_string(),
         counts,
@@ -113,8 +157,44 @@ pub fn render_filter_panel(state: &TaskState) -> Option<FilterPanelView> {
             PaneMessage::new("No filter fields", Tone::Muted).with_hint("load tasks first")
         }),
         rows,
+        tabs,
         editing,
     })
+}
+
+/// Renders the tab strip: one tab per filter set, the active one picked out.
+///
+/// Drawn as the pane's first interior line rather than in the border. The
+/// number of sets is unbounded and the border truncates from the left — the
+/// mistake that turned "Aug 2026" into "6" in the calendar overlay.
+///
+/// The separator is the word `or`, because that is the whole semantics of the
+/// strip and there is nowhere else on screen to say it.
+pub fn tab_strip_line(view: &FilterPanelView, theme: &Theme, width: usize) -> Line<'static> {
+    let glyphs = &theme.glyphs;
+    // The same gutter the rows use, so the tabs line up with the label column.
+    let mut spans = vec![Span::raw(" ".repeat(MARKER_WIDTH))];
+
+    for (index, tab) in view.tabs.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" or ".to_string(), theme.muted));
+        }
+        let text = if tab.filters > 0 {
+            format!(" {}{} ", tab.label, glyphs.active)
+        } else {
+            format!(" {} ", tab.label)
+        };
+        spans.push(Span::styled(
+            text,
+            if tab.active {
+                theme.accent.add_modifier(Modifier::REVERSED)
+            } else {
+                theme.muted
+            },
+        ));
+    }
+
+    Line::from(slice_spans(&spans, 0, width))
 }
 
 /// Renders every filter row. Exactly one line per row, so the panel's scroll
@@ -201,6 +281,9 @@ fn value_spans(
     let glyphs = &theme.glyphs;
 
     match &row.value {
+        FilterValue::RequireEmpty => {
+            vec![Span::styled(EMPTY_REQUIRED_TEXT.to_string(), theme.accent)]
+        }
         FilterValue::Text(query) if query.is_empty() && row.caret.is_none() => {
             vec![Span::styled(glyphs.empty.to_string(), theme.muted)]
         }
@@ -275,7 +358,11 @@ fn caret_spans(text: &str, caret: Option<usize>, theme: &Theme) -> Vec<Span<'sta
 }
 
 fn filter_row(entry: TaskFilterPanelEntry) -> FilterRow {
-    let value = if entry.kind == "labels" {
+    // Checked before the kind: a require-empty looks the same on every row,
+    // and `(none)` is a different statement from the `—` of an unset field.
+    let value = if entry.empty_required {
+        FilterValue::RequireEmpty
+    } else if entry.kind == "labels" {
         FilterValue::Labels {
             values: entry.label_values,
             cursor: entry.label_cursor,
@@ -304,7 +391,8 @@ fn kind_chip(kind: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_panel_lines, kind_chip, render_filter_panel, FilterValue, MARKER_WIDTH,
+        filter_panel_lines, kind_chip, render_filter_panel, tab_strip_line, FilterValue,
+        MARKER_WIDTH,
     };
     use ratatui::style::Modifier;
 
@@ -393,11 +481,20 @@ mod tests {
     }
 
     #[test]
+    fn assignee_matches_fuzzily_by_default() {
+        // A person's name is the field most likely to be half-remembered, so it
+        // gets the same default Title has.
+        let view = render_filter_panel(&panel_state()).expect("panel is open");
+        assert_eq!(view.rows[1].kind, "fuzzy");
+    }
+
+    #[test]
     fn match_modes_render_as_short_chips() {
         let view = render_filter_panel(&panel_state()).expect("panel is open");
 
         assert_eq!(view.rows[0].kind, "fuzzy");
-        assert_eq!(view.rows[1].kind, "contains");
+        assert_eq!(view.rows[1].kind, "fuzzy");
+        assert_eq!(view.rows[5].kind, "contains");
         assert_eq!(view.rows[2].kind, "date");
         assert_eq!(view.rows[4].kind, "labels");
         assert_eq!(kind_chip("string:regex"), "regex");
@@ -537,6 +634,83 @@ mod tests {
             render_filter_panel(&state).expect("panel is open").rows[0].caret,
             Some(2)
         );
+    }
+
+    #[test]
+    fn a_single_set_draws_no_tab_strip() {
+        // The common case has to look exactly as it did before sets existed.
+        let view = render_filter_panel(&panel_state()).expect("panel is open");
+
+        assert!(view.tabs.is_empty());
+        assert!(view.counts.iter().all(|chip| !chip.text.starts_with("set ")));
+    }
+
+    #[test]
+    fn a_second_set_earns_a_tab_strip_and_a_chip() {
+        let mut state = panel_state();
+        state.filter_push_char('a');
+        state.filter_add_set();
+        let view = render_filter_panel(&state).expect("panel is open");
+
+        assert_eq!(
+            view.tabs
+                .iter()
+                .map(|tab| (tab.label.clone(), tab.active, tab.filters))
+                .collect::<Vec<_>>(),
+            vec![("1".to_string(), false, 1), ("2".to_string(), true, 0)],
+            "the set left behind still shows that it is filtering"
+        );
+        assert!(view.counts.iter().any(|chip| chip.text == "set 2/2"));
+    }
+
+    #[test]
+    fn the_tab_strip_is_one_line_at_exactly_the_requested_width() {
+        // Same invariant the rows have: the pane's scroll offset is a field
+        // index, so nothing here may wrap.
+        let theme = Theme::default();
+        let mut state = panel_state();
+        for _ in 0..8 {
+            state.filter_add_set();
+        }
+        let view = render_filter_panel(&state).expect("panel is open");
+
+        for width in [MARKER_WIDTH + 8, 40, 80, 160] {
+            let line = tab_strip_line(&view, &theme, width);
+            assert_eq!(visible_width(&line.to_string()), width);
+        }
+    }
+
+    #[test]
+    fn the_active_tab_is_told_apart_without_colour() {
+        // The mono theme collapses the styles, so the active tab has to carry a
+        // modifier — the same rule the calendar's day styles follow.
+        let theme = Theme::default();
+        let mut state = panel_state();
+        state.filter_add_set();
+        let view = render_filter_panel(&state).expect("panel is open");
+        let line = tab_strip_line(&view, &theme, 60);
+
+        assert!(line
+            .spans
+            .iter()
+            .any(|span| span.style.add_modifier.contains(Modifier::REVERSED)));
+    }
+
+    #[test]
+    fn a_require_empty_row_shows_a_value_rather_than_the_unset_placeholder() {
+        // `—` means "no filter"; `(none)` means "filter to no value". They are
+        // opposites and must not look alike.
+        let theme = Theme::default();
+        let mut state = panel_state();
+        state.move_filter_down();
+        state.filter_toggle_require_empty();
+        let view = render_filter_panel(&state).expect("panel is open");
+        let lines = filter_panel_lines(&view, &theme, 60);
+
+        assert_eq!(view.rows[1].value, FilterValue::RequireEmpty);
+        assert!(view.rows[1].value.is_active());
+        assert!(lines[1].to_string().contains("(none)"));
+        assert!(!lines[1].to_string().contains(theme.glyphs.empty));
     }
 
     #[test]

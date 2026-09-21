@@ -540,6 +540,17 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("ctrl-z", Mode::Filter, "search_fuzzy"),
         Bind::with_mode("ctrl-s", Mode::Filter, "search_substring"),
         Bind::with_mode("ctrl-r", Mode::Filter, "search_regex"),
+        Bind::with_mode("l", Mode::Filter, "filter_set_next"),
+        Bind::with_mode("h", Mode::Filter, "filter_set_prev"),
+        Bind::with_mode("a", Mode::Filter, "filter_set_add"),
+        Bind::with_mode("x", Mode::Filter, "filter_set_remove"),
+        Bind::with_mode("e", Mode::Filter, "filter_require_empty"),
+        // Letters type while editing, so the require-empty key needs a ctrl-
+        // pair there. ctrl-e is free in filter-edit mode; in calendar mode it
+        // is already "jump to the end of a range", which is why the date
+        // fields' require-empty is set from filter-browse mode, before the
+        // picker opens.
+        Bind::with_mode("ctrl-e", Mode::FilterEdit, "filter_require_empty"),
         Bind::with_mode("enter", Mode::FilterEdit, "filter_done_editing"),
         Bind::with_mode("esc", Mode::FilterEdit, "filter_cancel_editing"),
         Bind::with_mode("ctrl-l", Mode::FilterEdit, "clear_search"),
@@ -1005,6 +1016,31 @@ mod tests {
         assert_eq!(
             keymap.action_for(&KeyBinding::Enter, Mode::Project),
             Some(&Action::Open)
+        );
+
+        for (key, action) in [
+            (KeyBinding::Char('l'), Action::FilterSetNext),
+            (KeyBinding::Char('h'), Action::FilterSetPrev),
+            (KeyBinding::Char('a'), Action::FilterSetAdd),
+            (KeyBinding::Char('x'), Action::FilterSetRemove),
+            (KeyBinding::Char('e'), Action::FilterRequireEmpty),
+        ] {
+            assert_eq!(keymap.action_for(&key, Mode::Filter), Some(&action));
+        }
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('e'), Mode::FilterEdit),
+            Some(&Action::FilterRequireEmpty),
+            "letters type while editing, so require-empty needs a ctrl- pair"
+        );
+        // h/l keep their existing meanings in the modes that shadow them: you
+        // switch sets from browse mode, not mid-edit.
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('h'), Mode::FilterEdit),
+            Some(&Action::FilterMoveLabelLeft)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('h'), Mode::Calendar),
+            Some(&Action::CalendarPrevDay)
         );
     }
 

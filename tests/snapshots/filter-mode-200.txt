@@ -1,7 +1,7 @@
  TUISANA  ▸ 1 project ▸ 11 tasks
 ┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃▍   Title     fuzzy     —                                                                                                                                                                             ┃
-┃    Assignee  contains  —                                                                                                                                                                             ┃
+┃    Assignee  fuzzy     —                                                                                                                                                                             ┃
 ┃    Due       date      —                                                                                                                                                                             ┃
 ┃    Start     date      —                                                                                                                                                                             ┃
 ┃    State     labels    —                                                                                                                                                                             ┃
@@ -36,5 +36,5 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-⏎ edit   j/k field   s match mode   ^l clear   f close   ? help                                                                                                                       r refresh   q quit
+⏎ edit   j/k field   e require empty   s match mode   ^l clear   a add set   f close   ? help                                                                                         r refresh   q quit
  FILTER

@@ -70,6 +70,9 @@ pub struct HintContext {
     pub on_date_range: bool,
     /// The chart's timeline has been scrolled or zoomed off its fitted window.
     pub timeline_windowed: bool,
+    /// The filter panel holds more than one set, so there are tabs to move
+    /// between and one that can be removed.
+    pub many_filter_sets: bool,
 }
 
 /// Hints shown on the right of the bar in every mode.
@@ -89,14 +92,28 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
             Hint::new(&[Action::SearchSubstring], "contains"),
             Hint::new(&[Action::SearchRegex], "regex"),
         ],
-        Mode::Filter => vec![
-            Hint::new(&[Action::BeginFilterEdit], "edit"),
-            Hint::new(&[Action::MoveDown, Action::MoveUp], "field"),
-            Hint::new(&[Action::CycleFilterStringMode], "match mode"),
-            Hint::new(&[Action::ClearSearch], "clear"),
-            Hint::new(&[Action::ToggleTaskFilters], "close"),
-            Hint::new(&[Action::ToggleHelpDetails], "help"),
-        ],
+        Mode::Filter => {
+            let mut hints = vec![
+                Hint::new(&[Action::BeginFilterEdit], "edit"),
+                Hint::new(&[Action::MoveDown, Action::MoveUp], "field"),
+                Hint::new(&[Action::FilterRequireEmpty], "require empty"),
+                Hint::new(&[Action::CycleFilterStringMode], "match mode"),
+                Hint::new(&[Action::ClearSearch], "clear"),
+                // `add set` is how the feature is discovered, so it shows even
+                // with one set; the rest can do nothing until there are two.
+                Hint::new(&[Action::FilterSetAdd], "add set"),
+            ];
+            if context.many_filter_sets {
+                hints.push(Hint::new(
+                    &[Action::FilterSetPrev, Action::FilterSetNext],
+                    "set",
+                ));
+                hints.push(Hint::new(&[Action::FilterSetRemove], "remove set"));
+            }
+            hints.push(Hint::new(&[Action::ToggleTaskFilters], "close"));
+            hints.push(Hint::new(&[Action::ToggleHelpDetails], "help"));
+            hints
+        }
         Mode::FilterEdit => filter_edit_hints(context),
         Mode::Calendar => {
             let mut hints = vec![
@@ -248,7 +265,11 @@ pub fn hint_line(
 ) -> Line<'static> {
     let globals = hint_spans(GLOBAL_HINTS, keymap, mode, theme, width);
     let globals_width = spans_width(&globals);
-    let left_budget = width.saturating_sub(globals_width);
+    // The gap is reserved, not just hoped for: a left run that filled the
+    // budget exactly used to run straight into the globals — `^l clearr
+    // refresh`, which reads as a typo. One fewer hint is the better trade,
+    // and it is the same rule the hints already follow among themselves.
+    let left_budget = width.saturating_sub(globals_width + visible_width(HINT_GAP));
 
     let mut spans = hint_spans(hints, keymap, mode, theme, left_budget);
     let used = spans_width(&spans);
@@ -393,6 +414,49 @@ mod tests {
     }
 
     #[test]
+    fn the_filter_hints_show_the_rebound_set_keys() {
+        // The hint modules never hardcode key names, so neither does the test:
+        // it rebinds `add set` and expects the hint bar to follow.
+        use crate::config::Bind;
+
+        let keymap = KeyMap::from_bindings(&[Bind::with_mode(
+            "n",
+            Mode::Filter,
+            "filter_set_add",
+        )])
+        .expect("keymap parses");
+        let line = hint_line(
+            &hints_for(Mode::Filter, HintContext::default()),
+            &keymap,
+            Mode::Filter,
+            &Theme::default(),
+            200,
+        );
+
+        assert!(line.to_string().contains('n'));
+        assert!(line.to_string().contains("add set"));
+    }
+
+    #[test]
+    fn the_set_navigation_hints_appear_only_once_there_are_sets_to_navigate() {
+        let one = hints_for(Mode::Filter, HintContext::default());
+        let many = hints_for(
+            Mode::Filter,
+            HintContext {
+                many_filter_sets: true,
+                ..HintContext::default()
+            },
+        );
+
+        assert!(!one.iter().any(|hint| hint.label == "remove set"));
+        assert!(many.iter().any(|hint| hint.label == "remove set"));
+        assert!(
+            one.iter().any(|hint| hint.label == "add set"),
+            "add set is how the feature is discovered, so it always shows"
+        );
+    }
+
+    #[test]
     fn resolves_hint_keys_from_the_keymap() {
         let keymap = keymap();
         let theme = Theme::default();
@@ -518,6 +582,36 @@ mod tests {
 
         assert!(rendered.trim_end().ends_with("q quit"));
         assert!(rendered.contains("r refresh"));
+    }
+
+    #[test]
+    fn the_global_hints_are_always_separated_from_the_ones_on_their_left() {
+        // A left run that filled the budget exactly used to abut the globals,
+        // rendering `^l clearr refresh`. Narrow widths are where it showed.
+        let keymap = keymap();
+        let theme = Theme::default();
+
+        for width in 20..=200 {
+            let rendered = hint_line(
+                &hints_for(Mode::Filter, HintContext::default()),
+                &keymap,
+                Mode::Filter,
+                &theme,
+                width,
+            )
+            .to_string();
+
+            assert!(
+                !rendered.contains("clearr"),
+                "hints ran together at width {width}: {rendered:?}"
+            );
+            if let Some(at) = rendered.find("r refresh") {
+                assert!(
+                    at == 0 || rendered[..at].ends_with(' '),
+                    "no gap before the globals at width {width}: {rendered:?}"
+                );
+            }
+        }
     }
 
     #[test]

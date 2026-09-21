@@ -115,7 +115,9 @@ Reading the screen:
 - Editing a date filter opens a calendar overlay: it starts on the current month
   with today highlighted, `h`/`l` move by day, `j`/`k` flip months, and `enter`
   picks the highlighted day. Typed digits go straight into the filter field, and
-  move the highlight to match.
+  move the highlight to match. Its grid runs `Su Mo Tu We Th Fr Sa` — the Gantt
+  chart's weekends and week boundaries still count from Monday, because a work
+  week and a calendar grid are read differently.
 - A date range shades the days between its two ends, with both ends picked out.
 
 ### Dates and time zones
@@ -140,7 +142,10 @@ Date filters accept:
 | a range open on one side | `today..`, `..2026-12-31` |
 
 A `due` filter is also pushed to the API as `due_on.after` / `due_on.before`, so
-narrowing it reduces what gets downloaded.
+narrowing it reduces what gets downloaded. With more than one filter set the
+window sent is the *union* of theirs, and a set that is open-ended, unfiltered,
+or asking for an empty due date opens that side of it — otherwise the server
+would drop rows a set had asked for.
 
 ### Key bindings
 
@@ -222,6 +227,11 @@ All bindable commands:
 - `search_fuzzy`
 - `search_substring`
 - `search_regex`
+- `filter_require_empty`
+- `filter_set_add`
+- `filter_set_remove`
+- `filter_set_next`
+- `filter_set_prev`
 
 **Calendar mode** (the date picker)
 
@@ -248,6 +258,7 @@ All bindable commands:
 - `filter_delete_label`
 - `filter_caret_left`
 - `filter_caret_right`
+- `filter_require_empty`
 - `clear_search`
 - `search_fuzzy`
 - `search_substring`
@@ -337,8 +348,56 @@ The top window is shared between the project list and the filter view. When the 
 - `esc` to close the panel and return to task mode
 - `f` to toggle the filter panel
 - `s` to cycle the string-match mode
+- `e` to require the field to be empty
+- `a` to add a filter set, `x` to remove the current one, `h`/`l` to move between
 - `ctrl-l` to clear the search string
 - `ctrl-z`, `ctrl-s`, `ctrl-r` to switch search mode
+
+The panel's fields are `Title`, `Assignee`, `Due`, `Start`, `State`, `Projects`,
+and one row per custom field. `Title` and `Assignee` match fuzzily by default —
+a person's name is typed from memory and is the field most likely to be
+half-remembered — and `ctrl-s` switches a row to `contains`, `ctrl-r` to regex.
+
+**Filter sets.** Filling in more than one field *narrows*: a `Due` of
+`..2026-09-01` and an `Assignee` of `alex` shows Alex's tasks due before
+September. What that cannot express is a union, so the panel holds one or more
+filter sets:
+
+- Each set is the same list of fields, and fields within a set still AND.
+- Sets are ORed: a task is shown when it satisfies **any** set.
+- A new set starts empty, so adding one never hides a task that was visible
+  before — it can only add.
+- Sets appear as numbered tabs along the top of the pane, with an active marker
+  on any set that is filtering, so a set doing work is visible while you are
+  standing on another one. With a single set there is no strip at all.
+- `x` is refused when there is only one set: one set is the panel, not a set of
+  sets.
+
+End to end: `f` opens the panel, `j j` lands on `Due`, `enter` opens the
+calendar, `today..2026-09-28` picks the next week, `enter` commits, `a` adds a
+second set, `enter` opens its `Due` — the field cursor is shared, so you are
+already on the same row — `2027-01` picks four months out, `enter`. The table
+now holds both groups and nothing in between.
+
+**Requiring an empty field.** An empty filter field means "do not filter", so
+there is a separate key for "has no value": `e` on a filter row, or `ctrl-e`
+while editing one. The row's value shows as `(none)`, it counts towards the
+active-filter count, and the table narrows to tasks with nothing in that field.
+Pressing `e` again clears it; so does typing, because a value and a
+require-empty are mutually exclusive.
+
+| field kind | empty means |
+| --- | --- |
+| text (`Title`, `Assignee`, `Projects`, text custom fields) | the value is missing or all whitespace |
+| labels (custom fields with a small value set) | the task carries no value for the field |
+| date (`Due`, `Start`) | the task has no such date |
+
+`State` is the exception: a task is always either open or done, so it can never
+be empty and the key does nothing there.
+
+Combining the two is the point: set 1 asks for tasks due this week, set 2 for
+tasks with no due date at all, and the table shows the work that is either
+imminent or unscheduled.
 
 **Filter field editing** (filter edit mode):
 

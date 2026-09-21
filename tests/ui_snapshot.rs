@@ -591,6 +591,34 @@ fn filter_edit_mode() {
     });
 }
 
+/// Two sets, the second active and both filtering, so the tab strip, the set
+/// chip, and the `or` between the tabs are all on screen.
+#[test]
+fn filter_mode_with_two_sets() {
+    assert_snapshot("filter-sets", || {
+        vec![
+            enter_task_mode(),
+            // `j` to Assignee, `enter` to edit it — in filter *browse* mode the
+            // letters are bound (`h`/`l` switch sets, `a` adds one), so the
+            // value has to be typed from edit mode.
+            vec![key('f'), key('j'), enter()],
+            "alex".chars().map(key).chain([enter()]).collect(),
+            // `a` adds a set. The field cursor is shared, so one `j` moves both
+            // sets' cursor from Assignee to Due; `e` requires it to be empty.
+            vec![key('a'), key('j'), key('e')],
+        ]
+    });
+}
+
+/// A require-empty on `Due`, so `(none)` is drawn next to the `—` of the
+/// untouched rows and the two are visibly different.
+#[test]
+fn filter_mode_requiring_an_empty_due_date() {
+    assert_snapshot("filter-require-empty", || {
+        vec![enter_task_mode(), vec![key('f'), key('j'), key('j'), key('e')]]
+    });
+}
+
 /// The `Due` filter is the third row, so two `j`s land on it.
 fn open_due_calendar() -> Vec<KeyEvent> {
     vec![key('f'), key('j'), key('j'), enter()]
@@ -689,7 +717,11 @@ fn the_monochrome_theme_emits_no_color() {
     // The calendar overlay is checked in the same pass: it draws day numbers, a
     // highlight, and a shaded range, all of which are easy to reach for color or
     // a box-drawing glyph without noticing.
-    let mut keys = open_due_calendar();
+    // `a` adds a second filter set before the picker opens, so the tab strip
+    // and its active marker are inside this pass rather than beside it. The
+    // keys are spelled out rather than reusing `open_due_calendar`, whose
+    // leading `f` would close the panel `a` needs open.
+    let mut keys = vec![key('f'), key('a'), key('j'), key('j'), enter()];
     keys.extend("2026-08-10..2026-08-20".chars().map(key));
     run_session(
         &mut app,

@@ -522,3 +522,170 @@ fn flipping_months_in_the_calendar_lands_on_the_month_edges() {
         .expect("the Due row exists");
     assert_eq!(due, "2026-05-31");
 }
+
+/// Four tasks spread across the year, for the filter-set tests: one due within
+/// a week of the pinned today, one four months out, one in between, and one
+/// with no due date at all.
+///
+/// The in-between task is what proves the sets are ORed rather than merged into
+/// one widened range; the undated one is what catches a due-date window pushed
+/// down when it should not have been.
+///
+/// The dates are placed around the same `2026-06-10` every other test in this
+/// file pins, because `TUISANA_TODAY` is process-global and the test binary
+/// runs its tests in parallel — a second value here would make the calendar
+/// tests flake.
+fn spread_task(gid: &str, name: &str, due: Option<&str>) -> TaskDto {
+    let mut task = make_task();
+    task.gid = gid.to_string();
+    task.name = name.to_string();
+    task.due_on = due.map(ToString::to_string);
+    task.start_on = None;
+    task.custom_fields = Vec::new();
+    task
+}
+
+fn spread_client() -> FakeAsanaClient {
+    FakeAsanaClient::new(vec![Project::new("project-1", "Inbox", true)])
+        .with_sections(
+            "project-1",
+            vec![SectionDto {
+                gid: "section-1".to_string(),
+                name: "Today".to_string(),
+            }],
+        )
+        .with_tasks(
+            "project-1",
+            vec![
+                spread_task("t-soon", "Imminent", Some("2026-06-12")),
+                spread_task("t-mid", "In between", Some("2026-08-05")),
+                spread_task("t-far", "Far out", Some("2026-10-20")),
+                spread_task("t-none", "Someday", None),
+            ],
+        )
+}
+
+fn visible_task_names<C: AsanaClient + Clone + Send + 'static>(app: &App<C>) -> Vec<String> {
+    app.tasks
+        .table()
+        .rows
+        .iter()
+        .filter(|row| row.kind.is_task())
+        .map(|row| row.cells[0].trim().to_string())
+        .collect()
+}
+
+/// Runs one batch of keys and waits for whatever fetch it triggered.
+fn press<C: AsanaClient + Clone + Send + 'static>(
+    app: &mut App<C>,
+    terminal: &mut Terminal<TestBackend>,
+    keys: Vec<KeyEvent>,
+) {
+    let mut source = ScriptedSource {
+        keys,
+        wait_before_next: false,
+    };
+    run_session(app, &mut source, terminal).expect("session runs");
+    wait_for_task_data(app);
+}
+
+fn spread_app() -> (App<FakeAsanaClient>, Terminal<TestBackend>) {
+    std::env::set_var("TUISANA_TODAY", "2026-06-10");
+    let mut app = App::new(Config::default(), spread_client());
+    app.load_projects().expect("projects load");
+    let terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+    (app, terminal)
+}
+
+fn chr(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+}
+
+fn ret() -> KeyEvent {
+    KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+}
+
+/// Select the project, open the task view and the filter panel, and put a
+/// one-week window in the first set's `Due` row.
+///
+/// Leaves the field cursor on `Due`. That cursor is shared by every set, so an
+/// added set is already standing on the same row — pressing `j j` again after
+/// `a` would walk off it onto `State`.
+fn open_panel_with_a_due_window(app: &mut App<FakeAsanaClient>, terminal: &mut Terminal<TestBackend>) {
+    press(app, terminal, vec![chr(' '), chr('t'), chr('f')]);
+    press(app, terminal, vec![chr('j'), chr('j'), ret()]);
+    press(
+        app,
+        terminal,
+        "2026-06-10..2026-06-17".chars().map(chr).chain([ret()]).collect(),
+    );
+}
+
+#[test]
+fn two_filter_sets_show_the_union_of_their_results() {
+    let (mut app, mut terminal) = spread_app();
+
+    open_panel_with_a_due_window(&mut app, &mut terminal);
+    assert_eq!(visible_task_names(&app), vec!["Imminent"]);
+
+    // `a` adds a second set; its Due row asks for October instead.
+    press(&mut app, &mut terminal, vec![chr('a'), ret()]);
+    press(
+        &mut app,
+        &mut terminal,
+        "2026-10-01..2026-10-31".chars().map(chr).chain([ret()]).collect(),
+    );
+
+    assert_eq!(
+        visible_task_names(&app),
+        vec!["Imminent", "Far out"],
+        "the August task falls in neither set"
+    );
+    assert_eq!(app.tasks.filter_set_position(), (1, 2));
+}
+
+#[test]
+fn a_set_requiring_no_due_date_still_loads_the_undated_tasks() {
+    // The server-side date filter, seen from outside: with the union computed
+    // wrongly, the `due_on.after` sent to Asana drops the undated tasks and the
+    // cache records the window as covered, so they never arrive. The fake
+    // honours due_after/due_before, so it drops them exactly as Asana would.
+    let (mut app, mut terminal) = spread_app();
+
+    open_panel_with_a_due_window(&mut app, &mut terminal);
+    assert!(!visible_task_names(&app).contains(&"Someday".to_string()));
+
+    // A second set asking for tasks with no due date at all: `a`, then `e` on
+    // the Due row the cursor is already standing on.
+    press(&mut app, &mut terminal, vec![chr('a'), chr('e')]);
+
+    let names = visible_task_names(&app);
+    assert!(
+        names.contains(&"Someday".to_string()),
+        "the undated task has to be fetched as well as shown: {names:?}"
+    );
+    assert!(names.contains(&"Imminent".to_string()));
+    assert!(
+        !names.contains(&"In between".to_string()),
+        "and the first set still excludes what it excluded: {names:?}"
+    );
+}
+
+#[test]
+fn removing_a_set_puts_its_rows_back_behind_the_remaining_filter() {
+    let (mut app, mut terminal) = spread_app();
+
+    open_panel_with_a_due_window(&mut app, &mut terminal);
+    press(&mut app, &mut terminal, vec![chr('a'), ret()]);
+    press(
+        &mut app,
+        &mut terminal,
+        "2026-10-01..2026-10-31".chars().map(chr).chain([ret()]).collect(),
+    );
+    assert_eq!(visible_task_names(&app), vec!["Imminent", "Far out"]);
+
+    press(&mut app, &mut terminal, vec![chr('x')]);
+
+    assert_eq!(app.tasks.filter_set_position(), (0, 1));
+    assert_eq!(visible_task_names(&app), vec!["Imminent"]);
+}

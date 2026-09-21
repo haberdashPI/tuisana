@@ -50,6 +50,13 @@ a convention.
 - `TaskState` owns task datasets, filters, selection, and the task table.
 - `Domain` owns the core data models and rules orchestration built on top of them.
 - `request_task_data` starts an async fetch; `poll_task_data` merges the results.
+- The filter panel holds one or more `TaskFilterSet`s, ORed together: fields AND
+  within a set, sets OR between them. `restore_queries` is what carries the set
+  list, the active tab, and every query across the rebuild each streamed project
+  triggers — state the user can change that is not re-applied there vanishes
+  mid-load. A `due` filter is pushed down to Asana, so `due_date_range_for_query`
+  has to send the *union* of the sets' windows or the cache records a window as
+  covered that was never fetched.
 - `Action` is the shared input vocabulary.
 - `KeyMap` is built from config bindings and resolves keys to actions. A binding
   with a `mode` shadows the global one, which is how `c`, `t`, and `h`/`l` mean

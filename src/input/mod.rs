@@ -171,6 +171,11 @@ pub enum Action {
     FilterCycleLabelDown,
     FilterAddLabel,
     FilterDeleteLabel,
+    FilterSetNext,
+    FilterSetPrev,
+    FilterSetAdd,
+    FilterSetRemove,
+    FilterRequireEmpty,
     /// Move the calendar's highlighted day back one day.
     CalendarPrevDay,
     /// Move the calendar's highlighted day forward one day.
@@ -302,6 +307,11 @@ impl Action {
             "filter_cycle_label_down" => Ok(Self::FilterCycleLabelDown),
             "filter_add_label" => Ok(Self::FilterAddLabel),
             "filter_delete_label" => Ok(Self::FilterDeleteLabel),
+            "filter_set_next" => Ok(Self::FilterSetNext),
+            "filter_set_prev" => Ok(Self::FilterSetPrev),
+            "filter_set_add" => Ok(Self::FilterSetAdd),
+            "filter_set_remove" => Ok(Self::FilterSetRemove),
+            "filter_require_empty" => Ok(Self::FilterRequireEmpty),
             "calendar_prev_day" => Ok(Self::CalendarPrevDay),
             "calendar_next_day" => Ok(Self::CalendarNextDay),
             "calendar_prev_month" => Ok(Self::CalendarPrevMonth),
@@ -465,6 +475,11 @@ impl Display for Action {
             Action::FilterCycleLabelDown => "filter_cycle_label_down",
             Action::FilterAddLabel => "filter_add_label",
             Action::FilterDeleteLabel => "filter_delete_label",
+            Action::FilterSetNext => "filter_set_next",
+            Action::FilterSetPrev => "filter_set_prev",
+            Action::FilterSetAdd => "filter_set_add",
+            Action::FilterSetRemove => "filter_set_remove",
+            Action::FilterRequireEmpty => "filter_require_empty",
             Action::CalendarPrevDay => "calendar_prev_day",
             Action::CalendarNextDay => "calendar_next_day",
             Action::CalendarPrevMonth => "calendar_prev_month",
@@ -593,6 +608,25 @@ mod tests {
         );
     }
 
+    /// Every command name has to be added in three places — the `Action` enum,
+    /// `from_command`, and `Display`. This catches the edit that was done in
+    /// two of them, which otherwise breaks the config round-trip silently.
+    #[test]
+    fn every_filter_set_command_round_trips_through_its_name() {
+        for action in [
+            Action::FilterSetNext,
+            Action::FilterSetPrev,
+            Action::FilterSetAdd,
+            Action::FilterSetRemove,
+            Action::FilterRequireEmpty,
+        ] {
+            assert_eq!(
+                Action::from_command(&action.to_string()).expect("parses"),
+                action
+            );
+        }
+    }
+
     #[test]
     fn parses_key_aliases_and_commands() {
         assert_eq!("enter".parse::<KeyBinding>().expect("enter parses"), KeyBinding::Enter);
@@ -640,6 +674,14 @@ mod tests {
         assert_eq!(
             Action::from_command("search_regex").expect("search_regex parses"),
             Action::SearchRegex
+        );
+        assert_eq!(
+            Action::from_command("filter_set_add").expect("filter_set_add parses"),
+            Action::FilterSetAdd
+        );
+        assert_eq!(
+            Action::from_command("filter_require_empty").expect("filter_require_empty parses"),
+            Action::FilterRequireEmpty
         );
         assert_eq!(Action::from_command("jump_top").expect("jump_top parses"), Action::JumpTop);
         assert_eq!(

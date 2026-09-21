@@ -1,7 +1,7 @@
  TUISANA  ▸ 1 project ▸ 11 tasks
 ┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ editing ┓
 ┃    Title     fuzzy     —                                                                                             ┃
-┃    Assignee  contains  —                                                                                             ┃
+┃    Assignee  fuzzy     —                                                                                             ┃
 ┃▍   Due       date                                                                                                    ┃
 ┃    Start     date      —                                                                                             ┃
 ┃    State     labels    —                                                                                             ┃

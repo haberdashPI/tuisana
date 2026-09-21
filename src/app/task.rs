@@ -161,6 +161,11 @@ struct TaskFilterFieldSpec {
     /// project, with its own id. Keying rows by id gave one identically-labelled
     /// row per project — five "Tag" rows in a row. One row now covers them all.
     custom_gids: Vec<String>,
+    /// Whether "has no value" is a state this field can be in.
+    ///
+    /// False only for `state`: a task is always either open or done, so a
+    /// require-empty there would match nothing while looking like a filter.
+    can_be_empty: bool,
 }
 
 /// Mutable state for one filter row, including the user query and any selected
@@ -179,6 +184,12 @@ struct TaskFilterFieldState {
     label_values: Vec<String>,
     label_options: Vec<String>,
     label_cursor: usize,
+    /// Match only records with no value for this field.
+    ///
+    /// Mutually exclusive with `query`: setting this clears the query, and
+    /// typing clears this. "Has no due date" is not expressible as a date
+    /// expression, so it is a flag rather than a magic token in the text.
+    empty_required: bool,
 }
 
 /// A display-friendly snapshot of one task filter row for the filter panel UI.
@@ -197,15 +208,37 @@ pub(crate) struct TaskFilterPanelEntry {
     /// Whether this field came from a project custom field rather than a
     /// built-in task field.
     pub custom: bool,
+    /// Whether this row filters to records with no value at all.
+    pub empty_required: bool,
 }
 
-/// Tracks the filter panel's visibility, edit mode, selected row, and fields.
+/// One filter set: the field list the panel has always shown.
+///
+/// Every set has the same fields, because they are derived from the same
+/// dataset. What differs is what the user typed into them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TaskFilterSet {
+    fields: Vec<TaskFilterFieldState>,
+}
+
+/// Tracks the filter panel's visibility, edit mode, field cursor, and the
+/// filter sets it holds.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct TaskFilterEditorState {
     visible: bool,
     editing: bool,
+    /// The field cursor, shared by every set.
+    ///
+    /// Every set has the same rows in the same order, so one cursor is enough —
+    /// and switching sets then keeps you on the row you were looking at, which
+    /// is what you want when comparing the same field across two sets.
     selected: usize,
-    fields: Vec<TaskFilterFieldState>,
+    /// The sets, ORed together. Normally one; never zero once a dataset has
+    /// loaded, though `Default` leaves it empty and every accessor tolerates
+    /// that.
+    sets: Vec<TaskFilterSet>,
+    /// Which set the cursor and the keys act on.
+    active: usize,
     /// The date picker, while a date field is being edited through it.
     calendar: Option<CalendarState>,
 }
@@ -306,6 +339,7 @@ impl TaskFilterEditorState {
                     label: "Title".to_string(),
                     kind: TaskFieldFilterKind::String,
                     custom_gids: Vec::new(),
+                    can_be_empty: true,
                 },
                 TaskFieldStringMode::Fuzzy,
                 Vec::new(),
@@ -316,8 +350,12 @@ impl TaskFilterEditorState {
                     label: "Assignee".to_string(),
                     kind: TaskFieldFilterKind::String,
                     custom_gids: Vec::new(),
+                    can_be_empty: true,
                 },
-                TaskFieldStringMode::Substring,
+                // A person's name, typed from memory, is the field most likely
+                // to be half-remembered — so it gets the fuzzy default Title
+                // has. `ctrl-s` still switches the row back to `contains`.
+                TaskFieldStringMode::Fuzzy,
                 Vec::new(),
             ),
             TaskFilterFieldState::new(
@@ -326,6 +364,7 @@ impl TaskFilterEditorState {
                     label: "Due".to_string(),
                     kind: TaskFieldFilterKind::Date,
                     custom_gids: Vec::new(),
+                    can_be_empty: true,
                 },
                 TaskFieldStringMode::Substring,
                 Vec::new(),
@@ -336,6 +375,7 @@ impl TaskFilterEditorState {
                     label: "Start".to_string(),
                     kind: TaskFieldFilterKind::Date,
                     custom_gids: Vec::new(),
+                    can_be_empty: true,
                 },
                 TaskFieldStringMode::Substring,
                 Vec::new(),
@@ -346,6 +386,9 @@ impl TaskFilterEditorState {
                     label: "State".to_string(),
                     kind: TaskFieldFilterKind::Labels,
                     custom_gids: Vec::new(),
+                    // A task is always either open or done, so there is no
+                    // empty state for a require-empty to match.
+                    can_be_empty: false,
                 },
                 TaskFieldStringMode::Substring,
                 vec!["open".to_string(), "done".to_string()],
@@ -356,6 +399,7 @@ impl TaskFilterEditorState {
                     label: "Projects".to_string(),
                     kind: TaskFieldFilterKind::String,
                     custom_gids: Vec::new(),
+                    can_be_empty: true,
                 },
                 TaskFieldStringMode::Substring,
                 Vec::new(),
@@ -397,6 +441,7 @@ impl TaskFilterEditorState {
                     label: name.clone(),
                     kind,
                     custom_gids: gids,
+                    can_be_empty: true,
                 },
                 TaskFieldStringMode::Substring,
                 if kind == TaskFieldFilterKind::Labels {
@@ -411,43 +456,58 @@ impl TaskFilterEditorState {
             visible: false,
             editing: false,
             selected: 0,
-            fields,
+            sets: vec![TaskFilterSet { fields }],
+            active: 0,
             calendar: None,
         }
     }
 
+    /// Carries everything the user did across a rebuild.
+    ///
+    /// `from_dataset` builds one empty set from whatever records have arrived so
+    /// far, and loading streams in one project at a time — so this runs several
+    /// times while someone is typing. The set list, the active tab, the field
+    /// cursor, every set's queries, and the in-progress edit all have to be
+    /// re-applied here. Before Milestone 11.75 the caret snapped back to 0
+    /// between keystrokes for exactly this reason; a set list that did not
+    /// survive would vanish mid-load the same way.
     fn restore_queries(&mut self, previous: Self) {
         self.visible = previous.visible;
         self.editing = previous.editing && self.visible;
-        self.selected = previous.selected.min(self.fields.len().saturating_sub(1));
-        // A reload rebuilds every field from scratch, so the in-progress edit
-        // state has to be carried across as well as the queries themselves.
-        // Loading streams in one project at a time, and each one rebuilds the
-        // editor; without this the caret snapped back to 0 between keystrokes
-        // and the open date picker vanished mid-edit.
         self.calendar = if self.editing { previous.calendar } else { None };
-        for field in &mut self.fields {
-            if let Some(old) = previous.fields.iter().find(|old| old.spec.key == field.spec.key) {
-                field.string_mode = old.string_mode;
-                match field.spec.kind {
-                    TaskFieldFilterKind::Labels => {
-                        field.label_values = if old.label_values.is_empty() {
-                            parse_label_values(&old.query)
-                        } else {
-                            old.label_values.clone()
-                        };
-                        field.label_cursor = old.label_cursor.min(field.label_values.len().saturating_sub(1));
-                        field.query = field.label_values.join(" | ");
-                    }
-                    _ => {
-                        field.query = old.query.clone();
-                    }
-                }
-                // Clamped because a custom field can change kind between loads
-                // as values arrive, which rewrites `query` under the caret.
-                field.query_caret = old.query_caret.min(field.query.chars().count());
-            }
+
+        let template = self.sets.first().cloned().unwrap_or_default();
+        self.sets = previous
+            .sets
+            .iter()
+            .map(|old| {
+                let mut set = template.clone();
+                set.restore_from(old);
+                set
+            })
+            .collect();
+        if self.sets.is_empty() {
+            self.sets.push(template);
         }
+
+        self.active = previous.active.min(self.sets.len() - 1);
+        self.selected = previous.selected.min(self.fields().len().saturating_sub(1));
+    }
+
+    /// The active set's fields, or nothing before a dataset has loaded.
+    fn fields(&self) -> &[TaskFilterFieldState] {
+        self.sets.get(self.active).map_or(&[], |set| &set.fields)
+    }
+
+    fn selected_field(&self) -> Option<&TaskFilterFieldState> {
+        self.fields().get(self.selected)
+    }
+
+    fn selected_field_mut(&mut self) -> Option<&mut TaskFilterFieldState> {
+        let selected = self.selected;
+        self.sets
+            .get_mut(self.active)
+            .and_then(|set| set.fields.get_mut(selected))
     }
 
     fn visible(&self) -> bool {
@@ -465,70 +525,75 @@ impl TaskFilterEditorState {
         }
     }
 
+    /// Fields in the **active** set with a typed value.
+    ///
+    /// Both counts describe the rows on screen, which is the set being edited —
+    /// the tab strip is what says whether another set is doing work.
     fn active_count(&self) -> usize {
-        self.fields
+        self.fields()
             .iter()
             .filter(|field| !field.query.trim().is_empty())
             .count()
     }
 
-    /// Fields that exclude anything, counting label selections as well as text.
+    /// Fields that exclude anything, counting label selections and
+    /// require-empty as well as text.
     fn active_filter_count(&self) -> usize {
-        self.fields
+        self.fields()
             .iter()
-            .filter(|field| {
-                !field.query.trim().is_empty() || !field.label_values.is_empty()
-            })
+            .filter(|field| field.is_active() || !field.label_values.is_empty())
             .count()
     }
 
     fn selected_kind(&self) -> Option<TaskFieldFilterKind> {
-        self.fields.get(self.selected).map(|field| field.spec.kind)
+        self.selected_field().map(|field| field.spec.kind)
     }
 
     fn selected_label(&self) -> Option<&str> {
-        self.fields.get(self.selected).map(|field| field.spec.label.as_str())
+        self.selected_field().map(|field| field.spec.label.as_str())
     }
 
     fn move_up(&mut self) {
-        if self.fields.is_empty() {
+        if self.fields().is_empty() {
             return;
         }
         self.selected = self.selected.saturating_sub(1);
     }
 
     fn move_down(&mut self) {
-        if self.fields.is_empty() {
+        if self.fields().is_empty() {
             return;
         }
-        self.selected = (self.selected + 1).min(self.fields.len() - 1);
+        self.selected = (self.selected + 1).min(self.fields().len() - 1);
     }
 
     fn page_up(&mut self, page_size: usize) {
-        if self.fields.is_empty() {
+        if self.fields().is_empty() {
             return;
         }
         self.selected = self.selected.saturating_sub(page_size.max(1));
     }
 
     fn page_down(&mut self, page_size: usize) {
-        if self.fields.is_empty() {
+        if self.fields().is_empty() {
             return;
         }
-        self.selected = (self.selected + page_size.max(1)).min(self.fields.len() - 1);
+        self.selected = (self.selected + page_size.max(1)).min(self.fields().len() - 1);
     }
 
     fn clear_current(&mut self) {
-        if let Some(field) = self.fields.get_mut(self.selected) {
+        if let Some(field) = self.selected_field_mut() {
             field.query.clear();
             field.query_caret = 0;
             field.label_values.clear();
             field.label_cursor = 0;
+            // `ctrl-l` resets the row completely, require-empty included.
+            field.empty_required = false;
         }
     }
 
     fn set_mode(&mut self, mode: TaskFieldStringMode) {
-        if let Some(field) = self.fields.get_mut(self.selected) {
+        if let Some(field) = self.selected_field_mut() {
             if !matches!(field.spec.kind, TaskFieldFilterKind::String) {
                 return;
             }
@@ -537,7 +602,7 @@ impl TaskFilterEditorState {
     }
 
     fn cycle_mode(&mut self) {
-        if let Some(field) = self.fields.get_mut(self.selected) {
+        if let Some(field) = self.selected_field_mut() {
             if !matches!(field.spec.kind, TaskFieldFilterKind::String) {
                 return;
             }
@@ -550,10 +615,13 @@ impl TaskFilterEditorState {
     }
 
     fn push_char(&mut self, ch: char) {
-        if let Some(field) = self.fields.get_mut(self.selected) {
+        if let Some(field) = self.selected_field_mut() {
             if matches!(field.spec.kind, TaskFieldFilterKind::Labels) {
                 return;
             }
+            // Typing is the user supplying a value, which a require-empty is
+            // the opposite of.
+            field.empty_required = false;
             let mut chars = field.query.chars().collect::<Vec<_>>();
             let at = field.query_caret.min(chars.len());
             chars.insert(at, ch);
@@ -563,7 +631,7 @@ impl TaskFilterEditorState {
     }
 
     fn pop_char(&mut self) {
-        if let Some(field) = self.fields.get_mut(self.selected) {
+        if let Some(field) = self.selected_field_mut() {
             if matches!(field.spec.kind, TaskFieldFilterKind::Labels) {
                 return;
             }
@@ -580,7 +648,7 @@ impl TaskFilterEditorState {
 
     /// Moves the selected field's caret, clamped to its text.
     fn move_query_caret(&mut self, delta: i64) {
-        if let Some(field) = self.fields.get_mut(self.selected) {
+        if let Some(field) = self.selected_field_mut() {
             if matches!(field.spec.kind, TaskFieldFilterKind::Labels) {
                 return;
             }
@@ -594,7 +662,7 @@ impl TaskFilterEditorState {
     /// Called when an edit begins, so typing continues from where the value
     /// leaves off rather than from wherever the caret was last time.
     fn reset_query_caret(&mut self) {
-        if let Some(field) = self.fields.get_mut(self.selected) {
+        if let Some(field) = self.selected_field_mut() {
             field.query_caret = field.query.chars().count();
         }
     }
@@ -611,17 +679,18 @@ impl TaskFilterEditorState {
 
     /// Opens the date picker on the selected field, if it holds a date.
     fn open_calendar(&mut self, today: CivilDate) -> bool {
-        let Some(field) = self.fields.get(self.selected) else {
+        let Some(field) = self.selected_field() else {
             return false;
         };
         if !matches!(field.spec.kind, TaskFieldFilterKind::Date) {
             return false;
         }
-        self.calendar = Some(CalendarState::open(
-            field.spec.label.clone(),
-            &field.query,
-            today,
-        ));
+        let (label, query) = (field.spec.label.clone(), field.query.clone());
+        // A date is about to be picked, so there is a value coming.
+        if let Some(field) = self.selected_field_mut() {
+            field.empty_required = false;
+        }
+        self.calendar = Some(CalendarState::open(label, &query, today));
         self.editing = true;
         true
     }
@@ -634,13 +703,13 @@ impl TaskFilterEditorState {
         let Some(query) = self.calendar.as_ref().map(|state| state.query().to_string()) else {
             return;
         };
-        if let Some(field) = self.fields.get_mut(self.selected) {
+        if let Some(field) = self.selected_field_mut() {
             field.query = query;
         }
     }
 
     fn move_label_cursor_left(&mut self) {
-        if let Some(field) = self.fields.get_mut(self.selected) {
+        if let Some(field) = self.selected_field_mut() {
             if matches!(field.spec.kind, TaskFieldFilterKind::Labels) {
                 if !field.label_values.is_empty() {
                     field.label_cursor = field.label_cursor.saturating_sub(1);
@@ -650,7 +719,7 @@ impl TaskFilterEditorState {
     }
 
     fn move_label_cursor_right(&mut self) {
-        if let Some(field) = self.fields.get_mut(self.selected) {
+        if let Some(field) = self.selected_field_mut() {
             if matches!(field.spec.kind, TaskFieldFilterKind::Labels) {
                 if !field.label_values.is_empty() {
                     field.label_cursor = (field.label_cursor + 1).min(field.label_values.len() - 1);
@@ -660,12 +729,13 @@ impl TaskFilterEditorState {
     }
 
     fn cycle_selected_label(&mut self, delta: i32) {
-        let Some(field) = self.fields.get_mut(self.selected) else {
+        let Some(field) = self.selected_field_mut() else {
             return;
         };
         if !matches!(field.spec.kind, TaskFieldFilterKind::Labels) || field.label_options.is_empty() {
             return;
         }
+        field.empty_required = false;
         if field.label_values.is_empty() {
             field.label_values.push(field.label_options[0].clone());
             field.label_cursor = 0;
@@ -684,12 +754,13 @@ impl TaskFilterEditorState {
     }
 
     fn add_label(&mut self) {
-        let Some(field) = self.fields.get_mut(self.selected) else {
+        let Some(field) = self.selected_field_mut() else {
             return;
         };
         if !matches!(field.spec.kind, TaskFieldFilterKind::Labels) || field.label_options.is_empty() {
             return;
         }
+        field.empty_required = false;
         let value = field.label_options[0].clone();
         let insert_at = field.label_cursor.saturating_add(1).min(field.label_values.len());
         field.label_values.insert(insert_at, value);
@@ -698,7 +769,7 @@ impl TaskFilterEditorState {
     }
 
     fn delete_selected_label(&mut self) {
-        let Some(field) = self.fields.get_mut(self.selected) else {
+        let Some(field) = self.selected_field_mut() else {
             return;
         };
         if !matches!(field.spec.kind, TaskFieldFilterKind::Labels) || field.label_values.is_empty() {
@@ -717,32 +788,214 @@ impl TaskFilterEditorState {
         }
     }
 
+    /// Whether a record is visible: **any** set accepts it.
+    ///
+    /// Fields AND within a set, sets OR between them. A set with nothing in it
+    /// accepts everything, which is what a freshly opened panel has always
+    /// done — and is why a newly added set can only widen the result.
     fn matches(&self, record: &TaskRecord) -> bool {
-        self.fields
-            .iter()
-            .filter(|field| !field.query.trim().is_empty())
-            .all(|field| field.matches(record))
+        if self.sets.is_empty() {
+            return true;
+        }
+        self.sets.iter().any(|set| set.matches(record))
     }
 
-    /// Extract a due-date range from the filter state for server-side use.
+    /// The due-date bounds to push down to the API, across every set.
     ///
     /// Returns `(after, before)` as `YYYY-MM-DD` strings for the API's
     /// `due_on.after` / `due_on.before` params. Keywords resolve against the
     /// *local* date, which is the whole reason this goes through
     /// [`crate::domain::date`]: resolving `today` in UTC fetched the wrong day's
     /// tasks every evening west of UTC, and then cached that window as covered.
+    ///
+    /// Sets OR, so the server must return the union of their windows: the
+    /// earliest `after`, the latest `before`. Getting this wrong does not
+    /// merely fetch too little — `TaskQuery::covers` would then record the
+    /// narrow window as cached, so the missing tasks stay missing until
+    /// something else forces a refresh.
+    ///
+    /// Two different kinds of unbounded, which is why there are two exits:
+    ///
+    /// - A set that says nothing about the due date at all — no due row, an
+    ///   unparseable query, an empty one, or a require-empty — constrains
+    ///   *neither* side, so the whole union is unbounded and the early
+    ///   `return (None, None)` is right: no later set can narrow it. A
+    ///   require-empty in particular has to drop the window rather than
+    ///   restrict it, because `due_on.after` would filter out exactly the
+    ///   undated tasks that set asked for.
+    /// - A set that is open on one side only, like `2026-09-01..`, opens *that*
+    ///   side of the union and leaves the other alone. The two bounds are
+    ///   independent, so dropping both here would over-fetch for no reason.
     fn due_date_range_for_query(&self) -> (Option<String>, Option<String>) {
-        let Some(due_field) = self.fields.iter().find(|f| f.spec.key == "due") else {
-            return (None, None);
-        };
-        let Some(query) = DateQuery::parse(&due_field.query, date::today()) else {
-            return (None, None);
-        };
-        let (after, before) = query.bounds();
+        let mut after: Option<CivilDate> = None;
+        let mut before: Option<CivilDate> = None;
+        let (mut after_unbounded, mut before_unbounded) = (false, false);
+
+        for set in &self.sets {
+            let Some(field) = set.fields.iter().find(|f| f.spec.key == "due") else {
+                return (None, None);
+            };
+            if field.empty_required {
+                return (None, None);
+            }
+            let Some(query) = DateQuery::parse(&field.query, date::today()) else {
+                return (None, None);
+            };
+            let (set_after, set_before) = query.bounds();
+            match set_after {
+                None => after_unbounded = true,
+                Some(date) => after = Some(after.map_or(date, |current| current.min(date))),
+            }
+            match set_before {
+                None => before_unbounded = true,
+                Some(date) => before = Some(before.map_or(date, |current| current.max(date))),
+            }
+        }
+
         (
-            after.map(|date| date.iso()),
-            before.map(|date| date.iso()),
+            after.filter(|_| !after_unbounded).map(|date| date.iso()),
+            before.filter(|_| !before_unbounded).map(|date| date.iso()),
         )
+    }
+
+    /// Toggles require-empty on the selected field. Answers whether it changed,
+    /// so the caller knows whether to close an open picker.
+    fn toggle_require_empty(&mut self) -> bool {
+        let Some(field) = self.selected_field_mut() else {
+            return false;
+        };
+        if !field.spec.can_be_empty {
+            return false;
+        }
+        field.empty_required = !field.empty_required;
+        if field.empty_required {
+            // A value and a require-empty cannot both be in force, and the one
+            // the user just asked for wins.
+            field.query.clear();
+            field.query_caret = 0;
+            field.label_values.clear();
+            field.label_cursor = 0;
+        }
+        true
+    }
+
+    fn set_count(&self) -> usize {
+        self.sets.len()
+    }
+
+    fn active_set_index(&self) -> usize {
+        self.active
+    }
+
+    /// Adds an empty set after the active one and moves to it.
+    ///
+    /// Empty, so the result can only widen: a set that excluded something would
+    /// make "add a filter set" hide rows, which is the opposite of what the tab
+    /// is for.
+    fn add_set(&mut self) {
+        let fresh = match self.sets.get(self.active) {
+            Some(set) => set.cleared(),
+            None => TaskFilterSet::default(),
+        };
+        self.sets.insert(self.active + 1, fresh);
+        self.active += 1;
+        self.stop_editing();
+    }
+
+    /// Removes the active set. Refused at one set: one set is the panel.
+    fn remove_set(&mut self) {
+        if self.sets.len() <= 1 {
+            return;
+        }
+        self.sets.remove(self.active);
+        self.active = self.active.min(self.sets.len() - 1);
+        self.stop_editing();
+    }
+
+    /// Moves to another set, wrapping.
+    fn select_set(&mut self, delta: i32) {
+        if self.sets.len() <= 1 {
+            return;
+        }
+        let len = self.sets.len() as i32;
+        self.active = (self.active as i32 + delta).rem_euclid(len) as usize;
+        // The picker and the text caret belong to the field they were opened
+        // on, which is in the set being left.
+        self.stop_editing();
+        self.reset_query_caret();
+    }
+}
+
+impl TaskFilterSet {
+    /// Whether this set accepts a record. Fields AND.
+    fn matches(&self, record: &TaskRecord) -> bool {
+        self.fields
+            .iter()
+            .filter(|field| field.is_active())
+            .all(|field| field.matches(record))
+    }
+
+    /// Clears everything the user typed, keeping the rows and their match modes.
+    ///
+    /// The match mode is deliberately kept: someone working in regex should not
+    /// have to re-pick it in every set they add.
+    fn cleared(&self) -> Self {
+        let mut set = self.clone();
+        for field in &mut set.fields {
+            field.query.clear();
+            field.query_caret = 0;
+            field.label_values.clear();
+            field.label_cursor = 0;
+            field.empty_required = false;
+        }
+        set
+    }
+
+    /// How many of this set's fields exclude anything.
+    fn active_filter_count(&self) -> usize {
+        self.fields
+            .iter()
+            .filter(|field| field.is_active())
+            .count()
+    }
+
+    /// Re-applies one set's user state onto a freshly built field list.
+    ///
+    /// Matched by `spec.key`, which is why custom-field rows are keyed by name
+    /// rather than id: a reload can bring a different set of projects, and so
+    /// different ids, for the same field.
+    fn restore_from(&mut self, previous: &Self) {
+        for field in &mut self.fields {
+            let Some(old) = previous
+                .fields
+                .iter()
+                .find(|old| old.spec.key == field.spec.key)
+            else {
+                continue;
+            };
+            field.string_mode = old.string_mode;
+            // Not belt-and-braces: a custom field's kind is inferred from the
+            // values seen so far, so a row's spec really can change between
+            // loads.
+            field.empty_required = old.empty_required && field.spec.can_be_empty;
+            match field.spec.kind {
+                TaskFieldFilterKind::Labels => {
+                    field.label_values = if old.label_values.is_empty() {
+                        parse_label_values(&old.query)
+                    } else {
+                        old.label_values.clone()
+                    };
+                    field.label_cursor = old
+                        .label_cursor
+                        .min(field.label_values.len().saturating_sub(1));
+                    field.query = field.label_values.join(" | ");
+                }
+                _ => field.query = old.query.clone(),
+            }
+            // Clamped because a custom field can change kind between loads as
+            // values arrive, which rewrites `query` under the caret.
+            field.query_caret = old.query_caret.min(field.query.chars().count());
+        }
     }
 }
 
@@ -760,27 +1013,73 @@ impl TaskFilterFieldState {
             label_values: Vec::new(),
             label_options,
             label_cursor: 0,
+            empty_required: false,
+        }
+    }
+
+    /// The text this field matches against.
+    fn haystack(&self, record: &TaskRecord) -> String {
+        match self.spec.key.as_str() {
+            "title" => record.name.clone(),
+            "assignee" => record.assignee.clone().unwrap_or_default(),
+            "projects" => record.projects.join(" "),
+            key if key.starts_with("custom:") => self.custom_values(record).join(" "),
+            _ => String::new(),
+        }
+    }
+
+    /// The label values this field matches against.
+    fn labels(&self, record: &TaskRecord) -> Vec<String> {
+        match self.spec.key.as_str() {
+            "state" => vec![if record.completed { "done" } else { "open" }.to_string()],
+            key if key.starts_with("custom:") => self.custom_values(record),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The date this field matches against.
+    fn date<'a>(&self, record: &'a TaskRecord) -> Option<&'a str> {
+        match self.spec.key.as_str() {
+            "due" => record.due_date.as_deref(),
+            "start" => record.start_date.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Every value this row's custom-field ids carry on a record.
+    fn custom_values(&self, record: &TaskRecord) -> Vec<String> {
+        self.spec
+            .custom_gids
+            .iter()
+            .filter_map(|gid| record.custom_fields.get(gid))
+            .flat_map(|values| values.iter().cloned())
+            .collect()
+    }
+
+    /// Whether this field excludes anything.
+    fn is_active(&self) -> bool {
+        self.empty_required || !self.query.trim().is_empty()
+    }
+
+    /// Whether the record has nothing at all in this field.
+    fn value_is_empty(&self, record: &TaskRecord) -> bool {
+        match self.spec.kind {
+            TaskFieldFilterKind::String => self.haystack(record).trim().is_empty(),
+            TaskFieldFilterKind::Labels => self
+                .labels(record)
+                .iter()
+                .all(|value| value.trim().is_empty()),
+            TaskFieldFilterKind::Date => self.date(record).is_none(),
         }
     }
 
     fn matches(&self, record: &TaskRecord) -> bool {
+        if self.empty_required {
+            return self.value_is_empty(record);
+        }
         match self.spec.kind {
             TaskFieldFilterKind::String => {
-                let haystack = match self.spec.key.as_str() {
-                    "title" => record.name.clone(),
-                    "assignee" => record.assignee.clone().unwrap_or_default(),
-                    "projects" => record.projects.join(" "),
-                    key if key.starts_with("custom:") => self
-                        .spec
-                        .custom_gids
-                        .iter()
-                        .filter_map(|gid| record.custom_fields.get(gid))
-                        .flat_map(|values| values.iter().map(String::as_str))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                    _ => String::new(),
-                }
-                .to_ascii_lowercase();
+                let haystack = self.haystack(record).to_ascii_lowercase();
                 let query = self.query.to_ascii_lowercase();
                 match self.string_mode {
                     TaskFieldStringMode::Fuzzy => fuzzy_match(&haystack, &query),
@@ -792,27 +1091,9 @@ impl TaskFilterFieldState {
                 }
             }
             TaskFieldFilterKind::Labels => {
-                let values = match self.spec.key.as_str() {
-                    "state" => vec![if record.completed { "done" } else { "open" }.to_string()],
-                    key if key.starts_with("custom:") => self
-                        .spec
-                        .custom_gids
-                        .iter()
-                        .filter_map(|gid| record.custom_fields.get(gid))
-                        .flat_map(|values| values.iter().cloned())
-                        .collect::<Vec<_>>(),
-                    _ => Vec::new(),
-                };
-                label_filter_matches(&values, &self.label_values)
+                label_filter_matches(&self.labels(record), &self.label_values)
             }
-            TaskFieldFilterKind::Date => {
-                let value = match self.spec.key.as_str() {
-                    "due" => record.due_date.as_deref(),
-                    "start" => record.start_date.as_deref(),
-                    _ => None,
-                };
-                date_filter_matches(value, &self.query)
-            }
+            TaskFieldFilterKind::Date => date_filter_matches(self.date(record), &self.query),
         }
     }
 }
@@ -915,7 +1196,7 @@ impl TaskState {
         keys.extend(
             self.view
                 .filter_editor
-                .fields
+                .fields()
                 .iter()
                 .filter(|field| {
                     matches!(field.spec.kind, TaskFieldFilterKind::Labels)
@@ -1182,7 +1463,7 @@ impl TaskState {
                 .saturating_sub(viewport_height);
         }
 
-        let max_scroll = self.view.filter_editor.fields.len().saturating_sub(1);
+        let max_scroll = self.view.filter_editor.fields().len().saturating_sub(1);
         self.view.filter_vertical_scroll = self.view.filter_vertical_scroll.min(max_scroll);
     }
 
@@ -1430,23 +1711,95 @@ impl TaskState {
         self.refresh_table();
     }
 
+    /// Filters the selected field to records with no value at all.
+    pub(crate) fn filter_toggle_require_empty(&mut self) {
+        if self.view.filter_editor.toggle_require_empty() {
+            // The picker is bound to the value it was opened on, and there is no
+            // longer a value.
+            self.view.filter_editor.calendar = None;
+            self.refresh_table();
+        }
+    }
+
+    pub(crate) fn filter_add_set(&mut self) {
+        self.view.filter_editor.add_set();
+        self.refresh_table();
+    }
+
+    pub(crate) fn filter_remove_set(&mut self) {
+        self.view.filter_editor.remove_set();
+        self.refresh_table();
+    }
+
+    pub(crate) fn filter_select_set(&mut self, delta: i32) {
+        self.view.filter_editor.select_set(delta);
+        self.refresh_table();
+    }
+
+    /// `(active index, total)`, for the pane's chips and the tab strip.
+    pub fn filter_set_position(&self) -> (usize, usize) {
+        (
+            self.view.filter_editor.active_set_index(),
+            self.view.filter_editor.set_count(),
+        )
+    }
+
+    /// How many fields each set filters on, in tab order.
+    pub fn filter_set_counts(&self) -> Vec<usize> {
+        self.view
+            .filter_editor
+            .sets
+            .iter()
+            .map(TaskFilterSet::active_filter_count)
+            .collect()
+    }
+
+    /// One set's rows as `(label, query)`, for tests that need to see a tab
+    /// other than the active one.
+    #[cfg(test)]
+    pub fn filter_panel_rows_for_set(&self, index: usize) -> Vec<(String, String)> {
+        self.view
+            .filter_editor
+            .sets
+            .get(index)
+            .map(|set| {
+                set.fields
+                    .iter()
+                    .map(|field| {
+                        let query = if field.empty_required {
+                            crate::ui::filter_panel::EMPTY_REQUIRED_TEXT.to_string()
+                        } else {
+                            field.query.clone()
+                        };
+                        (field.spec.label.clone(), query)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn filter_panel_entries(&self) -> Vec<TaskFilterPanelEntry> {
         self.view.filter_editor
-            .fields
+            .fields()
             .iter()
             .enumerate()
             .map(|(index, field)| TaskFilterPanelEntry {
                 label: field.spec.label.clone(),
-                query: match field.spec.kind {
-                    TaskFieldFilterKind::Labels => {
-                        if field.label_values.is_empty() {
-                            String::new()
-                        } else {
-                            field.label_values.join(" | ")
+                query: if field.empty_required {
+                    crate::ui::filter_panel::EMPTY_REQUIRED_TEXT.to_string()
+                } else {
+                    match field.spec.kind {
+                        TaskFieldFilterKind::Labels => {
+                            if field.label_values.is_empty() {
+                                String::new()
+                            } else {
+                                field.label_values.join(" | ")
+                            }
                         }
+                        _ => field.query.clone(),
                     }
-                    _ => field.query.clone(),
                 },
+                empty_required: field.empty_required,
                 custom: field.spec.key.starts_with("custom:"),
                 kind: match field.spec.kind {
                     TaskFieldFilterKind::String => match field.string_mode {
@@ -1479,6 +1832,10 @@ impl TaskState {
     /// simply at the end.
     fn filter_caret_for(&self, index: usize, field: &TaskFilterFieldState) -> Option<usize> {
         if index != self.view.filter_editor.selected {
+            return None;
+        }
+        // There is no text to put a caret in.
+        if field.empty_required {
             return None;
         }
         if let Some(calendar) = &self.view.filter_editor.calendar {
@@ -2078,6 +2435,26 @@ impl TaskState {
                     self.filter_clear_current();
                     return None;
                 }
+                Action::FilterSetAdd => {
+                    self.filter_add_set();
+                    return None;
+                }
+                Action::FilterSetRemove => {
+                    self.filter_remove_set();
+                    return None;
+                }
+                Action::FilterSetNext => {
+                    self.filter_select_set(1);
+                    return None;
+                }
+                Action::FilterSetPrev => {
+                    self.filter_select_set(-1);
+                    return None;
+                }
+                Action::FilterRequireEmpty => {
+                    self.filter_toggle_require_empty();
+                    return None;
+                }
                 Action::CycleFilterStringMode => {
                     self.filter_cycle_mode();
                     return None;
@@ -2266,11 +2643,11 @@ impl TaskState {
             .view
             .filter_editor
             .selected
-            .min(self.view.filter_editor.fields.len().saturating_sub(1));
+            .min(self.view.filter_editor.fields().len().saturating_sub(1));
         self.view.filter_vertical_scroll = self
             .view
             .filter_vertical_scroll
-            .min(self.view.filter_editor.fields.len().saturating_sub(1));
+            .min(self.view.filter_editor.fields().len().saturating_sub(1));
 
         if !matches!(
             self.loading.status,
@@ -2697,12 +3074,12 @@ mod tests {
         let tag = state
             .view
             .filter_editor
-            .fields
+            .fields()
             .iter()
             .position(|field| field.spec.label == "Tag")
             .expect("the Tag row exists");
         assert_eq!(
-            state.view.filter_editor.fields[tag].label_options,
+            state.view.filter_editor.fields()[tag].label_options,
             vec!["blue".to_string(), "red".to_string()],
             "the options are the union across every id"
         );
@@ -2712,6 +3089,80 @@ mod tests {
         state.filter_add_label();
         state.filter_cycle_label_value(0);
         assert_eq!(state.table().task_count(), 1);
+    }
+
+    /// The same two-project fixture, driven through a reload with two sets.
+    ///
+    /// This is where `restore_from`'s key-matching earns its keep: the "Tag"
+    /// row is rebuilt from a *different* set of custom-field ids on the second
+    /// load, and only the `custom:<name>` key connects the old row to the new
+    /// one. Matching by id would lose both sets' queries.
+    #[test]
+    fn filter_sets_survive_a_reload_that_rebuilds_a_shared_custom_field_row() {
+        let projects = vec![
+            Project::new("p1", "Inbox", true),
+            Project::new("p2", "Backlog", true),
+        ];
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_custom_field_settings(
+                "p1",
+                vec![ProjectCustomFieldSettingDto {
+                    gid: "set-1".to_string(),
+                    custom_field: CustomFieldDto {
+                        gid: "cf-inbox".to_string(),
+                        name: "Tag".to_string(),
+                    },
+                }],
+            )
+            .with_custom_field_settings(
+                "p2",
+                vec![ProjectCustomFieldSettingDto {
+                    gid: "set-2".to_string(),
+                    custom_field: CustomFieldDto {
+                        gid: "cf-backlog".to_string(),
+                        name: "Tag".to_string(),
+                    },
+                }],
+            )
+            .with_tasks(
+                "p1",
+                vec![task(
+                    "t1", "Ship release", "p1", "Inbox", "s1", "Today", "cf-inbox", "Tag", "red",
+                )],
+            )
+            .with_tasks(
+                "p2",
+                vec![task(
+                    "t2", "Draft plan", "p2", "Backlog", "s2", "Later", "cf-backlog", "Tag",
+                    "blue",
+                )],
+            );
+
+        // Load only the first project, so the Tag row is built from cf-inbox.
+        let mut state = TaskState::new();
+        state.set_completed_filter(None);
+        state
+            .load_task_dataset_for_projects(&client, &projects[..1])
+            .expect("the first project loads");
+        state.toggle_filter_panel();
+
+        set_field(&mut state, "title", "ship");
+        state.filter_add_set();
+        select_field(&mut state, "Tag");
+        state.filter_toggle_require_empty();
+
+        // The second project arrives and the Tag row is rebuilt around both ids.
+        state
+            .load_task_dataset_for_projects(&client, &projects)
+            .expect("the second project loads");
+
+        assert_eq!(state.filter_set_position(), (1, 2), "both sets survived");
+        assert_eq!(state.filter_panel_rows_for_set(0)[0].1, "ship");
+        assert_eq!(
+            state.filter_panel_rows_for_set(1)[6].1,
+            "(none)",
+            "and the require-empty came across onto the rebuilt row"
+        );
     }
 
     #[test]
@@ -3672,11 +4123,22 @@ mod tests {
         assert!(!narrow_date.covers(&open_only));
     }
 
+    /// The one set's `due` row, for the tests that drive the push-down
+    /// directly rather than through the panel's keys.
+    fn set_due_field(
+        state: &mut TaskFilterEditorState,
+    ) -> Option<&mut super::TaskFilterFieldState> {
+        state.sets[0]
+            .fields
+            .iter_mut()
+            .find(|field| field.spec.key == "due")
+    }
+
     #[test]
     fn due_date_range_for_query_extracts_explicit_dates() {
         // Build a filter state with an explicit date range
         let mut state = TaskFilterEditorState::from_dataset(&TaskDataset::default());
-        if let Some(due) = state.fields.iter_mut().find(|f| f.spec.key == "due") {
+        if let Some(due) = set_due_field(&mut state) {
             due.query = "2026-01-01..2026-06-30".to_string();
         }
         let (after, before) = state.due_date_range_for_query();
@@ -3687,7 +4149,7 @@ mod tests {
     #[test]
     fn due_date_range_for_query_resolves_keywords() {
         let mut state = TaskFilterEditorState::from_dataset(&TaskDataset::default());
-        if let Some(due) = state.fields.iter_mut().find(|f| f.spec.key == "due") {
+        if let Some(due) = set_due_field(&mut state) {
             due.query = "today..2026-12-31".to_string();
         }
         let (after, before) = state.due_date_range_for_query();
@@ -3704,7 +4166,7 @@ mod tests {
     #[test]
     fn due_date_range_for_query_bounds_an_exact_date_on_both_sides() {
         let mut state = TaskFilterEditorState::from_dataset(&TaskDataset::default());
-        if let Some(due) = state.fields.iter_mut().find(|f| f.spec.key == "due") {
+        if let Some(due) = set_due_field(&mut state) {
             due.query = "2026-03-04".to_string();
         }
         let (after, before) = state.due_date_range_for_query();
@@ -3715,10 +4177,61 @@ mod tests {
     #[test]
     fn due_date_range_for_query_pushes_nothing_for_an_unparseable_query() {
         let mut state = TaskFilterEditorState::from_dataset(&TaskDataset::default());
-        if let Some(due) = state.fields.iter_mut().find(|f| f.spec.key == "due") {
+        if let Some(due) = set_due_field(&mut state) {
             due.query = "someday".to_string();
         }
         assert_eq!(state.due_date_range_for_query(), (None, None));
+    }
+
+    /// Moves the filter cursor to the named row, by `spec.key` or by label.
+    ///
+    /// Custom-field rows are keyed `custom:<name>`, so tests can name either
+    /// `"due"` or `"Priority"` and get the row they meant.
+    fn select_field(state: &mut TaskState, key: &str) {
+        let index = state
+            .view
+            .filter_editor
+            .fields()
+            .iter()
+            .position(|field| field.spec.key == key || field.spec.label == key)
+            .unwrap_or_else(|| panic!("the {key} field exists"));
+        state.view.filter_editor.selected = index;
+    }
+
+    /// Puts `query` in the named field of the active set.
+    ///
+    /// Goes through the public keys rather than the struct so the test
+    /// exercises the same path a user does: move the cursor to the row, then
+    /// type.
+    fn set_field(state: &mut TaskState, key: &str, query: &str) {
+        select_field(state, key);
+        state.filter_clear_current();
+        for ch in query.chars() {
+            state.filter_push_char(ch);
+        }
+    }
+
+    /// The gids of the visible task rows, in table order.
+    fn visible_gids(state: &TaskState) -> Vec<&str> {
+        state
+            .table()
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.as_str())
+            .collect()
+    }
+
+    /// A task with a due date and an assignee, for the set-semantics tests.
+    fn sel_task_due(gid: &str, name: &str, assignee: &str, due: &str) -> TaskDto {
+        let mut task = sel_task(gid, name, false);
+        task.due_on = Some(due.to_string());
+        task.assignee = Some(UserDto {
+            gid: format!("user-{assignee}"),
+            name: Some(assignee.to_string()),
+            display_name: Some(assignee.to_string()),
+        });
+        task
     }
 
     fn sel_task(gid: &str, name: &str, completed: bool) -> TaskDto {
@@ -3759,6 +4272,480 @@ mod tests {
             .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
             .expect("tasks load");
         state
+    }
+
+
+
+
+    /// A loaded state with the panel open and one dated task, for the tests
+    /// that only care what `desired_task_query` computes.
+    fn state_for_push_down() -> TaskState {
+        let mut state = loaded_state_with_tasks(vec![sel_task_due(
+            "t1",
+            "Task one",
+            "Alex",
+            "2026-09-03",
+        )]);
+        state.toggle_filter_panel();
+        state
+    }
+
+    #[test]
+    fn the_pushed_down_due_window_is_the_union_of_the_sets() {
+        let mut state = state_for_push_down();
+
+        set_field(&mut state, "due", "2026-09-01..2026-09-07");
+        state.filter_add_set();
+        set_field(&mut state, "due", "2026-12-01..2026-12-31");
+
+        let query = state.desired_task_query();
+        assert_eq!(
+            query.due_after.as_deref(),
+            Some("2026-09-01"),
+            "the earliest start"
+        );
+        assert_eq!(
+            query.due_before.as_deref(),
+            Some("2026-12-31"),
+            "the latest end"
+        );
+    }
+
+    #[test]
+    fn a_set_with_no_due_filter_pushes_down_no_due_window_at_all() {
+        // Otherwise the server drops the very tasks the second set asked for,
+        // and TaskQuery::covers then records the narrow window as cached.
+        let mut state = state_for_push_down();
+        set_field(&mut state, "due", "2026-09-01..2026-09-07");
+        state.filter_add_set();
+
+        let query = state.desired_task_query();
+        assert_eq!(query.due_after, None);
+        assert_eq!(query.due_before, None);
+    }
+
+    #[test]
+    fn a_set_requiring_an_empty_due_date_pushes_down_no_due_window() {
+        let mut state = state_for_push_down();
+        set_field(&mut state, "due", "2026-09-01..2026-09-07");
+        state.filter_add_set();
+        select_field(&mut state, "due");
+        state.filter_toggle_require_empty();
+
+        let query = state.desired_task_query();
+        assert_eq!(
+            query.due_after, None,
+            "undated tasks would be filtered out server-side"
+        );
+        assert_eq!(query.due_before, None);
+    }
+
+    #[test]
+    fn an_open_ended_set_opens_that_side_of_the_union() {
+        // `2026-09-01..` has no end, so the union has none either, however
+        // tight the other set is.
+        let mut state = state_for_push_down();
+        set_field(&mut state, "due", "2026-09-01..");
+        state.filter_add_set();
+        set_field(&mut state, "due", "2026-10-01..2026-10-02");
+
+        let query = state.desired_task_query();
+        assert_eq!(query.due_after.as_deref(), Some("2026-09-01"));
+        assert_eq!(query.due_before, None);
+    }
+
+    #[test]
+    fn adding_a_set_outside_the_cached_window_is_a_cache_miss() {
+        // The cache is keyed by the query it was filled with, so widening the
+        // union has to stop reporting coverage or the new set shows nothing.
+        let projects = vec![Project::new("p1", "Inbox", true)];
+        let mut state = state_for_push_down();
+        set_field(&mut state, "due", "2026-09-01..2026-09-07");
+
+        // Re-record the cache against the narrow window the panel now asks for.
+        let query = state.desired_task_query();
+        state.begin_loading(&projects);
+        state.ingest_loaded_project(
+            "p1",
+            crate::asana::TaskQuery {
+                target: crate::asana::TaskTarget::for_project(&projects[0]),
+                ..query.clone()
+            },
+            TaskDataset::default(),
+        );
+        assert!(state.can_serve_query_for_targets(&projects, &query));
+
+        state.filter_add_set();
+        set_field(&mut state, "due", "2026-12-01");
+
+        let widened = state.desired_task_query();
+        assert!(
+            !state.can_serve_query_for_targets(&projects, &widened),
+            "the December set needs a fetch"
+        );
+        assert_eq!(state.projects_requiring_load(&projects, &widened).len(), 1);
+    }
+
+    #[test]
+    fn filter_sets_survive_the_rebuild_that_each_streamed_project_triggers() {
+        // rebuild_visible_dataset throws the editor away per project; without
+        // restore_queries rebuilding the set list, the second tab vanishes
+        // mid-load — the same failure the caret had before Milestone 11.75.
+        let projects = vec![Project::new("p1", "Inbox", true)];
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_sections(
+                "p1",
+                vec![SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_tasks("p1", vec![sel_task_due("t1", "Task one", "Alex", "2026-12-01")]);
+        let query = crate::asana::TaskQuery::for_project("p1", TaskLoadScope::All);
+        let dataset = TaskState::build_dataset_for_projects(&client, &projects, &query)
+            .expect("dataset builds");
+
+        let mut state = TaskState::new();
+        state.begin_loading(&projects);
+        state.finish_loading_dataset(dataset.clone());
+        state.set_visible(true);
+
+        state.toggle_filter_panel();
+        set_field(&mut state, "assignee", "alex");
+        state.filter_add_set();
+        set_field(&mut state, "due", "2026-12-01");
+        state.filter_edit_begin();
+
+        // A project finishing its fetch rebuilds the filter editor underneath.
+        state.begin_loading(&projects);
+        state.ingest_loaded_project("p1", query, dataset);
+
+        assert_eq!(
+            state.filter_set_position(),
+            (1, 2),
+            "two sets, still on the second"
+        );
+        assert_eq!(state.filter_panel_rows_for_set(0)[1].1, "alex");
+        assert_eq!(state.filter_panel_rows()[2].1, "2026-12-01");
+        assert!(
+            state.filter_panel_editing(),
+            "and the edit was not interrupted"
+        );
+    }
+
+    /// A task carrying whichever of due date, assignee, and Priority the test
+    /// wants present, so one fixture covers all three field kinds.
+    fn task_with(
+        gid: &str,
+        due: Option<&str>,
+        assignee: Option<&str>,
+        priority: Option<&str>,
+    ) -> TaskDto {
+        let mut task = sel_task(gid, gid, false);
+        task.due_on = due.map(ToString::to_string);
+        task.assignee = assignee.map(|name| UserDto {
+            gid: format!("user-{name}"),
+            name: Some(name.to_string()),
+            display_name: Some(name.to_string()),
+        });
+        task.custom_fields = priority
+            .map(|value| {
+                vec![CustomFieldValueDto {
+                    gid: "cf1".to_string(),
+                    name: "Priority".to_string(),
+                    display_value: Some(value.to_string()),
+                    enum_value: Some(EnumOptionDto {
+                        gid: "opt-1".to_string(),
+                        name: value.to_string(),
+                    }),
+                }]
+            })
+            .unwrap_or_default();
+        task
+    }
+
+    /// Like [`loaded_state_with_tasks`], but with a `Priority` custom field
+    /// registered on the project, so the panel grows a label row for it.
+    ///
+    /// Custom-field rows come from the project's field settings rather than
+    /// from the values tasks happen to carry, so a task with no `Priority` is
+    /// exactly the "field exists, this record has no value" case
+    /// require-empty is for.
+    fn loaded_state_with_priority_field(tasks: Vec<TaskDto>) -> TaskState {
+        let client = FakeAsanaClient::new(vec![Project::new("p1", "Inbox", true)])
+            .with_sections(
+                "p1",
+                vec![SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_custom_field_settings(
+                "p1",
+                vec![ProjectCustomFieldSettingDto {
+                    gid: "set-1".to_string(),
+                    custom_field: CustomFieldDto {
+                        gid: "cf1".to_string(),
+                        name: "Priority".to_string(),
+                    },
+                }],
+            )
+            .with_tasks("p1", tasks);
+        let mut state = TaskState::new();
+        state.set_completed_filter(None);
+        state
+            .load_task_dataset_for_projects(&client, &[Project::new("p1", "Inbox", true)])
+            .expect("tasks load");
+        state
+    }
+
+    #[test]
+    fn requiring_an_empty_field_matches_only_the_records_with_nothing_in_it() {
+        let mut state = loaded_state_with_priority_field(vec![
+            task_with("dated", Some("2026-09-01"), Some("Alex"), Some("High")),
+            task_with("undated", None, None, None),
+            task_with("blank-assignee", Some("2026-09-02"), Some("   "), None),
+        ]);
+        state.toggle_filter_panel();
+
+        select_field(&mut state, "due");
+        state.filter_toggle_require_empty();
+        assert_eq!(visible_gids(&state), vec!["undated"]);
+
+        state.filter_toggle_require_empty();
+        select_field(&mut state, "assignee");
+        state.filter_toggle_require_empty();
+        assert_eq!(
+            visible_gids(&state),
+            vec!["blank-assignee", "undated"],
+            "whitespace is as empty as missing"
+        );
+
+        state.filter_toggle_require_empty();
+        select_field(&mut state, "Priority");
+        state.filter_toggle_require_empty();
+        assert_eq!(
+            visible_gids(&state),
+            vec!["blank-assignee", "undated"],
+            "a label field with no value for the task counts as empty"
+        );
+    }
+
+    #[test]
+    fn a_require_empty_and_a_query_replace_one_another() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Task one", false)]);
+        state.toggle_filter_panel();
+        select_field(&mut state, "assignee");
+
+        state.filter_toggle_require_empty();
+        assert_eq!(state.filter_panel_rows()[1].1, "(none)");
+
+        state.filter_push_char('a');
+        assert_eq!(state.filter_panel_rows()[1].1, "a", "typing replaces it");
+
+        state.filter_toggle_require_empty();
+        assert_eq!(
+            state.filter_panel_rows()[1].1,
+            "(none)",
+            "and it replaces the text"
+        );
+
+        state.filter_clear_current();
+        assert_eq!(state.filter_panel_rows()[1].1, "");
+    }
+
+    #[test]
+    fn a_require_empty_counts_as_an_active_filter() {
+        // It excludes rows, so it has to reach the panel's chip and the status
+        // bar the same way a typed value does.
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Task one", false)]);
+        state.toggle_filter_panel();
+        assert_eq!(state.active_filter_count(), 0);
+
+        select_field(&mut state, "due");
+        state.filter_toggle_require_empty();
+
+        assert_eq!(state.active_filter_count(), 1);
+    }
+
+    #[test]
+    fn the_state_field_cannot_require_an_empty_value() {
+        // A task is always open or done, so this would look like a filter while
+        // matching nothing.
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task("t1", "Task one", false),
+            sel_task("t2", "Task two", true),
+        ]);
+        state.toggle_filter_panel();
+        select_field(&mut state, "state");
+
+        state.filter_toggle_require_empty();
+
+        assert_eq!(state.filter_panel_rows()[4].1, "");
+        assert_eq!(state.active_filter_count(), 0);
+        assert_eq!(visible_gids(&state).len(), 2, "nothing was filtered out");
+    }
+
+    #[test]
+    fn opening_the_calendar_on_a_require_empty_date_clears_it() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Task one", false)]);
+        state.toggle_filter_panel();
+        select_field(&mut state, "due");
+        state.filter_toggle_require_empty();
+
+        assert!(state.filter_calendar_begin());
+
+        assert_eq!(
+            state.filter_panel_rows()[2].1,
+            "",
+            "a date is about to be picked"
+        );
+    }
+
+    #[test]
+    fn one_set_can_ask_for_soon_while_another_asks_for_undated() {
+        // The review this milestone exists for: imminent work, plus work nobody
+        // has scheduled.
+        let mut state = loaded_state_with_tasks(vec![
+            task_with("soon", Some("2026-08-26"), None, None),
+            task_with("later", Some("2026-11-01"), None, None),
+            task_with("someday", None, None, None),
+        ]);
+        state.toggle_filter_panel();
+        set_field(&mut state, "due", "2026-08-24..2026-08-31");
+        state.filter_add_set();
+        select_field(&mut state, "due");
+        state.filter_toggle_require_empty();
+
+        assert_eq!(visible_gids(&state), vec!["soon", "someday"]);
+    }
+
+    #[test]
+    fn filter_sets_or_while_their_fields_still_and() {
+        // Set 1: Alex's tasks due in August. Set 2: anything due in December,
+        // whoever owns it. The August-but-not-Alex task is in neither.
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task_due("alex-aug", "Alex August", "Alex", "2026-08-10"),
+            sel_task_due("jo-aug", "Jo August", "Jo", "2026-08-11"),
+            sel_task_due("jo-dec", "Jo December", "Jo", "2026-12-01"),
+        ]);
+        state.toggle_filter_panel();
+
+        set_field(&mut state, "assignee", "alex");
+        set_field(&mut state, "due", "2026-08-01..2026-08-31");
+        assert_eq!(visible_gids(&state), vec!["alex-aug"], "one set still ANDs");
+
+        state.filter_add_set();
+        set_field(&mut state, "due", "2026-12-01");
+
+        assert_eq!(
+            visible_gids(&state),
+            vec!["alex-aug", "jo-dec"],
+            "and the two sets union"
+        );
+    }
+
+    #[test]
+    fn an_empty_set_accepts_everything_so_adding_one_can_only_widen() {
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task_due("alex-aug", "Alex August", "Alex", "2026-08-10"),
+            sel_task_due("jo-aug", "Jo August", "Jo", "2026-08-11"),
+            sel_task_due("jo-dec", "Jo December", "Jo", "2026-12-01"),
+        ]);
+        state.toggle_filter_panel();
+        set_field(&mut state, "assignee", "alex");
+        let narrowed = visible_gids(&state).len();
+
+        state.filter_add_set();
+
+        assert_eq!(
+            visible_gids(&state).len(),
+            3,
+            "the empty set lets everything through"
+        );
+        assert!(narrowed < 3, "and the first set really was narrowing");
+    }
+
+    #[test]
+    fn a_new_set_starts_empty_and_lands_after_the_current_one() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Task one", false)]);
+        state.toggle_filter_panel();
+        set_field(&mut state, "assignee", "alex");
+
+        state.filter_add_set();
+
+        assert_eq!(state.filter_set_position(), (1, 2));
+        assert_eq!(state.filter_set_counts(), vec![1, 0]);
+        assert!(
+            state
+                .filter_panel_rows()
+                .iter()
+                .all(|(_, query)| query.is_empty()),
+            "the new set carries nothing over"
+        );
+    }
+
+    #[test]
+    fn the_last_set_cannot_be_removed() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Task one", false)]);
+        state.toggle_filter_panel();
+
+        state.filter_remove_set();
+        assert_eq!(state.filter_set_position(), (0, 1), "one set is the panel");
+
+        state.filter_add_set();
+        state.filter_remove_set();
+        assert_eq!(state.filter_set_position(), (0, 1));
+    }
+
+    #[test]
+    fn removing_the_last_tab_moves_the_cursor_back_onto_a_tab_that_exists() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Task one", false)]);
+        state.toggle_filter_panel();
+        state.filter_add_set();
+        state.filter_add_set();
+        assert_eq!(state.filter_set_position(), (2, 3));
+
+        state.filter_remove_set();
+
+        assert_eq!(state.filter_set_position(), (1, 2));
+    }
+
+    #[test]
+    fn switching_sets_wraps_and_closes_any_open_picker() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Task one", false)]);
+        state.toggle_filter_panel();
+        state.filter_add_set();
+        select_field(&mut state, "due");
+        assert!(state.filter_calendar_begin());
+
+        state.filter_select_set(1);
+
+        assert_eq!(
+            state.filter_set_position().0,
+            0,
+            "wrapped from the last to the first"
+        );
+        assert!(
+            !state.filter_calendar_open(),
+            "the picker belonged to the set we left"
+        );
+        assert!(!state.filter_panel_editing());
+    }
+
+    #[test]
+    fn the_field_cursor_is_shared_by_every_set() {
+        // Switching tabs keeps you on the row you were reading, which is what
+        // you want when comparing one field across two sets.
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Task one", false)]);
+        state.toggle_filter_panel();
+        select_field(&mut state, "projects");
+        let row = state.view.filter_editor.selected;
+
+        state.filter_add_set();
+        assert_eq!(state.view.filter_editor.selected, row);
+        state.filter_select_set(-1);
+        assert_eq!(state.view.filter_editor.selected, row);
     }
 
     #[test]

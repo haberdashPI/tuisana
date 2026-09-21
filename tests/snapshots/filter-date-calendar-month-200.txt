@@ -1,7 +1,7 @@
  TUISANA  ▸ 1 project ▸ 0 tasks
 ┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1 active · editing ┓
 ┃    Title     fuzzy     —                                                                                                                                                                             ┃
-┃    Assignee  contains  —                                                                                                                                                                             ┃
+┃    Assignee  fuzzy     —                                                                                                                                                                             ┃
 ┃▍ ● Due       date      2026-10-01                                                                                                                                                                    ┃
 ┃    Start     date      —                                                                                                                                                                             ┃
 ┃    State     labels    —                                                                                                                                                                             ┃

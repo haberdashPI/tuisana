@@ -257,6 +257,7 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
         on_label_filter: app.tasks.filter_selected_is_labels(),
         on_date_range: app.tasks.filter_calendar_is_range(),
         timeline_windowed: app.tasks.gantt().timeline_windowed(),
+        many_filter_sets: app.tasks.filter_set_position().1 > 1,
     };
 
     let line = hints::hint_line(
@@ -331,14 +332,34 @@ fn render_filter_pane<C: AsanaClient + Clone + Send + 'static>(
         return 1;
     }
 
-    app.tasks.ensure_filter_visible(inner.height as usize);
-    let lines = filter_panel::filter_panel_lines(&view, theme, inner.width as usize);
+    // The strip is a line of the pane's interior, not of its border, so the
+    // rows below it keep one line each and the scroll offset stays a plain
+    // field index.
+    let body = if view.tabs.is_empty() || inner.height < 2 {
+        inner
+    } else {
+        let (strip, body) = split_header(inner);
+        frame.render_widget(
+            Paragraph::new(filter_panel::tab_strip_line(
+                &view,
+                theme,
+                strip.width as usize,
+            )),
+            strip,
+        );
+        body
+    };
+
+    app.tasks.ensure_filter_visible(body.height as usize);
+    let lines = filter_panel::filter_panel_lines(&view, theme, body.width as usize);
     frame.render_widget(
         Paragraph::new(lines).scroll((app.tasks.filter_panel_scroll() as u16, 0)),
-        inner,
+        body,
     );
 
-    inner.height.max(1) as usize
+    // The page size is what is actually visible, so ctrl-d pages by the rows
+    // below the strip rather than by the whole interior.
+    body.height.max(1) as usize
 }
 
 fn render_task_pane<C: AsanaClient + Clone + Send + 'static>(

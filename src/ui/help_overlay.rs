@@ -220,8 +220,20 @@ fn filter_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::FilterDoneEditing], "commit edit"),
                 Hint::new(&[Action::FilterCancelEditing], "cancel edit"),
                 Hint::new(&[Action::CycleFilterStringMode], "cycle match mode"),
+                Hint::new(&[Action::FilterRequireEmpty], "require no value"),
                 Hint::new(&[Action::ClearSearch], "clear field"),
                 Hint::new(&[Action::ToggleTaskFilters], "close panel"),
+            ],
+        ),
+        HelpGroup::new(
+            "Filter sets",
+            vec![
+                Hint::new(&[Action::FilterSetAdd], "add a set (ORed)"),
+                Hint::new(&[Action::FilterSetRemove], "remove this set"),
+                Hint::new(&[Action::FilterSetPrev], "previous set"),
+                Hint::new(&[Action::FilterSetNext], "next set"),
+                Hint::literal("within a set", "fields narrow (AND)"),
+                Hint::literal("between sets", "results combine (OR)"),
             ],
         ),
         HelpGroup::new(

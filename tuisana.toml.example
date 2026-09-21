@@ -216,6 +216,46 @@ key = "s"
 mode = "filter"
 command = "cycle_filter_string_mode"
 
+# The filter panel holds one or more sets, ORed together: fields narrow within a
+# set, results combine between sets. `a` adds a set after the current one, `x`
+# removes it (refused at one set), and h/l move between them.
+
+[[bind]]
+key = "a"
+mode = "filter"
+command = "filter_set_add"
+
+[[bind]]
+key = "x"
+mode = "filter"
+command = "filter_set_remove"
+
+[[bind]]
+key = "l"
+mode = "filter"
+command = "filter_set_next"
+
+[[bind]]
+key = "h"
+mode = "filter"
+command = "filter_set_prev"
+
+# "Has no value" is a filter of its own, since an empty field means "do not
+# filter". Letters type while editing, so it needs a ctrl- pair in filter-edit
+# mode; in calendar mode ctrl-e already jumps to the end of a range, which is
+# why a date field's require-empty is set from browse mode, before the picker
+# opens.
+
+[[bind]]
+key = "e"
+mode = "filter"
+command = "filter_require_empty"
+
+[[bind]]
+key = "ctrl-e"
+mode = "filter_edit"
+command = "filter_require_empty"
+
 [[bind]]
 key = "["
 mode = "task"

@@ -36,5 +36,5 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Morgan Ellis  +2 more ━┛
-j/k cursor   ^k/^j move   t/b top/bottom   c color by   ⏎ saver refresh   q quit
+j/k cursor   ^k/^j move   t/b top/bottom   c color by         r refresh   q quit
  COLORS                                     gantt · color assignee · columns 2/7
