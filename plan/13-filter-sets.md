@@ -1,6 +1,43 @@
-# Milestone 13: Filter sets
+# Milestone 13: Filter sets ✓
 
 [← all milestones](../plan.md)
+
+Delivered. Four deliberate deviations from the plan below.
+
+1. **A set open on one side only opens *that* side of the pushed-down window,
+   not both.** §2.5's code returned `(None, None)` whenever any `bounds()` side
+   came back `None`, but §4.2's `an_open_ended_set_opens_that_side_of_the_union`
+   asserts `due_after == Some("2026-09-01")` with `due_before == None`. The test
+   is right: `due_on.after` and `due_on.before` are independent, so dropping
+   both over-fetches for no reason. The early `return (None, None)` is kept for
+   the genuinely uninformative cases — no due row, an empty or unparseable
+   query, a require-empty — where the set constrains *neither* side.
+2. **The worked key sequences in §4.10 and §4.11 press `j j` after `a`; they
+   should not.** §2.1 makes the field cursor shared by every set, so a set
+   added while standing on `Due` is already on `Due`. Following the sketch
+   walked the cursor onto `State`, where the typed range went nowhere — and the
+   require-empty integration test passed for the wrong reason, because an empty
+   second set accepts everything. The sequences are `a` then `enter`/`e`.
+3. **`TaskFilterSet::is_active` became `active_filter_count`.** §2.2 specified a
+   boolean, but the only caller is `filter_set_counts`, which needs the number
+   for the tab's marker. A predicate would have been `count() > 0` at every use.
+4. **`hint_line` now reserves the gap before the global hints.** Not in the
+   plan: the longer `Mode::Filter` hint list made the left run fill its budget
+   exactly, and it abutted the globals as `^l clearr refresh`. Two more
+   instances were already sitting in the snapshots (`⏎ saver refresh` in
+   `gantt-order-80`, `c completedr refresh` in `task-mono-120`), so this fixed a
+   latent bug rather than one this milestone introduced.
+
+Two notes on what the tests found, since §3 is the index to §4:
+
+- The integration tests share one process, and `TUISANA_TODAY` is a global. A
+  second pinned date in the new tests made the existing calendar tests flake in
+  parallel; the filter-set fixtures are placed around the file's existing
+  `2026-06-10` instead.
+- Custom-field filter rows come from the project's field settings, not from the
+  values tasks happen to carry, so the require-empty tests need a project with
+  a `Priority` field registered and a task with no value for it. That is
+  `loaded_state_with_priority_field`.
 
 > **A note on the format.** Every milestone before this one is four bullet
 > lists — goal, deliverables, implementation notes, acceptance criteria — which
