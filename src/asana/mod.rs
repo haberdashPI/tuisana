@@ -66,9 +66,10 @@ impl TaskTarget {
     }
 }
 
-/// Server-side filter parameters that can be pushed down to an Asana task
-/// list request. Filters Asana cannot express (full-text search, custom
-/// field values, regex) must be applied client-side; they are absent here.
+/// Server-side filter parameters, applied by Asana to a task list request.
+///
+/// Filters Asana cannot express (full-text search, custom field values, regex)
+/// must be applied client-side; they are absent here.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TaskQuery {
     /// What the query is scoped to: a project or the current user's assigned tasks.
