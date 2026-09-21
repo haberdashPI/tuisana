@@ -16,6 +16,14 @@
 /// Weekday names, indexed from Monday.
 pub const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+/// Weekday labels in the order a calendar grid shows them.
+///
+/// Separate from [`WEEKDAYS`], which starts on Monday because that is the order
+/// [`CivilDate::weekday_index`] counts in — and the Gantt chart's weekend
+/// shading and week ticks are written against those numbers. Only the picker's
+/// grid starts on Sunday.
+pub const CALENDAR_WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
 /// Month abbreviations, indexed from January.
 pub const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -164,6 +172,11 @@ impl CivilDate {
     /// The weekday label.
     pub fn weekday(&self) -> &'static str {
         WEEKDAYS[self.weekday_index()]
+    }
+
+    /// The column this date occupies in a Sunday-first calendar grid.
+    pub fn calendar_column(&self) -> usize {
+        (self.weekday_index() + 1) % 7
     }
 
     /// The `YYYY-MM-DD` form, which is also what the Asana API wants.
@@ -400,6 +413,25 @@ mod tests {
         assert_eq!(date(2026, 8, 24).weekday(), "Mon");
         assert_eq!(date(2026, 8, 24).weekday_index(), 0);
         assert_eq!(date(2026, 8, 30).weekday_index(), 6, "Sunday ends the week");
+    }
+
+    #[test]
+    fn the_charts_week_still_starts_on_monday_even_though_the_picker_starts_on_sunday() {
+        // Two different questions: a work week starts on Monday, a calendar grid
+        // is read from Sunday. weekday_index answers the first — the Gantt
+        // chart's weekend shading and week ticks count in it — and
+        // calendar_column answers the second.
+        let monday = date(2026, 8, 24);
+        let sunday = date(2026, 8, 23);
+
+        assert_eq!(monday.weekday_index(), 0);
+        assert_eq!(monday.calendar_column(), 1);
+        assert_eq!(
+            sunday.weekday_index(),
+            6,
+            "still a weekend by the chart's reckoning"
+        );
+        assert_eq!(sunday.calendar_column(), 0, "and the first column of the grid");
     }
 
     #[test]

@@ -10,7 +10,9 @@ mod project;
 mod task;
 
 /// Calendar dates, the filter date grammar, and the local-timezone `today`.
-pub use date::{month_name, today, CivilDate, DateQuery, PartialDate, MONTHS, WEEKDAYS};
+pub use date::{
+    month_name, today, CivilDate, DateQuery, PartialDate, CALENDAR_WEEKDAYS, MONTHS, WEEKDAYS,
+};
 /// Gantt chart colour assignment and timeline arithmetic.
 pub use gantt::{
     distinct_values, BarSpan, ColorSlot, GanttColorKey, GanttModel, GanttTrack, SlotAssignment,

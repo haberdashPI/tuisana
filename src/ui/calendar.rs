@@ -65,7 +65,7 @@ pub struct CalendarView {
     pub parses: bool,
     /// Which end of a range is being edited, when the query is a range.
     pub side_label: Option<&'static str>,
-    /// The month laid out as weeks starting Monday.
+    /// The month laid out as weeks starting Sunday.
     pub weeks: Vec<Vec<CalendarCell>>,
 }
 
@@ -171,7 +171,7 @@ fn calendar_lines(view: &CalendarView, theme: &Theme) -> Vec<Line<'static>> {
     // Two-letter labels, so a weekday header fits the same three-wide cell the
     // days use and the columns line up.
     lines.push(Line::from(
-        crate::domain::WEEKDAYS
+        crate::domain::CALENDAR_WEEKDAYS
             .iter()
             .map(|name| Span::styled(pad_day(&name[..2]), theme.muted))
             .collect::<Vec<_>>(),
@@ -440,6 +440,15 @@ mod tests {
         });
         assert!(both.add_modifier.contains(Modifier::REVERSED));
         assert!(both.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn the_weekday_header_starts_on_sunday() {
+        let theme = Theme::default();
+        let view = calendar_view(Some(&state(""))).expect("the picker is open");
+        let lines = calendar_lines(&view, &theme);
+
+        assert_eq!(lines[1].to_string(), "Su Mo Tu We Th Fr Sa ");
     }
 
     #[test]

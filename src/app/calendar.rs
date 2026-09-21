@@ -226,13 +226,13 @@ impl CalendarState {
         self.set_active_date(date);
     }
 
-    /// The month laid out as weeks starting Monday.
+    /// The month laid out as weeks starting Sunday.
     ///
     /// Leading and trailing cells are `None` rather than spilling into the
     /// neighboring months, which keeps the grid readable at a glance.
     pub fn weeks(&self) -> Vec<[Option<u32>; 7]> {
         let first = self.visible_month.first_of_month();
-        let offset = first.weekday_index();
+        let offset = first.calendar_column();
         let days = first.days_in_month();
 
         let mut weeks = Vec::new();
@@ -668,27 +668,30 @@ mod tests {
     }
 
     #[test]
-    fn lays_the_month_out_as_weeks_starting_monday() {
-        // August 2026 starts on a Saturday and has 31 days.
+    fn lays_the_month_out_as_weeks_starting_sunday() {
+        // August 2026 starts on a Saturday and has 31 days, so day 1 sits alone
+        // in the last column of the first row and day 2, a Sunday, starts the
+        // second. Monday-first fitted this month into five rows; Sunday-first
+        // needs six.
         let weeks = open("").weeks();
 
         assert_eq!(weeks.len(), 6);
-        assert_eq!(weeks[0], [None, None, None, None, None, Some(1), Some(2)]);
+        assert_eq!(weeks[0], [None, None, None, None, None, None, Some(1)]);
         assert_eq!(
             weeks[1],
             [
+                Some(2),
                 Some(3),
                 Some(4),
                 Some(5),
                 Some(6),
                 Some(7),
-                Some(8),
-                Some(9)
+                Some(8)
             ]
         );
         assert_eq!(
             weeks[5],
-            [Some(31), None, None, None, None, None, None],
+            [Some(30), Some(31), None, None, None, None, None],
             "the tail does not spill into September"
         );
 
@@ -701,9 +704,11 @@ mod tests {
     }
 
     #[test]
-    fn lays_out_a_february_that_starts_on_a_monday() {
-        // February 2027 starts on a Monday and has 28 days: exactly four weeks.
-        let weeks = CalendarState::open("Due", "2027-02-01", today()).weeks();
+    fn lays_out_a_february_that_starts_on_a_sunday() {
+        // February 2026 starts on a Sunday and has 28 days: exactly four weeks
+        // with no leading padding at all — the case a Monday-first grid padded
+        // with six blanks.
+        let weeks = CalendarState::open("Due", "2026-02-01", today()).weeks();
 
         assert_eq!(weeks.len(), 4);
         assert_eq!(weeks[0][0], Some(1));

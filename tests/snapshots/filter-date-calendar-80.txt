@@ -14,13 +14,13 @@
 │   Task                                          │ Assignee     │    Due▲ │  S│
 │                           ┏ Due ━━━━━━━━━━━━━━━━┓                            │
 │▌Northwind BTX 4412 ───────┃      Aug 2026       ┃────────────────────────────│
-│                           ┃Mo Tu We Th Fr Sa Su ┃                            │
-│   Study Kit Design ·······┃                1  2 ┃····························│
-│▍  Draft the assay validati┃ 3  4  5  6  7  8  9 ┃ Priya Raman  │ !Jul 10 │ Ju│
-│   Review shipment requirem┃10 11 12 13 14 15 16 ┃ Morgan Ellis │ !Aug 19 │  A│
-│   Ship release candidate t┃17 18 19 20 21 22 23 ┃ Alex Chen    │   Today │ Au│
-│   Confirm carrier pickup w┃24 25 26 27 28 29 30 ┃ —            │     Wed │ Au│
-│   Update the sample intake┃31                   ┃ Kim Alvarez  │   Sep 4 │ Au│
+│                           ┃Su Mo Tu We Th Fr Sa ┃                            │
+│   Study Kit Design ·······┃                   1 ┃····························│
+│▍  Draft the assay validati┃ 2  3  4  5  6  7  8 ┃ Priya Raman  │ !Jul 10 │ Ju│
+│   Review shipment requirem┃ 9 10 11 12 13 14 15 ┃ Morgan Ellis │ !Aug 19 │  A│
+│   Ship release candidate t┃16 17 18 19 20 21 22 ┃ Alex Chen    │   Today │ Au│
+│   Confirm carrier pickup w┃23 24 25 26 27 28 29 ┃ —            │     Wed │ Au│
+│   Update the sample intake┃30 31                ┃ Kim Alvarez  │   Sep 4 │ Au│
 │   Qualify the second reage┗━━━━━━━━━━━━━━━━━━━━━┛ Dana Ruiz    │  Sep 12 │  J│
 │                                                                              │
 │   Shipment ··································································│
