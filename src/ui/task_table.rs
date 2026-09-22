@@ -10,7 +10,7 @@
 //! scroll, and "keep the cursor visible" logic all address rows by position, so
 //! a row that rendered as zero or two lines would desynchronize them.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 use ratatui::text::{Line, Span};
 
@@ -894,11 +894,42 @@ fn loading_text(state: &TaskState) -> String {
     }
 }
 
+/// How long one spinner frame is shown, for both indicators.
+const SPINNER_FRAME_MS: usize = 120;
+/// How far behind the table has to fall before the filter spinner appears.
+///
+/// Below this the rebuild is over before the eye could register it, and an
+/// indicator that blinks on every keystroke is worse than none at all.
+const FILTERING_DELAY: Duration = Duration::from_millis(150);
+
 /// The spinner frame for the current instant, or `None` when not loading.
 pub fn loading_frame(state: &TaskState, theme: &Theme) -> Option<&'static str> {
     let started = state.loading_started_at()?;
     let elapsed = started.elapsed().as_millis() as usize;
-    Some(theme.glyphs.spinner_frame(elapsed / 120))
+    Some(theme.glyphs.spinner_frame(elapsed / SPINNER_FRAME_MS))
+}
+
+/// The spinner frame for a table that typing has left behind, if it is far
+/// enough behind to say so.
+///
+/// Fed by the same clock as the loading spinner, so it keeps turning for as
+/// long as the keys keep coming rather than freezing on one frame.
+pub fn filtering_frame(state: &TaskState, theme: &Theme) -> Option<&'static str> {
+    filtering_spinner(state.filtering_since()?.elapsed(), theme)
+}
+
+/// The spinner frame for a table that has been behind for `elapsed`.
+///
+/// Split from the clock so both sides of the delay can be tested without one.
+fn filtering_spinner(elapsed: Duration, theme: &Theme) -> Option<&'static str> {
+    if elapsed < FILTERING_DELAY {
+        return None;
+    }
+    Some(
+        theme
+            .glyphs
+            .spinner_frame(elapsed.as_millis() as usize / SPINNER_FRAME_MS),
+    )
 }
 
 fn primary_sort_field(state: &TaskState) -> TaskSortField {
@@ -1640,6 +1671,40 @@ mod tests {
             "the chart kept more than its floor: {}",
             view.chart_width
         );
+    }
+
+    #[test]
+    fn the_filter_spinner_waits_until_the_delay_before_it_appears() {
+        use std::time::Duration;
+        // A rebuild the eye cannot register must not blink an indicator on and
+        // off with every keystroke; one that drags on has to say so.
+        let theme = Theme::default();
+
+        assert_eq!(super::filtering_spinner(Duration::ZERO, &theme), None);
+        assert_eq!(
+            super::filtering_spinner(super::FILTERING_DELAY - Duration::from_millis(1), &theme),
+            None
+        );
+        assert!(super::filtering_spinner(super::FILTERING_DELAY, &theme).is_some());
+    }
+
+    #[test]
+    fn the_filter_spinner_turns_while_the_wait_goes_on() {
+        use std::time::Duration;
+        // Frozen on one frame it reads as a hung program rather than a busy
+        // one, so the frame has to follow the clock.
+        let theme = Theme::default();
+        let frames = (0..theme.glyphs.spinner.len())
+            .map(|step| {
+                super::filtering_spinner(
+                    super::FILTERING_DELAY
+                        + Duration::from_millis((step * super::SPINNER_FRAME_MS) as u64),
+                    &theme,
+                )
+            })
+            .collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(frames.len(), theme.glyphs.spinner.len());
     }
 
     #[test]

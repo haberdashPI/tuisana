@@ -102,6 +102,10 @@ Reading the screen:
   the settings that differ from their defaults, so an untouched session shows
   nothing there.
 - Pane titles and counts live in the pane's own border.
+- A spinner at the top left reports work in progress: `loading` while tasks are
+  being fetched, `filtering` when the table has fallen behind what you have
+  typed. The second only appears once the wait is long enough to notice, so a
+  filter that keeps up never shows it.
 - `?` opens a grouped help overlay for the current mode. It draws over the panes
   without moving them; press `?` again to dismiss it.
 - Due dates render relatively (`Today`, `Tomorrow`, `Wed`, `Nov 14`). An overdue
@@ -427,6 +431,11 @@ filter that the set then inverts wholesale.
 A negation on a `Due` row, or on a set containing one, stops that due window
 being pushed to the API — the negated form is satisfied by dates outside the
 window, and a window narrower than the truth would be cached as covered.
+
+Typing into a filter never waits for the table. While keys are still arriving
+the rebuild is put off and one pass runs when you stop, rather than one pass per
+character — so a slow filter costs a stale table and a spinner, never a
+dropped or delayed keystroke.
 
 **Filter field editing** (filter edit mode):
 

@@ -73,6 +73,19 @@ struct TaskViewState {
     help_details_visible: bool,
     selected_task_ids: HashSet<String>,
     gantt: GanttViewState,
+    /// Set while the runtime knows another input event is already waiting.
+    ///
+    /// Rebuilding the table is the expensive half of a keystroke and the user
+    /// cannot read a table that is about to be replaced anyway, so while keys
+    /// are still arriving the rebuild is put off rather than run once per
+    /// character.
+    input_pending: bool,
+    /// When the table stopped matching the filter, if it does not.
+    ///
+    /// A timestamp rather than a flag: the spinner is only worth showing once
+    /// the wait is long enough to notice, and this is what says how long it
+    /// has been.
+    stale_since: Option<Instant>,
 }
 
 /// Whether a task-data fetch is currently in flight.
@@ -805,16 +818,35 @@ impl TaskFilterEditorState {
         }
     }
 
-    /// Whether a record is visible: **any** set accepts it.
+    /// Compiles the panel into a matcher for one pass over the records.
     ///
-    /// Fields AND within a set, sets OR between them. A set with nothing in it
-    /// accepts everything, which is what a freshly opened panel has always
-    /// done — and is why a newly added set can only widen the result.
-    fn matches(&self, record: &TaskRecord) -> bool {
-        if self.sets.is_empty() {
-            return true;
+    /// Everything that does not vary per record is done here, exactly once:
+    /// a regex row compiles its pattern, a date row parses its query against
+    /// today's date, a labels row splits its include/exclude tokens, and a
+    /// text row lowercases its needle. All of that used to happen *inside* the
+    /// per-record test — a regex filter recompiled its pattern for every task
+    /// on every keystroke, which is where a filter pass over 20k tasks spent
+    /// ~130ms of its ~135ms.
+    fn prepare(&self) -> PreparedFilter<'_> {
+        let today = date::today();
+        PreparedFilter {
+            sets: self
+                .sets
+                .iter()
+                .map(|set| PreparedSet {
+                    negated: set.negated,
+                    fields: set
+                        .fields
+                        .iter()
+                        .filter(|field| field.is_active())
+                        .map(|field| PreparedField {
+                            field,
+                            matcher: PreparedMatcher::for_field(field, today),
+                        })
+                        .collect(),
+                })
+                .collect(),
         }
-        self.sets.iter().any(|set| set.matches(record))
     }
 
     /// The due-date bounds to push down to the API, across every set.
@@ -980,22 +1012,125 @@ impl TaskFilterEditorState {
     }
 }
 
-impl TaskFilterSet {
-    /// Whether this set accepts a record. Fields AND, then the set's own
-    /// negation flips the answer.
-    ///
-    /// An empty set accepts everything, so a *negated* empty set accepts
-    /// nothing — it contributes no records to the union, which is the same
-    /// "can only widen" guarantee adding a set has always had.
+/// The whole filter panel, compiled for one pass over the records.
+///
+/// Borrows the rows it was built from: it lives for the length of a single
+/// filtering pass, and the panel cannot change during one.
+struct PreparedFilter<'a> {
+    sets: Vec<PreparedSet<'a>>,
+}
+
+/// One set, holding only the fields that actually filter.
+struct PreparedSet<'a> {
+    negated: bool,
+    fields: Vec<PreparedField<'a>>,
+}
+
+/// One active row: where its value comes from, and what to test it against.
+struct PreparedField<'a> {
+    field: &'a TaskFilterFieldState,
+    matcher: PreparedMatcher,
+}
+
+/// A row's test, with everything record-independent already done.
+enum PreparedMatcher {
+    /// The row asks for no value at all.
+    Empty,
+    /// Lowercased needle for a subsequence match.
+    Fuzzy(String),
+    /// Lowercased needle for a containment test.
+    Substring(String),
+    /// The compiled pattern, or `None` when it does not compile.
+    Regex(Option<regex::Regex>),
+    /// The include and exclude tokens, already split and lowercased.
+    Labels { includes: Vec<String>, excludes: Vec<String> },
+    /// The parsed query, or `None` when it is not a date expression.
+    Date(Option<DateQuery>),
+}
+
+impl PreparedMatcher {
+    fn for_field(field: &TaskFilterFieldState, today: CivilDate) -> Self {
+        if field.empty_required {
+            return Self::Empty;
+        }
+        match field.spec.kind {
+            TaskFieldFilterKind::String => match field.string_mode {
+                TaskFieldStringMode::Fuzzy => Self::Fuzzy(field.query.to_ascii_lowercase()),
+                TaskFieldStringMode::Substring => {
+                    Self::Substring(field.query.to_ascii_lowercase())
+                }
+                // Built from the query as typed, and matched against a
+                // lowercased haystack, which is what the per-record version
+                // did — the flag is what makes the two agree.
+                TaskFieldStringMode::Regex => Self::Regex(
+                    regex::RegexBuilder::new(&field.query)
+                        .case_insensitive(true)
+                        .build()
+                        .ok(),
+                ),
+            },
+            TaskFieldFilterKind::Labels => {
+                let (includes, excludes) = split_label_tokens(&field.label_values);
+                Self::Labels { includes, excludes }
+            }
+            TaskFieldFilterKind::Date => Self::Date(DateQuery::parse(&field.query, today)),
+        }
+    }
+}
+
+impl PreparedFilter<'_> {
+    /// Whether a record is visible: **any** set accepts it.
     fn matches(&self, record: &TaskRecord) -> bool {
-        let accepted = self
-            .fields
-            .iter()
-            .filter(|field| field.is_active())
-            .all(|field| field.matches(record));
+        if self.sets.is_empty() {
+            return true;
+        }
+        self.sets.iter().any(|set| set.matches(record))
+    }
+}
+
+impl PreparedSet<'_> {
+    fn matches(&self, record: &TaskRecord) -> bool {
+        let accepted = self.fields.iter().all(|field| field.matches(record));
         accepted != self.negated
     }
+}
 
+impl PreparedField<'_> {
+    fn matches(&self, record: &TaskRecord) -> bool {
+        self.matches_value(record) != self.field.negated
+    }
+
+    fn matches_value(&self, record: &TaskRecord) -> bool {
+        match &self.matcher {
+            PreparedMatcher::Empty => self.field.value_is_empty(record),
+            PreparedMatcher::Fuzzy(needle) => {
+                fuzzy_match(&self.field.haystack(record).to_ascii_lowercase(), needle)
+            }
+            PreparedMatcher::Substring(needle) => self
+                .field
+                .haystack(record)
+                .to_ascii_lowercase()
+                .contains(needle),
+            // An uncompilable pattern matches nothing. It cannot mean "no
+            // filter": the row is only consulted once it has a value in it.
+            PreparedMatcher::Regex(None) => false,
+            PreparedMatcher::Regex(Some(regex)) => {
+                regex.is_match(&self.field.haystack(record).to_ascii_lowercase())
+            }
+            PreparedMatcher::Labels { includes, excludes } => {
+                label_selection_matches(&self.field.labels(record), includes, excludes)
+            }
+            // Same reasoning as an uncompilable regex: an unparseable date
+            // expression is a value that nothing satisfies.
+            PreparedMatcher::Date(None) => false,
+            PreparedMatcher::Date(Some(query)) => {
+                self.field.date(record).is_some_and(|date| query.matches(date))
+            }
+        }
+    }
+}
+
+impl TaskFilterSet {
     /// Clears everything the user typed, keeping the rows and their match modes.
     ///
     /// The match mode is deliberately kept: someone working in regex should not
@@ -1139,40 +1274,17 @@ impl TaskFilterFieldState {
         }
     }
 
-    /// Whether this field accepts a record, negation included.
-    fn matches(&self, record: &TaskRecord) -> bool {
-        self.matches_value(record) != self.negated
-    }
-
-    /// The verdict the row's mode and value give, before negation.
-    fn matches_value(&self, record: &TaskRecord) -> bool {
-        if self.empty_required {
-            return self.value_is_empty(record);
-        }
-        match self.spec.kind {
-            TaskFieldFilterKind::String => {
-                let haystack = self.haystack(record).to_ascii_lowercase();
-                let query = self.query.to_ascii_lowercase();
-                match self.string_mode {
-                    TaskFieldStringMode::Fuzzy => fuzzy_match(&haystack, &query),
-                    TaskFieldStringMode::Substring => haystack.contains(&query),
-                    TaskFieldStringMode::Regex => regex::RegexBuilder::new(&self.query)
-                        .case_insensitive(true)
-                        .build()
-                        .is_ok_and(|regex| regex.is_match(&haystack)),
-                }
-            }
-            TaskFieldFilterKind::Labels => {
-                label_filter_matches(&self.labels(record), &self.label_values)
-            }
-            TaskFieldFilterKind::Date => date_filter_matches(self.date(record), &self.query),
-        }
-    }
 }
 
-fn label_filter_matches(values: &[String], selected_labels: &[String]) -> bool {
+/// Splits chosen label values into the ones a record must carry and the ones it
+/// must not, lowercased.
+///
+/// A leading `!` or `-` on a value excludes it. Depends only on the panel, so a
+/// filtering pass does this once rather than per record.
+fn split_label_tokens(selected_labels: &[String]) -> (Vec<String>, Vec<String>) {
     let mut includes = Vec::new();
     let mut excludes = Vec::new();
+
     for token in selected_labels {
         let token = token.trim();
         if token.is_empty() {
@@ -1185,6 +1297,11 @@ fn label_filter_matches(values: &[String], selected_labels: &[String]) -> bool {
         }
     }
 
+    (includes, excludes)
+}
+
+/// Whether a record's label values satisfy an already-split selection.
+fn label_selection_matches(values: &[String], includes: &[String], excludes: &[String]) -> bool {
     if includes.is_empty() && excludes.is_empty() {
         return true;
     }
@@ -1222,14 +1339,6 @@ fn parse_label_values(query: &str) -> Vec<String> {
 /// ends and either side may be empty for an open bound. A query that is not a
 /// date expression at all matches nothing, which the calendar overlay surfaces
 /// rather than leaving the table mysteriously empty.
-fn date_filter_matches(value: Option<&str>, query: &str) -> bool {
-    let Some(parsed) = DateQuery::parse(query, date::today()) else {
-        // An empty query is not a filter; anything else here is unparseable.
-        return query.trim().is_empty();
-    };
-    value.is_some_and(|value| parsed.matches(value))
-}
-
 impl TaskState {
     pub fn new() -> Self {
         Self::default()
@@ -2042,6 +2151,29 @@ impl TaskState {
         &self.loading.loaded_target_ids
     }
 
+    /// Tells the pane whether more input is already queued behind this one.
+    ///
+    /// The runtime owns this because only the runtime can see the input queue.
+    pub fn set_input_pending(&mut self, pending: bool) {
+        self.view.input_pending = pending;
+    }
+
+    /// Rebuilds the table if a keystroke left it out of date.
+    ///
+    /// Called by the event loop once the input queue drains, so a burst of
+    /// typing costs one rebuild instead of one per character.
+    pub fn settle_table(&mut self) {
+        if self.view.input_pending || self.view.stale_since.is_none() {
+            return;
+        }
+        self.refresh_table();
+    }
+
+    /// Since when the table has been out of date, if it is.
+    pub fn filtering_since(&self) -> Option<Instant> {
+        self.view.stale_since
+    }
+
     pub fn loading_spinner(&self) -> &'static str {
         const FRAMES: [&str; 4] = ["|", "/", "-", "\\"];
         let elapsed = self
@@ -2698,7 +2830,18 @@ impl TaskState {
         }
     }
 
+    /// Rebuilds the visible table from the dataset, or marks it out of date.
+    ///
+    /// Deferring is safe because nothing reads a stale table without the
+    /// runtime settling it first: the event loop calls [`Self::settle_table`]
+    /// before it draws, as soon as the input queue is empty.
     fn refresh_table(&mut self) {
+        if self.view.input_pending {
+            self.view.stale_since.get_or_insert_with(Instant::now);
+            return;
+        }
+        self.view.stale_since = None;
+
         let Some(dataset) = self.loading.dataset.as_ref() else {
             return;
         };
@@ -2782,9 +2925,10 @@ impl TaskState {
     }
 
     fn apply_filter_panel(&self, records: &[TaskRecord]) -> Vec<TaskRecord> {
+        let filter = self.view.filter_editor.prepare();
         records
             .iter()
-            .filter(|record| self.view.filter_editor.matches(record))
+            .filter(|record| filter.matches(record))
             .cloned()
             .collect()
     }
@@ -4018,54 +4162,72 @@ mod tests {
         assert_eq!(state.table().rows.iter().filter(|row| row.kind.is_task()).count(), 2);
     }
 
+    /// Runs the compiled `Due` matcher against a task carrying `value`.
+    ///
+    /// Goes through the prepared matcher rather than a parallel helper, so the
+    /// assertions below pin the predicate the filter pass actually runs.
+    fn due_matches(value: Option<&str>, query: &str) -> bool {
+        let mut field = due_field(query);
+        field.query = query.to_string();
+        let mut record = TaskRecord::new("t1", "Task one");
+        record.due_date = value.map(ToString::to_string);
+
+        let matcher = super::PreparedMatcher::for_field(&field, crate::domain::date::today());
+        super::PreparedField { field: &field, matcher }.matches(&record)
+    }
+
+    fn due_field(query: &str) -> super::TaskFilterFieldState {
+        let mut field = super::TaskFilterFieldState::new(
+            super::TaskFilterFieldSpec {
+                key: "due".to_string(),
+                label: "Due".to_string(),
+                kind: TaskFieldFilterKind::Date,
+                custom_gids: Vec::new(),
+                can_be_empty: true,
+            },
+            super::TaskFieldStringMode::Fuzzy,
+            Vec::new(),
+        );
+        field.query = query.to_string();
+        field
+    }
+
     #[test]
     fn date_filters_match_exact_dates_ranges_and_open_bounds() {
         // Token parsing itself is covered in `domain::date`; this pins the
         // predicate the filter panel actually calls.
-        assert!(super::date_filter_matches(Some("2026-09-15"), "2026-09-15"));
-        assert!(!super::date_filter_matches(Some("2026-09-16"), "2026-09-15"));
+        assert!(due_matches(Some("2026-09-15"), "2026-09-15"));
+        assert!(!due_matches(Some("2026-09-16"), "2026-09-15"));
 
-        assert!(super::date_filter_matches(
-            Some("2026-09-01"),
-            "2026-09-01..2026-09-30"
-        ));
-        assert!(super::date_filter_matches(
-            Some("2026-09-30"),
-            "2026-09-01..2026-09-30"
-        ));
-        assert!(!super::date_filter_matches(
-            Some("2026-10-01"),
-            "2026-09-01..2026-09-30"
-        ));
+        assert!(due_matches(Some("2026-09-01"), "2026-09-01..2026-09-30"));
+        assert!(due_matches(Some("2026-09-30"), "2026-09-01..2026-09-30"));
+        assert!(!due_matches(Some("2026-10-01"), "2026-09-01..2026-09-30"));
 
-        assert!(super::date_filter_matches(Some("2030-01-01"), "2026-09-01.."));
-        assert!(super::date_filter_matches(Some("2020-01-01"), "..2026-09-01"));
+        assert!(due_matches(Some("2030-01-01"), "2026-09-01.."));
+        assert!(due_matches(Some("2020-01-01"), "..2026-09-01"));
 
-        // A task with no date cannot satisfy a date filter, but a blank query is
-        // not a filter at all.
-        assert!(!super::date_filter_matches(None, "2026-09-15"));
-        assert!(super::date_filter_matches(None, "   "));
-        assert!(super::date_filter_matches(Some("2026-09-15"), ""));
+        // A task with no date cannot satisfy a date filter.
+        assert!(!due_matches(None, "2026-09-15"));
+
+        // A blank query is not a filter at all, and never reaches the matcher:
+        // the row is inactive, so the pass leaves it out entirely.
+        assert!(!due_field("   ").is_active());
+        assert!(!due_field("").is_active());
 
         // An unparseable query matches nothing rather than everything.
-        assert!(!super::date_filter_matches(Some("2026-09-15"), "someday"));
-        assert!(!super::date_filter_matches(Some("2026-09-15"), "2026-02-31"));
+        assert!(due_field("someday").is_active(), "it is a value, just a bad one");
+        assert!(!due_matches(Some("2026-09-15"), "someday"));
+        assert!(!due_matches(Some("2026-09-15"), "2026-02-31"));
     }
 
     #[test]
     fn date_filters_resolve_keywords_against_the_local_date() {
         let today = crate::domain::date::today();
 
-        assert!(super::date_filter_matches(Some(&today.iso()), "today"));
-        assert!(!super::date_filter_matches(
-            Some(&today.add_days(1).iso()),
-            "today"
-        ));
-        assert!(super::date_filter_matches(
-            Some(&today.add_days(1).iso()),
-            "tomorrow"
-        ));
-        assert!(super::date_filter_matches(
+        assert!(due_matches(Some(&today.iso()), "today"));
+        assert!(!due_matches(Some(&today.add_days(1).iso()), "today"));
+        assert!(due_matches(Some(&today.add_days(1).iso()), "tomorrow"));
+        assert!(due_matches(
             Some(&today.iso()),
             &format!("{:02}-{:02}", today.month, today.day)
         ));
@@ -4819,6 +4981,127 @@ mod tests {
             vec!["alex-aug", "jo-dec"],
             "and the two sets union"
         );
+    }
+
+    #[test]
+    fn a_regex_row_compiles_its_pattern_once_for_the_whole_pass() {
+        // The pattern used to be rebuilt inside the per-record test, which put
+        // a regex compile between every task and the next: ~130ms of a ~135ms
+        // pass over 20k tasks. `prepare` is what holds it still.
+        let mut field = super::TaskFilterFieldState::new(
+            super::TaskFilterFieldSpec {
+                key: "title".to_string(),
+                label: "Title".to_string(),
+                kind: TaskFieldFilterKind::String,
+                custom_gids: Vec::new(),
+                can_be_empty: true,
+            },
+            super::TaskFieldStringMode::Regex,
+            Vec::new(),
+        );
+        field.query = "^ship".to_string();
+
+        let compiled = super::PreparedMatcher::for_field(&field, crate::domain::date::today());
+        assert!(matches!(compiled, super::PreparedMatcher::Regex(Some(_))));
+
+        // And a pattern that cannot compile matches nothing, rather than
+        // reading as "no filter" and letting everything through.
+        field.query = "(unclosed".to_string();
+        let broken = super::PreparedMatcher::for_field(&field, crate::domain::date::today());
+        assert!(matches!(broken, super::PreparedMatcher::Regex(None)));
+
+        let record = TaskRecord::new("t1", "Ship it");
+        assert!(!super::PreparedField { field: &field, matcher: broken }.matches(&record));
+    }
+
+    #[test]
+    fn a_regex_filter_still_matches_the_same_records_it_always_did() {
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task("t1", "Ship the release", false),
+            sel_task("t2", "Review the shipment", false),
+        ]);
+        state.toggle_filter_panel();
+        state.filter_set_mode(super::TaskFieldStringMode::Regex);
+        set_field(&mut state, "title", "^ship");
+
+        assert_eq!(visible_gids(&state), vec!["t1"], "anchored at the start");
+    }
+
+    #[test]
+    fn typing_with_more_keys_queued_puts_the_rebuild_off_until_the_burst_ends() {
+        // The point of the whole thing: a keystroke with input behind it costs
+        // a string insert, not a pass over every task.
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task("t1", "Alpha", false),
+            sel_task("t2", "Beta", false),
+        ]);
+        state.toggle_filter_panel();
+
+        state.set_input_pending(true);
+        state.filter_push_char('a');
+        state.filter_push_char('l');
+
+        assert_eq!(
+            visible_gids(&state),
+            vec!["t1", "t2"],
+            "the table is still the one the last finished pass built"
+        );
+        assert!(state.filtering_since().is_some(), "and it says it is behind");
+
+        // The queue drains, so the next draw settles it.
+        state.set_input_pending(false);
+        state.settle_table();
+
+        assert_eq!(visible_gids(&state), vec!["t1"]);
+        assert!(state.filtering_since().is_none());
+    }
+
+    #[test]
+    fn the_last_keystroke_of_a_burst_filters_without_waiting_to_be_settled() {
+        // Nothing is queued behind it, so there is nothing to coalesce with
+        // and no reason to show the table a frame out of date.
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task("t1", "Alpha", false),
+            sel_task("t2", "Beta", false),
+        ]);
+        state.toggle_filter_panel();
+
+        // `p` is in Alpha and not in Beta; a fuzzy `a` would match both.
+        state.filter_push_char('p');
+
+        assert_eq!(visible_gids(&state), vec!["t1"]);
+        assert!(state.filtering_since().is_none());
+    }
+
+    #[test]
+    fn settling_a_table_that_is_current_does_nothing() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Alpha", false)]);
+        state.toggle_filter_panel();
+        let before = state.table().clone();
+
+        state.settle_table();
+
+        assert_eq!(state.table(), &before);
+        assert!(state.filtering_since().is_none());
+    }
+
+    #[test]
+    fn a_deferred_rebuild_is_settled_even_if_the_keys_stop_mattering() {
+        // `set_input_pending` is the runtime's answer about the *queue*, not
+        // about the filter, so a burst that ends on a key which changes
+        // nothing still has to leave the table current.
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Alpha", false)]);
+        state.toggle_filter_panel();
+        state.set_input_pending(true);
+        state.filter_push_char('z');
+        assert!(state.filtering_since().is_some());
+
+        state.set_input_pending(false);
+        state.move_filter_down();
+        state.settle_table();
+
+        assert!(visible_gids(&state).is_empty(), "`z` matches no title");
+        assert!(state.filtering_since().is_none());
     }
 
     #[test]

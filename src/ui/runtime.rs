@@ -56,6 +56,16 @@ pub enum InputEvent {
 /// A source may also return `Closed` if it has no more events to provide.
 pub trait KeySource {
     fn next_event(&mut self, timeout: Duration) -> io::Result<InputEvent>;
+
+    /// Whether another event is already waiting behind the one just returned.
+    ///
+    /// The loop uses this to hold off the expensive half of a keystroke —
+    /// rebuilding the task table — while the user is still typing. A source
+    /// that cannot see its own queue says `false`, which simply means every
+    /// keystroke settles immediately, as they all used to.
+    fn pending(&mut self) -> bool {
+        false
+    }
 }
 
 /// Production key source backed by crossterm.
@@ -68,6 +78,13 @@ impl KeySource for CrosstermKeySource {
         }
 
         Ok(classify(event::read()?))
+    }
+
+    fn pending(&mut self) -> bool {
+        // A held-down key, a paste, and plain fast typing all put several
+        // events in the queue at once; a zero timeout answers "is there
+        // another one right now" without waiting for one.
+        event::poll(Duration::ZERO).unwrap_or(false)
     }
 }
 
@@ -117,6 +134,10 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
 ) -> io::Result<usize> {
     let mut page_size = 1usize;
     app.poll_task_data();
+    // Anything a keystroke put off happens here, so the frame about to be
+    // drawn is built from every key the user has actually typed. A no-op while
+    // input is still queued, which is what keeps a burst to one rebuild.
+    app.tasks.settle_table();
     let theme = Theme::new(&app.config.theme);
 
     terminal
@@ -222,8 +243,16 @@ fn render_header<C: AsanaClient + Clone + Send + 'static>(
     // The whole loading indicator — spinner and word together — used to sit in
     // the task pane's right-hand chips, where it was easy to miss. The top left
     // is the first place the eye lands.
+    //
+    // Filtering shares the spot rather than taking one of its own: they are
+    // the same statement to the reader — the table is not the answer yet —
+    // and a fetch in flight is the bigger of the two, so it wins the space.
     let leading = task_table::loading_frame(&app.tasks, theme)
-        .map(|frame| Span::styled(format!("{frame} loading "), theme.info));
+        .map(|frame| Span::styled(format!("{frame} loading "), theme.info))
+        .or_else(|| {
+            task_table::filtering_frame(&app.tasks, theme)
+                .map(|frame| Span::styled(format!("{frame} filtering "), theme.warn))
+        });
 
     // When the task pane is hidden nothing else can report that the loaded
     // task data no longer matches the project selection, so the header does.
@@ -479,7 +508,13 @@ where
     let mut page_size = draw(terminal, app, &keymap)?;
 
     loop {
-        match source.next_event(TICK_RATE)? {
+        let event = source.next_event(TICK_RATE)?;
+        // Checked once per event, before anything acts on it: a keystroke with
+        // more input behind it leaves the table to be rebuilt later, and
+        // `draw` settles it as soon as the queue runs dry.
+        app.tasks.set_input_pending(source.pending());
+
+        match event {
             InputEvent::Key(key_event) => {
                 match app.handle_key_event(&keymap, key_event, page_size) {
                     Ok(Some(crate::input::AppCommand::Quit)) => break,
@@ -565,6 +600,12 @@ mod tests {
                 Ok(InputEvent::Key(self.keys.remove(0)))
             }
         }
+
+        /// A scripted burst is exactly what fast typing looks like to the
+        /// loop: every key but the last has another one behind it.
+        fn pending(&mut self) -> bool {
+            !self.keys.is_empty()
+        }
     }
 
     fn screen(terminal: &mut Terminal<TestBackend>) -> Vec<String> {
@@ -606,6 +647,165 @@ mod tests {
         );
         assert_eq!(super::classify(Event::FocusGained), InputEvent::Tick);
         assert_eq!(super::classify(Event::FocusLost), InputEvent::Tick);
+    }
+
+    /// A session with two tasks loaded and the filter panel open in edit mode.
+    fn filtering_app() -> App<FakeAsanaClient> {
+        use crate::asana::dto::{
+            SectionDto, TaskDto, TaskMembershipDto, TaskMembershipProjectDto,
+            TaskMembershipSectionDto,
+        };
+
+        let task = |gid: &str, name: &str| TaskDto {
+            gid: gid.to_string(),
+            name: name.to_string(),
+            completed: false,
+            modified_at: None,
+            due_on: None,
+            start_on: None,
+            assignee: None,
+            num_subtasks: 0,
+            memberships: vec![TaskMembershipDto {
+                project: TaskMembershipProjectDto {
+                    gid: "1".to_string(),
+                    name: "Inbox".to_string(),
+                },
+                section: Some(TaskMembershipSectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }),
+            }],
+            parent: None,
+            custom_fields: vec![],
+        };
+
+        let projects = vec![Project::new("1", "Inbox", true)];
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_sections(
+                "1",
+                vec![SectionDto { gid: "s1".to_string(), name: "Today".to_string() }],
+            )
+            .with_tasks("1", vec![task("t1", "Alpha"), task("t2", "Beta")]);
+
+        let mut app = App::new(Config::default(), client.clone());
+        app.load_projects().expect("projects load");
+        app.tasks
+            .load_task_dataset_for_projects(&client, &projects)
+            .expect("tasks load");
+        app.tasks.set_visible(true);
+        app
+    }
+
+    #[test]
+    fn a_burst_of_typing_leaves_the_table_current_once_the_keys_run_out() {
+        // Every key but the last has another behind it, so the table is left
+        // out of date while they arrive — and the loop has to settle it before
+        // the frame the user finally reads.
+        let mut app = filtering_app();
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        // `f` opens the panel, `enter` starts editing the Title row, then two
+        // characters are typed: the first has the second queued behind it.
+        let mut keys = vec![
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        ];
+        keys.extend(
+            "ph".chars()
+                .map(|ch| KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+        );
+        let mut source = ScriptedSource { keys };
+        run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+
+        assert!(
+            app.tasks.filtering_since().is_none(),
+            "nothing is left pending once the burst ends"
+        );
+        let titles = app
+            .tasks
+            .table()
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.cells[0].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(titles, vec!["Alpha".to_string()], "`ph` is only in Alpha");
+    }
+
+    #[test]
+    fn a_key_with_more_behind_it_does_not_rebuild_the_table() {
+        // The same burst, stopped one key early: the source still reports a
+        // key queued, so the table is deliberately a frame behind.
+        let mut app = filtering_app();
+        let keymap = app.keymap().expect("keymap");
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        for key in [
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        ] {
+            app.handle_key_event(&keymap, key, 10)
+                .expect("opens the filter panel and starts editing");
+        }
+
+        app.tasks.set_input_pending(true);
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+            10,
+        )
+        .expect("types");
+
+        assert!(app.tasks.filtering_since().is_some());
+        assert_eq!(app.tasks.table().task_count(), 2, "still the old table");
+
+        // And the draw that follows an emptied queue brings it up to date.
+        app.tasks.set_input_pending(false);
+        super::draw(&mut terminal, &mut app, &keymap).expect("draws");
+
+        assert!(app.tasks.filtering_since().is_none());
+        assert_eq!(app.tasks.table().task_count(), 1);
+    }
+
+    #[test]
+    fn a_table_left_behind_says_so_in_the_header() {
+        // The predicate is unit-tested next to the spinner; this is the wiring
+        // — that a stale table actually reaches the one indicator on screen.
+        let mut app = filtering_app();
+        let keymap = app.keymap().expect("keymap");
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        for key in [
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        ] {
+            app.handle_key_event(&keymap, key, 10).expect("opens the panel");
+        }
+
+        app.tasks.set_input_pending(true);
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+            10,
+        )
+        .expect("types");
+
+        // Long enough to be worth reporting, which is the whole condition.
+        std::thread::sleep(Duration::from_millis(180));
+        super::draw(&mut terminal, &mut app, &keymap).expect("draws");
+
+        let header = screen(&mut terminal).remove(0);
+        assert!(
+            header.contains("filtering"),
+            "the header should report the wait: {header:?}"
+        );
+        assert!(
+            app.tasks.filtering_since().is_some(),
+            "the draw must not have settled it while keys are still queued"
+        );
     }
 
     #[test]
