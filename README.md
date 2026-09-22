@@ -418,6 +418,10 @@ of.
   entries in name order, numbered from the top of the visible window.
 - `1`-`9` load the entry at that position. `<` and `>` page the window when
   there are more entries than fit.
+- Loading over an **unnamed panel that is filtering** asks first: `y` goes
+  through with it, `n` or `esc` backs out. A bound panel is already on disk,
+  and an empty one has nothing to lose, so neither is worth a keypress to
+  confirm.
 - `w` opens a one-line prompt on the sidebar's border, pre-filled with the
   loaded name. `enter` commits, `esc` cancels. An existing name is
   overwritten; a new one is created. A blank name is refused.
@@ -433,7 +437,12 @@ rather than a snapshot: type into a field, add a tab, negate a set, and the
 named entry changes with it, on disk. A named set behaves like a file you have
 open, not like a clipboard — the alternative, a snapshot you have to remember
 to re-save, is the one that loses work. The write happens once per settled
-burst of typing, not once per keystroke.
+burst of typing, not once per keystroke, and an edit still in hand is flushed
+before a load or `n` replaces the panel it was typed into.
+
+That is also why loading over a *bound* panel asks nothing: there is no
+unsaved state for it to lose. The confirmation exists for the one case that
+has some — an unnamed panel you have been building up.
 
 Two escapes: `y` **copies the panel to a new unnamed one**, keeping exactly
 what is on screen while the entry keeps whatever was last written to it —

@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 2 tasks
+┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1 active ┓
+┃    Title     fuzzy     —                                                     ┃
+┃▍ ● Assignee  fuzzy     alex                                                  ┃
+┃    Due       date      —                                                     ┃
+┃    Start     date      —                                                     ┃
+┃    State     labels    —                                                     ┃
+┃    Projects  contains  —                                                     ┃
+┃    Priority  labels    —                                                     ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┗ discard for Blocked? y/n ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌ Tasks ─────────────────────────────────────── 2 tasks · row 1 · columns 0/32 ┐
+│   Task                                     │ Assignee  │   Due▲ │  Start │ St│
+│                                                                              │
+│▌Northwind BTX 4412 ──────────────────────────────────────────────────────────│
+│                                                                              │
+│   Study Kit Design ··························································│
+│▍  Ship release candidate to the study team │ Alex Chen │  Today │ Aug 10 │ ○ │
+│                                                                              │
+│   Shipment ··································································│
+│   Close out packaging vendor contract      │ Alex Chen │ Nov 14 │  Oct 1 │ ○ │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+y confirm   n cancel   esc cancel
+ SET NAME                                                               1 filter

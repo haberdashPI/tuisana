@@ -19,7 +19,7 @@ use crate::{
     config::NamedFilterSet,
     ui::{
         chrome::Chip,
-        text::{fill, truncate_with_ellipsis},
+        text::{fill, truncate_with_ellipsis, visible_width},
         theme::Theme,
     },
 };
@@ -204,6 +204,15 @@ pub fn prompt_line(state: &TaskState) -> Option<PromptLine> {
             caret: None,
             error: false,
         }),
+        // The entry the digit named, rather than what is being lost: the
+        // panel about to go is the one on screen, and the `current` row above
+        // already says it is `unnamed`.
+        SidebarPrompt::ConfirmLoad { name } => Some(PromptLine {
+            label: format!("discard for {name}?"),
+            text: "y/n".to_string(),
+            caret: None,
+            error: false,
+        }),
     }
 }
 
@@ -279,16 +288,30 @@ fn filter_set_row_line(row: &FilterSetRow, theme: &Theme, width: usize) -> Line<
 ///
 /// It rides the border exactly as project search does, so it costs no body
 /// line — and it is why `w` opens the sidebar: the prompt has somewhere to be.
-pub fn prompt_footer_line(prompt: &PromptLine, theme: &Theme) -> Line<'static> {
+///
+/// The label is what gives when `width` runs out. A sidebar is 24 columns and
+/// a saved name can be any length, so something has to — and the typed name
+/// or the `y/n` is the half the user is answering with.
+pub fn prompt_footer_line(
+    prompt: &PromptLine,
+    theme: &Theme,
+    width: usize,
+) -> Line<'static> {
     let style = if prompt.error { theme.danger } else { theme.accent };
     let text = match prompt.caret {
         Some(caret) => splice_caret(&prompt.text, caret, theme.glyphs.edit_cursor),
         None => prompt.text.clone(),
     };
 
+    // Three spaces of padding: one each side, one between the two halves.
+    let label_width = width
+        .saturating_sub(visible_width(&text) + 3)
+        .max(1);
+    let label = truncate_with_ellipsis(&prompt.label, label_width, theme.glyphs.ellipsis);
+
     Line::from(vec![
         Span::raw(" "),
-        Span::styled(prompt.label.clone(), theme.muted),
+        Span::styled(label, theme.muted),
         Span::raw(" "),
         Span::styled(text, style),
         Span::raw(" "),
@@ -494,7 +517,7 @@ mod tests {
         let view = render_filter_sets(&state, &entries(1)).expect("the sidebar is open");
         let prompt = view.prompt.as_ref().expect("the prompt is open");
         let theme = Theme::default();
-        let rendered = prompt_footer_line(prompt, &theme).to_string();
+        let rendered = prompt_footer_line(prompt, &theme, 60).to_string();
 
         assert!(rendered.contains("save as"), "{rendered}");
         assert!(
@@ -511,7 +534,7 @@ mod tests {
 
         let view = render_filter_sets(&state, &entries(1)).expect("the sidebar is open");
         let rendered =
-            prompt_footer_line(view.prompt.as_ref().expect("open"), &Theme::default())
+            prompt_footer_line(view.prompt.as_ref().expect("open"), &Theme::default(), 60)
                 .to_string();
 
         assert!(rendered.contains("delete Sprint triage?"), "{rendered}");
@@ -527,6 +550,39 @@ mod tests {
 
         assert_eq!(split_sidebar(Rect::new(0, 1, 80, 11), true).0, None);
         assert!(super::prompt_line(&state).is_some());
+    }
+
+    #[test]
+    fn the_load_confirmation_names_the_entry_the_digit_addressed() {
+        let mut state = sidebar_state(9);
+        state.filter_set_prompt_confirm_load("Sprint triage");
+
+        let view = render_filter_sets(&state, &entries(4)).expect("the sidebar is open");
+        let rendered =
+            prompt_footer_line(view.prompt.as_ref().expect("open"), &Theme::default(), 60)
+                .to_string();
+
+        assert!(rendered.contains("discard for Sprint triage?"), "{rendered}");
+        assert!(rendered.contains("y/n"), "{rendered}");
+    }
+
+    #[test]
+    fn a_prompt_too_long_for_the_border_gives_up_its_label_not_its_answer() {
+        // A sidebar is 24 columns and a saved name can be any length, so
+        // something has to give — and `y/n` is the half being answered.
+        let mut state = sidebar_state(9);
+        state.filter_set_prompt_confirm_load("A name far longer than any sidebar");
+        let view = render_filter_sets(&state, &entries(1)).expect("the sidebar is open");
+        let theme = Theme::default();
+
+        let width = SIDEBAR_WIDTH as usize - 2;
+        let line = prompt_footer_line(view.prompt.as_ref().expect("open"), &theme, width);
+
+        assert!(
+            visible_width(&line.to_string()) <= width,
+            "the prompt overflowed the border: {line:?}"
+        );
+        assert!(line.to_string().contains("y/n"), "{line:?}");
     }
 
     #[test]

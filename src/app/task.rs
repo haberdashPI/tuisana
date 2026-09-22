@@ -277,6 +277,18 @@ pub(crate) enum SidebarPrompt {
     Save { text: String, caret: usize },
     /// Confirming `d`.
     ConfirmDelete { name: String },
+    /// Confirming a digit that would throw away an unnamed panel.
+    ConfirmLoad { name: String },
+}
+
+impl SidebarPrompt {
+    /// Whether this prompt wants a `y`/`n` rather than typed text.
+    ///
+    /// One mode covers both kinds, so this is what lets the hint bar name the
+    /// keys the open prompt actually reads.
+    pub(crate) fn is_confirmation(&self) -> bool {
+        !matches!(self, Self::Save { .. })
+    }
 }
 
 /// Tracks the filter panel's visibility, edit mode, field cursor, and the
@@ -1159,6 +1171,28 @@ impl TaskFilterEditorState {
         self.notice = None;
         self.prompt = Some(SidebarPrompt::ConfirmDelete { name });
         true
+    }
+
+    /// Opens the confirmation for a digit that would discard unsaved work.
+    fn prompt_confirm_load(&mut self, name: impl Into<String>) {
+        self.sidebar_visible = true;
+        self.notice = None;
+        self.prompt = Some(SidebarPrompt::ConfirmLoad { name: name.into() });
+    }
+
+    /// Whether replacing the panel would lose something.
+    ///
+    /// A bound panel is written through on every change, so loading over it
+    /// costs nothing. An unnamed one that is filtering is work that exists
+    /// nowhere but on screen. An empty unnamed panel is not worth a keypress
+    /// to confirm.
+    fn is_unsaved(&self) -> bool {
+        self.loaded.is_none()
+            && self.sets.iter().any(|set| {
+                set.negated
+                    || !set.unresolved.is_empty()
+                    || set.active_filter_count() > 0
+            })
     }
 
     fn prompt_push_char(&mut self, ch: char) {
@@ -2395,6 +2429,24 @@ impl TaskState {
 
     pub(crate) fn filter_set_prompt_delete(&mut self) -> bool {
         self.view.filter_editor.prompt_delete()
+    }
+
+    pub(crate) fn filter_set_prompt_confirm_load(&mut self, name: &str) {
+        self.view.filter_editor.prompt_confirm_load(name);
+    }
+
+    /// Whether replacing the panel would throw away unsaved work.
+    pub fn filter_set_is_unsaved(&self) -> bool {
+        self.view.filter_editor.is_unsaved()
+    }
+
+    /// Whether the open prompt wants a `y`/`n` rather than typed text.
+    pub fn filter_set_prompt_is_confirmation(&self) -> bool {
+        self.view
+            .filter_editor
+            .prompt
+            .as_ref()
+            .is_some_and(SidebarPrompt::is_confirmation)
     }
 
     pub(crate) fn filter_set_prompt_cancel(&mut self) {

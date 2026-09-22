@@ -81,6 +81,8 @@ pub struct HintContext {
     /// The panel is bound to a named entry, so there is something to copy
     /// away from and something to delete.
     pub filter_set_loaded: bool,
+    /// The open sidebar prompt wants a `y`/`n` rather than typed text.
+    pub filter_set_confirm: bool,
 }
 
 /// Hints shown on the right of the bar in every mode.
@@ -146,7 +148,13 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
             hints
         }
         Mode::FilterEdit => filter_edit_hints(context),
-        // Read outside the keymap, so both keys are literals.
+        // Read outside the keymap, so every key here is a literal. One mode
+        // covers two kinds of prompt, and they do not read the same keys.
+        Mode::FilterSetName if context.filter_set_confirm => vec![
+            Hint::literal("y", "confirm"),
+            Hint::literal("n", "cancel"),
+            Hint::literal("esc", "cancel"),
+        ],
         Mode::FilterSetName => vec![
             Hint::literal("enter", "save"),
             Hint::literal("esc", "cancel"),

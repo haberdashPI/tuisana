@@ -296,6 +296,7 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
         filter_sets_sidebar: app.tasks.filter_sets_sidebar_visible(),
         saved_filter_sets: app.config.filter_sets.len(),
         filter_set_loaded: app.tasks.filter_set_loaded_name().is_some(),
+        filter_set_confirm: app.tasks.filter_set_prompt_is_confirmation(),
     };
 
     let line = hints::hint_line(
@@ -394,8 +395,14 @@ fn render_filter_pane<C: AsanaClient + Clone + Send + 'static>(
         &view.counts,
     );
     if let Some(prompt) = &orphaned_prompt {
-        block = block
-            .title_bottom(filter_sets::prompt_footer_line(prompt, theme).left_aligned());
+        block = block.title_bottom(
+            filter_sets::prompt_footer_line(
+                prompt,
+                theme,
+                area.width.saturating_sub(2) as usize,
+            )
+            .left_aligned(),
+        );
     }
     let body = block.inner(area);
     frame.render_widget(block, area);
@@ -439,8 +446,14 @@ fn render_filter_sets_pane<C: AsanaClient + Clone + Send + 'static>(
 
     let mut block = chrome::pane_block(theme, false, mode, "Sets", &view.counts);
     if let Some(prompt) = &view.prompt {
-        block = block
-            .title_bottom(filter_sets::prompt_footer_line(prompt, theme).left_aligned());
+        block = block.title_bottom(
+            filter_sets::prompt_footer_line(
+                prompt,
+                theme,
+                area.width.saturating_sub(2) as usize,
+            )
+            .left_aligned(),
+        );
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);

@@ -689,6 +689,27 @@ fn filter_mode_naming_a_set() {
     );
 }
 
+/// A digit pressed over an unnamed panel that is filtering, so the
+/// border-mounted confirmation and the `y`/`n` hints are pinned.
+#[test]
+fn filter_mode_confirming_a_load_over_unsaved_filters() {
+    assert_snapshot_with(
+        named_sets_config(),
+        WIDTHS.to_vec(),
+        "filter-sets-load-confirm",
+        || {
+            vec![
+                enter_task_mode(),
+                // A filter typed into the unnamed panel the app starts with,
+                // then `1` — which would throw it away.
+                vec![key('f'), key('b'), key('j'), enter()],
+                "alex".chars().map(key).chain([enter()]).collect(),
+                vec![key('1')],
+            ]
+        },
+    );
+}
+
 /// A require-empty on `Due`, so `(none)` is drawn next to the `—` of the
 /// untouched rows and the two are visibly different.
 #[test]

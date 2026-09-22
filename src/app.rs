@@ -510,23 +510,30 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 }
                 _ => Ok(false),
             },
-            SidebarPrompt::ConfirmDelete { .. } => match event.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') if typed => {
-                    self.commit_filter_set_delete();
-                    Ok(true)
+            SidebarPrompt::ConfirmDelete { .. } | SidebarPrompt::ConfirmLoad { .. } => {
+                match event.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') if typed => {
+                        match prompt {
+                            SidebarPrompt::ConfirmLoad { name } => {
+                                self.commit_filter_set_load(&name)
+                            }
+                            _ => self.commit_filter_set_delete(),
+                        }
+                        Ok(true)
+                    }
+                    KeyCode::Char('n') | KeyCode::Char('N') if typed => {
+                        self.tasks.filter_set_prompt_cancel();
+                        self.set_filter_mode();
+                        Ok(true)
+                    }
+                    KeyCode::Esc => {
+                        self.tasks.filter_set_prompt_cancel();
+                        self.set_filter_mode();
+                        Ok(true)
+                    }
+                    _ => Ok(false),
                 }
-                KeyCode::Char('n') | KeyCode::Char('N') if typed => {
-                    self.tasks.filter_set_prompt_cancel();
-                    self.set_filter_mode();
-                    Ok(true)
-                }
-                KeyCode::Esc => {
-                    self.tasks.filter_set_prompt_cancel();
-                    self.set_filter_mode();
-                    Ok(true)
-                }
-                _ => Ok(false),
-            },
+            }
         }
     }
 
@@ -581,23 +588,50 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         self.write_config_or_report();
     }
 
-    /// Replaces the panel with the saved entry at a position in the sidebar's
-    /// visible window.
-    fn load_named_filter_set(&mut self, position: u8) {
+    /// The saved entry a digit addresses, if there is one there.
+    fn filter_set_at(&self, position: u8) -> Option<NamedFilterSet> {
         let index = self
             .tasks
             .filter_sets_page_start()
             .saturating_add(position.saturating_sub(1) as usize);
-        let Some(entry) = self
-            .config
+        self.config
             .sorted_filter_sets()
             .get(index)
             .map(|entry| (*entry).clone())
+    }
+
+    /// Replaces the panel with a saved entry, by name.
+    ///
+    /// By name rather than by position because a confirmation can sit between
+    /// the digit and the load, and a window that moved in between must not
+    /// load a different entry than the one the prompt named.
+    fn load_named_filter_set(&mut self, name: &str) {
+        // Anything the bound panel was still holding goes to disk before it
+        // is replaced. The write-through normally runs *after* the key, by
+        // which point this key has already thrown the panel away.
+        self.sync_named_filter_set();
+
+        let Some(entry) = self
+            .config
+            .filter_sets
+            .iter()
+            .find(|entry| entry.name == name)
+            .cloned()
         else {
             return;
         };
 
         self.tasks.filter_sets_load(&entry.name, &entry.sets);
+    }
+
+    /// Commits the `y` at a load confirmation: the unnamed panel goes.
+    fn commit_filter_set_load(&mut self, name: &str) {
+        self.tasks.filter_set_prompt_cancel();
+        self.set_filter_mode();
+
+        let task_targets_before = self.task_targets_before();
+        self.load_named_filter_set(name);
+        self.update_task_data_after_action(task_targets_before);
     }
 
     /// Keeps the numbered window pointing at entries that still exist.
@@ -681,6 +715,15 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         }
     }
 
+    /// The task targets as they stand, for `update_task_data_after_action` to
+    /// compare against once an action has run.
+    fn task_targets_before(&self) -> Option<Vec<String>> {
+        match self.tasks.status() {
+            crate::app::task::TaskStatus::Idle => None,
+            _ => Some(self.task_target_project_ids()),
+        }
+    }
+
     pub fn handle_action(
         &mut self,
         action: &Action,
@@ -691,14 +734,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             return Ok(Some(command));
         }
 
-        let task_targets_before = if !matches!(
-            self.tasks.status(),
-            crate::app::task::TaskStatus::Idle
-        ) {
-            Some(self.task_target_project_ids())
-        } else {
-            None
-        };
+        let task_targets_before = self.task_targets_before();
 
         let mode = self.mode;
         debug_log(&format!(
@@ -801,7 +837,19 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 return Ok(None);
             }
             Action::FilterSetLoad(position) => {
-                self.load_named_filter_set(*position);
+                let Some(entry) = self.filter_set_at(*position) else {
+                    return Ok(None);
+                };
+                // A bound panel is already on disk, so loading over it costs
+                // nothing. An unnamed one that is filtering exists nowhere
+                // else, and the digit did not ask for it to be thrown away.
+                if self.tasks.filter_set_is_unsaved() {
+                    self.tasks.filter_set_prompt_confirm_load(&entry.name);
+                    self.mode = Mode::FilterSetName;
+                    return Ok(None);
+                }
+
+                self.load_named_filter_set(&entry.name);
                 // Deliberately not an early return past the fetch decision:
                 // loading an entry can widen the due window pushed down to
                 // Asana, and `TaskQuery::covers` records a fetched window as
@@ -826,6 +874,9 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 return Ok(None);
             }
             Action::FilterSetNew => {
+                // Same reason as a load: the panel is about to go, and the
+                // write-through does not run until after this key.
+                self.sync_named_filter_set();
                 self.tasks.filter_set_new();
                 // Clearing a due filter widens the window pushed down to
                 // Asana, for the same reason loading an entry can, so this
@@ -1991,14 +2042,16 @@ mod tests {
         let (mut app, path) = filter_sets_app();
         type_into_field(&mut app, "Assignee", "alex");
         save_as(&mut app, "bravo");
-        press(&mut app, KeyCode::Char('y'));
-        type_into_field(&mut app, "Assignee", "");
+        // `n` between them, so the second entry starts from nothing rather
+        // than inheriting the first one's Assignee.
+        press(&mut app, KeyCode::Char('n'));
         type_into_field(&mut app, "Title", "ship");
         save_as(&mut app, "alpha");
-        press(&mut app, KeyCode::Char('y'));
+        press(&mut app, KeyCode::Char('n'));
 
         // Sorted by name, so `1` is alpha and `2` is bravo whatever order
-        // they were written in.
+        // they were written in. An empty unnamed panel has nothing to lose,
+        // so no confirmation stands in the way.
         press(&mut app, KeyCode::Char('2'));
 
         assert_eq!(app.tasks.filter_set_loaded_name(), Some("bravo"));
@@ -2013,6 +2066,118 @@ mod tests {
         // the panel.
         press(&mut app, KeyCode::Char('9'));
         assert_eq!(app.tasks.filter_set_loaded_name(), Some("alpha"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_digit_asks_before_throwing_away_an_unnamed_panel() {
+        let (mut app, path) = filter_sets_app();
+        type_into_field(&mut app, "Assignee", "alex");
+        save_as(&mut app, "saved");
+        // An unnamed panel with a filter in it: work that exists nowhere but
+        // on screen, and the digit did not ask for it to be thrown away.
+        press(&mut app, KeyCode::Char('n'));
+        type_into_field(&mut app, "Title", "unsaved work");
+
+        press(&mut app, KeyCode::Char('1'));
+
+        assert_eq!(app.mode(), Mode::FilterSetName, "it asks first");
+        assert_eq!(
+            app.tasks.filter_panel_rows()[0].1,
+            "unsaved work",
+            "and nothing has been loaded yet"
+        );
+
+        // `n` backs out, leaving the panel exactly as it was.
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(app.mode(), Mode::Filter);
+        assert_eq!(app.tasks.filter_panel_rows()[0].1, "unsaved work");
+        assert_eq!(app.tasks.filter_set_loaded_name(), None);
+
+        // `y` goes through with it.
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Char('y'));
+
+        assert_eq!(app.mode(), Mode::Filter);
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("saved"));
+        assert_eq!(app.tasks.filter_panel_rows()[0].1, "");
+        assert_eq!(app.tasks.filter_panel_rows()[1].1, "alex");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_digit_asks_nothing_when_there_is_nothing_to_lose() {
+        let (mut app, path) = filter_sets_app();
+        type_into_field(&mut app, "Assignee", "alex");
+        save_as(&mut app, "saved");
+
+        // Bound: every change is already on disk, so loading over it costs
+        // nothing.
+        assert!(!app.tasks.filter_set_is_unsaved());
+        press(&mut app, KeyCode::Char('1'));
+        assert_eq!(app.mode(), Mode::Filter, "no prompt for a bound panel");
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("saved"));
+
+        // Unnamed but empty: nothing worth a keypress to confirm.
+        press(&mut app, KeyCode::Char('n'));
+        assert!(!app.tasks.filter_set_is_unsaved());
+        press(&mut app, KeyCode::Char('1'));
+        assert_eq!(app.mode(), Mode::Filter, "nor for an empty one");
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("saved"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_digit_past_the_end_of_the_list_asks_nothing_and_does_nothing() {
+        let (mut app, path) = filter_sets_app();
+        type_into_field(&mut app, "Title", "unsaved work");
+
+        press(&mut app, KeyCode::Char('9'));
+
+        assert_eq!(app.mode(), Mode::Filter, "no entry, so no question");
+        assert_eq!(app.tasks.filter_panel_rows()[0].1, "unsaved work");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_edit_still_in_hand_reaches_disk_before_the_panel_is_replaced() {
+        // The write-through runs *after* the key, by which point a load has
+        // already thrown the panel away — so the load has to flush first.
+        let (mut app, path) = filter_sets_app();
+        save_as(&mut app, "alpha");
+        press(&mut app, KeyCode::Char('n'));
+        save_as(&mut app, "bravo");
+
+        move_to_field(&mut app, "Assignee");
+        press(&mut app, KeyCode::Enter);
+        app.tasks.set_input_pending(true);
+        for ch in "alex".chars() {
+            press(&mut app, KeyCode::Char(ch));
+        }
+        // Still mid-burst, so committing the edit does not flush it either.
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.mode(), Mode::Filter);
+        assert!(
+            reread(&path).filter_sets[1].sets[0].fields.is_empty(),
+            "still unwritten, mid-burst"
+        );
+
+        // `1` loads alpha. The edit bravo was still holding must not go with
+        // the panel it was typed into.
+        app.tasks.set_input_pending(false);
+        press(&mut app, KeyCode::Char('1'));
+
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("alpha"));
+        let bravo = reread(&path)
+            .filter_sets
+            .into_iter()
+            .find(|entry| entry.name == "bravo")
+            .expect("bravo is still there");
+        assert_eq!(bravo.sets[0].fields[0].query, "alex");
 
         let _ = std::fs::remove_file(&path);
     }
@@ -2052,7 +2217,9 @@ mod tests {
         // leaves rows permanently missing rather than merely late.
         let (mut app, path) = filter_sets_app();
         save_as(&mut app, "everything");
-        press(&mut app, KeyCode::Char('y'));
+        // Unbound first, or the due window below would write straight through
+        // into the entry this test needs to stay wide.
+        press(&mut app, KeyCode::Char('n'));
 
         // A narrow due window, picked on the calendar the way a user would.
         move_to_field(&mut app, "Due");
@@ -2063,7 +2230,6 @@ mod tests {
         }
         press(&mut app, KeyCode::Enter);
         save_as(&mut app, "july");
-        press(&mut app, KeyCode::Char('y'));
 
         // Re-fetch so the cache records the narrow window, not the broad one
         // the first load used.
@@ -2080,7 +2246,9 @@ mod tests {
         assert_eq!(narrow.due_after.as_deref(), Some("2026-07-01"));
         assert!(app.tasks.can_serve_query_for_targets(&targets, &narrow));
 
-        // `everything` sorts before `july`, so `1` is the wider entry.
+        // `everything` sorts before `july`, so `1` is the wider entry. The
+        // panel is bound to `july`, so nothing is at risk and no
+        // confirmation stands in the way.
         press(&mut app, KeyCode::Char('1'));
 
         assert_eq!(app.tasks.filter_set_loaded_name(), Some("everything"));

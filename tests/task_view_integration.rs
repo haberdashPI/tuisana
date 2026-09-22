@@ -766,8 +766,16 @@ fn a_filter_set_can_be_named_kept_current_copied_to_new_and_loaded_back() {
     );
     assert_eq!(saved_sets(&path), before, "an unnamed panel writes nothing");
 
-    // `1` loads it back, replacing what the unnamed copy wandered off to.
+    // `1` would replace what the unnamed copy wandered off to, and that copy
+    // exists nowhere else — so it asks first.
     press(&mut app, &mut terminal, vec![chr('1')]);
+    assert_eq!(app.mode(), tuisana::config::Mode::FilterSetName);
+    assert_eq!(
+        app.tasks.filter_panel_rows()[3].1,
+        "2026-10-01",
+        "nothing has been loaded over it yet"
+    );
+    press(&mut app, &mut terminal, vec![chr('y')]);
 
     assert_eq!(app.tasks.filter_set_loaded_name(), Some("mine"));
     let rows = app.tasks.filter_panel_rows();
