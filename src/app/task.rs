@@ -2435,6 +2435,15 @@ impl TaskState {
         self.view.filter_editor.prompt_confirm_load(name);
     }
 
+    /// How many fields filter something, across every set.
+    ///
+    /// The pane's own `N active` counts the set on screen, because that is
+    /// what its rows are showing. This counts the whole panel, which is what
+    /// a confirmation about losing it has to name.
+    pub fn active_filter_count_across_sets(&self) -> usize {
+        self.filter_set_counts().iter().sum()
+    }
+
     /// Whether replacing the panel would throw away unsaved work.
     pub fn filter_set_is_unsaved(&self) -> bool {
         self.view.filter_editor.is_unsaved()

@@ -1,26 +1,26 @@
- TUISANA  ▸ 1 project ▸ 2 tasks
+ TUISANA  ▸ 1 project ▸ 3 tasks
 ┌ Sets ────────────────┐┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1 active ┓
-│▸ unnamed             │┃    Title     fuzzy     —                                                                     ┃
-│  1 set · 1 active    │┃▍ ● Assignee  fuzzy     alex                                                                  ┃
+│▸ Sprint triage       │┃▍ ● Title     fuzzy     ship                                                                  ┃
+│  1 set · 1 active    │┃    Assignee  fuzzy     —                                                                     ┃
 │──────────────────────│┃    Due       date      —                                                                     ┃
 │1  Blocked            │┃    Start     date      —                                                                     ┃
 │2  Overdue mine       │┃    State     labels    —                                                                     ┃
-│3  Sprint triage      │┃    Projects  contains  —                                                                     ┃
+│3 ▍Sprint triage      │┃    Projects  contains  —                                                                     ┃
 │4  Waiting on         │┃    Priority  labels    —                                                                     ┃
 │                      │┃                                                                                              ┃
 │                      │┃                                                                                              ┃
 └──────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-┌ Tasks ────────────────────────────────────────────────────────────────────────────────────────────── 2 tasks · row 1 ┐
-│   Task                                             │ Assignee  │   Due▲ │  Start │ St │ Projects           │ Priority│
+┌ Tasks ────────────────────────────────────────────────────────────────────────────────────────────── 3 tasks · row 1 ┐
+│   Task                                         │ Assignee     │    Due▲ │  Start │ St │ Projects           │ Priority│
 │                                                                                                                      │
-│▌Northwind BTX 4412 ───────────────┏ Discard filters? ━━━━━━━━━━━━━━━━━━━━━━━━━━━┓────────────────────────────────────│
+│▌Northwind BTX 4412 ───────────────┏ Delete filter set? ━━━━━━━━━━━━━━━━━━━━━━━━━┓────────────────────────────────────│
 │                                   ┃                                             ┃                                    │
-│   Study Kit Design ···············┃ This filter panel has no name, so the       ┃····································│
-│▍  Ship release candidate to the st┃ 1 filter it is holding exists nowhere else. ┃│ ○  │ Northwind BTX 4412 │ High    │
-│                                   ┃                                             ┃                                    │
-│   Shipment ·······················┃ y        discard them and load Blocked      ┃····································│
-│   Close out packaging vendor contr┃ n / esc  keep what is on screen             ┃│ ○  │ Northwind BTX 4412 │ Low     │
-│                                   ┃                                             ┃                                    │
+│   Study Kit Design ···············┃ Sprint triage is removed from tuisana.toml. ┃····································│
+│▍  Review shipment requirements doc┃ The panel keeps what it is showing.         ┃│ ○  │ Northwind BTX 4412 │ High    │
+│   Ship release candidate to the st┃                                             ┃│ ○  │ Northwind BTX 4412 │ High    │
+│                                   ┃ y        delete it                          ┃                                    │
+│   Shipment ·······················┃ n / esc  keep it                            ┃····································│
+│   Close the quarter's shipping rep┃                                             ┃│ ○  │ Northwind BTX 4412 │ Low     │
 │                                   ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                                    │
 │                                                                                                                      │
 │                                                                                                                      │

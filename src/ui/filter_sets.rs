@@ -12,13 +12,17 @@
 use ratatui::{
     layout::Rect,
     text::{Line, Span},
+    widgets::{Clear, Paragraph},
+    Frame,
 };
 
 use crate::{
     app::task::{SidebarPrompt, TaskState, MAX_SIDEBAR_ROWS},
-    config::NamedFilterSet,
+    config::{Mode, NamedFilterSet},
     ui::{
-        chrome::Chip,
+        chrome::{pane_block, Chip},
+        hints::key_column_spans,
+        layout,
         text::{fill, truncate_with_ellipsis, visible_width},
         theme::Theme,
     },
@@ -183,9 +187,11 @@ pub fn prompt_line(state: &TaskState) -> Option<PromptLine> {
     // A report wins the line: it is about the key that was just pressed, and
     // the prompt that produced it has already closed.
     if let Some(notice) = state.filter_sets_notice() {
+        // All label and no answer: a report asks nothing, and putting it in
+        // the half that gives way is what keeps it inside the border.
         return Some(PromptLine {
-            label: "!".to_string(),
-            text: notice.to_string(),
+            label: notice.to_string(),
+            text: String::new(),
             caret: None,
             error: true,
         });
@@ -198,22 +204,120 @@ pub fn prompt_line(state: &TaskState) -> Option<PromptLine> {
             caret: Some(*caret),
             error: false,
         }),
-        SidebarPrompt::ConfirmDelete { name } => Some(PromptLine {
-            label: format!("delete {name}?"),
-            text: "y/n".to_string(),
-            caret: None,
-            error: false,
-        }),
-        // The entry the digit named, rather than what is being lost: the
-        // panel about to go is the one on screen, and the `current` row above
-        // already says it is `unnamed`.
-        SidebarPrompt::ConfirmLoad { name } => Some(PromptLine {
-            label: format!("discard for {name}?"),
-            text: "y/n".to_string(),
-            caret: None,
-            error: false,
+        // The confirmations are a modal. A `y/n` on a border is the right
+        // weight for "what shall I call this" and the wrong weight for
+        // "this throws work away".
+        SidebarPrompt::ConfirmDelete { .. } | SidebarPrompt::ConfirmLoad { .. } => None,
+    }
+}
+
+/// Widest the confirmation will grow, so its lines stay readable.
+const CONFIRM_WIDTH: u16 = 56;
+
+/// A decision that has to be answered before anything else happens.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfirmView {
+    pub title: &'static str,
+    /// What is about to happen, and to what.
+    pub body: Vec<String>,
+    /// `(keys, what they do)`, in the order they are offered.
+    pub choices: Vec<(&'static str, String)>,
+}
+
+/// The confirmation the panel is waiting on, if it is waiting on one.
+pub fn confirm_view(state: &TaskState) -> Option<ConfirmView> {
+    match state.filter_set_prompt()? {
+        SidebarPrompt::Save { .. } => None,
+        SidebarPrompt::ConfirmLoad { name } => {
+            let filters = state.active_filter_count_across_sets();
+            Some(ConfirmView {
+                title: "Discard filters?",
+                body: vec![
+                    "This filter panel has no name, so the".to_string(),
+                    format!(
+                        "{filters} filter{} it is holding {} nowhere else.",
+                        if filters == 1 { "" } else { "s" },
+                        if filters == 1 { "exists" } else { "exist" },
+                    ),
+                ],
+                choices: vec![
+                    ("y", format!("discard them and load {name}")),
+                    ("n / esc", "keep what is on screen".to_string()),
+                ],
+            })
+        }
+        SidebarPrompt::ConfirmDelete { name } => Some(ConfirmView {
+            title: "Delete filter set?",
+            body: vec![
+                format!("{name} is removed from tuisana.toml."),
+                "The panel keeps what it is showing.".to_string(),
+            ],
+            choices: vec![
+                ("y", "delete it".to_string()),
+                ("n / esc", "keep it".to_string()),
+            ],
         }),
     }
+}
+
+/// Renders the confirmation centred over `area`.
+///
+/// A modal rather than a line on the sidebar's border, and drawn with the
+/// focused border, because every key goes to it until it is answered — which
+/// is exactly what a prompt hidden in a frame fails to say.
+pub fn render_confirm(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    theme: &Theme,
+    mode: Mode,
+    view: &ConfirmView,
+) {
+    let key_width = view
+        .choices
+        .iter()
+        .map(|(keys, _)| visible_width(keys))
+        .max()
+        .unwrap_or(0);
+
+    let mut lines = vec![Line::default()];
+    for text in &view.body {
+        lines.push(Line::from(Span::styled(text.clone(), theme.text)));
+    }
+    lines.push(Line::default());
+    for (keys, label) in &view.choices {
+        lines.push(Line::from(key_column_spans(
+            keys,
+            label,
+            key_width,
+            theme.key,
+            theme.text,
+        )));
+    }
+    lines.push(Line::default());
+
+    let content = lines
+        .iter()
+        .map(|line| visible_width(&line.to_string()))
+        .max()
+        .unwrap_or(0);
+    // Two for the border, two for the gutter the text sits in.
+    let width = ((content as u16).saturating_add(4)).min(CONFIRM_WIDTH).min(area.width);
+
+    let box_area = layout::centered(area, width, lines.len() as u16 + 2);
+    let block = pane_block(theme, true, mode, view.title, &[]);
+    let inner = block.inner(box_area);
+
+    frame.render_widget(Clear, box_area);
+    frame.render_widget(block, box_area);
+    // One column of gutter, so the text does not butt up against the frame.
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x: inner.x.saturating_add(1),
+            width: inner.width.saturating_sub(2),
+            ..inner
+        },
+    );
 }
 
 /// Renders the sidebar's body. Exactly one line per row.
@@ -290,8 +394,8 @@ fn filter_set_row_line(row: &FilterSetRow, theme: &Theme, width: usize) -> Line<
 /// line — and it is why `w` opens the sidebar: the prompt has somewhere to be.
 ///
 /// The label is what gives when `width` runs out. A sidebar is 24 columns and
-/// a saved name can be any length, so something has to — and the typed name
-/// or the `y/n` is the half the user is answering with.
+/// neither a saved name nor an error message has a bound, so something has to
+/// — and the typed name is the half the user is looking at.
 pub fn prompt_footer_line(
     prompt: &PromptLine,
     theme: &Theme,
@@ -303,19 +407,21 @@ pub fn prompt_footer_line(
         None => prompt.text.clone(),
     };
 
-    // Three spaces of padding: one each side, one between the two halves.
+    // A space each side, and one between the halves when there are two.
+    let padding = if text.is_empty() { 2 } else { 3 };
     let label_width = width
-        .saturating_sub(visible_width(&text) + 3)
+        .saturating_sub(visible_width(&text) + padding)
         .max(1);
     let label = truncate_with_ellipsis(&prompt.label, label_width, theme.glyphs.ellipsis);
 
-    Line::from(vec![
-        Span::raw(" "),
-        Span::styled(label, theme.muted),
-        Span::raw(" "),
-        Span::styled(text, style),
-        Span::raw(" "),
-    ])
+    let mut spans = vec![Span::raw(" "), Span::styled(label, theme.muted)];
+    if !text.is_empty() {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(text, style));
+    }
+    spans.push(Span::raw(" "));
+
+    Line::from(spans)
 }
 
 /// Puts the edit cursor at the caret, rather than always at the end.
@@ -339,8 +445,8 @@ fn plural(word: &str, count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_sets_lines, prompt_footer_line, render_filter_sets, split_sidebar,
-        MIN_FILTER_WIDTH, SIDEBAR_WIDTH,
+        confirm_view, filter_sets_lines, prompt_footer_line, render_filter_sets,
+        split_sidebar, MIN_FILTER_WIDTH, SIDEBAR_WIDTH,
     };
     use ratatui::layout::Rect;
 
@@ -527,18 +633,49 @@ mod tests {
     }
 
     #[test]
-    fn the_delete_prompt_names_what_it_would_remove() {
+    fn the_delete_confirmation_says_what_goes_and_what_stays() {
         let mut state = sidebar_state(9);
         state.filter_set_bind("Sprint triage");
         assert!(state.filter_set_prompt_delete());
 
-        let view = render_filter_sets(&state, &entries(1)).expect("the sidebar is open");
-        let rendered =
-            prompt_footer_line(view.prompt.as_ref().expect("open"), &Theme::default(), 60)
-                .to_string();
+        let view = confirm_view(&state).expect("a decision is waiting");
+        let text = view.body.join(" ");
 
-        assert!(rendered.contains("delete Sprint triage?"), "{rendered}");
-        assert!(rendered.contains("y/n"), "{rendered}");
+        assert_eq!(view.title, "Delete filter set?");
+        assert!(text.contains("Sprint triage is removed"), "{text}");
+        assert!(
+            text.contains("The panel keeps what it is showing"),
+            "staying is as worth describing as going: {text}"
+        );
+        assert_eq!(
+            view.choices.iter().map(|(keys, _)| *keys).collect::<Vec<_>>(),
+            ["y", "n / esc"]
+        );
+    }
+
+    #[test]
+    fn the_confirmations_stay_off_the_border_that_was_too_easy_to_miss() {
+        let mut state = sidebar_state(9);
+        state.filter_set_bind("Sprint triage");
+        state.filter_set_prompt_delete();
+
+        let view = render_filter_sets(&state, &entries(1)).expect("the sidebar is open");
+
+        assert_eq!(view.prompt, None, "a confirmation is a modal, not a title");
+        assert!(confirm_view(&state).is_some());
+    }
+
+    #[test]
+    fn the_save_prompt_keeps_its_place_on_the_border() {
+        // Naming a thing is not a decision worth a modal; discarding one is.
+        let mut state = sidebar_state(9);
+        state.filter_set_prompt_save();
+
+        assert!(confirm_view(&state).is_none());
+        assert!(render_filter_sets(&state, &entries(1))
+            .expect("the sidebar is open")
+            .prompt
+            .is_some());
     }
 
     /// The filter pane borrows it when the sidebar has been dropped for
@@ -553,25 +690,28 @@ mod tests {
     }
 
     #[test]
-    fn the_load_confirmation_names_the_entry_the_digit_addressed() {
+    fn the_load_confirmation_names_the_entry_and_counts_what_would_go() {
         let mut state = sidebar_state(9);
         state.filter_set_prompt_confirm_load("Sprint triage");
 
-        let view = render_filter_sets(&state, &entries(4)).expect("the sidebar is open");
-        let rendered =
-            prompt_footer_line(view.prompt.as_ref().expect("open"), &Theme::default(), 60)
-                .to_string();
+        let view = confirm_view(&state).expect("a decision is waiting");
 
-        assert!(rendered.contains("discard for Sprint triage?"), "{rendered}");
-        assert!(rendered.contains("y/n"), "{rendered}");
+        assert_eq!(view.title, "Discard filters?");
+        assert!(
+            view.choices[0].1.contains("Sprint triage"),
+            "the entry the digit addressed: {:?}",
+            view.choices
+        );
+        // Nothing is loaded in this fixture, so the count is honest about it.
+        assert!(view.body.join(" ").contains("0 filters"), "{:?}", view.body);
     }
 
     #[test]
     fn a_prompt_too_long_for_the_border_gives_up_its_label_not_its_answer() {
-        // A sidebar is 24 columns and a saved name can be any length, so
-        // something has to give — and `y/n` is the half being answered.
+        // A sidebar is 24 columns and what a failed write has to say can be
+        // any length, so something has to give.
         let mut state = sidebar_state(9);
-        state.filter_set_prompt_confirm_load("A name far longer than any sidebar");
+        state.set_filter_sets_notice("could not save: permission denied (os error 13)");
         let view = render_filter_sets(&state, &entries(1)).expect("the sidebar is open");
         let theme = Theme::default();
 
@@ -582,7 +722,6 @@ mod tests {
             visible_width(&line.to_string()) <= width,
             "the prompt overflowed the border: {line:?}"
         );
-        assert!(line.to_string().contains("y/n"), "{line:?}");
     }
 
     #[test]
@@ -594,6 +733,6 @@ mod tests {
         let prompt = view.prompt.as_ref().expect("the report has somewhere to go");
 
         assert!(prompt.error);
-        assert!(prompt.text.contains("could not save"));
+        assert!(prompt.label.contains("could not save"));
     }
 }

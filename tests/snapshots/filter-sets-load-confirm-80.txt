@@ -9,19 +9,19 @@
 ┃    Priority  labels    —                                                     ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
-┗ discard for Blocked? y/n ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ┌ Tasks ─────────────────────────────────────── 2 tasks · row 1 · columns 0/32 ┐
 │   Task                                     │ Assignee  │   Due▲ │  Start │ St│
 │                                                                              │
-│▌Northwind BTX 4412 ──────────────────────────────────────────────────────────│
-│                                                                              │
-│   Study Kit Design ··························································│
-│▍  Ship release candidate to the study team │ Alex Chen │  Today │ Aug 10 │ ○ │
-│                                                                              │
-│   Shipment ··································································│
-│   Close out packaging vendor contract      │ Alex Chen │ Nov 14 │  Oct 1 │ ○ │
-│                                                                              │
-│                                                                              │
+│▌Northwind BTX ┏ Discard filters? ━━━━━━━━━━━━━━━━━━━━━━━━━━━┓────────────────│
+│               ┃                                             ┃                │
+│   Study Kit De┃ This filter panel has no name, so the       ┃················│
+│▍  Ship release┃ 1 filter it is holding exists nowhere else. ┃ay │ Aug 10 │ ○ │
+│               ┃                                             ┃                │
+│   Shipment ···┃ y        discard them and load Blocked      ┃················│
+│   Close out pa┃ n / esc  keep what is on screen             ┃14 │  Oct 1 │ ○ │
+│               ┃                                             ┃                │
+│               ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                │
 │                                                                              │
 │                                                                              │
 │                                                                              │

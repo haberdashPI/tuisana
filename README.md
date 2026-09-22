@@ -418,14 +418,16 @@ of.
   entries in name order, numbered from the top of the visible window.
 - `1`-`9` load the entry at that position. `<` and `>` page the window when
   there are more entries than fit.
-- Loading over an **unnamed panel that is filtering** asks first: `y` goes
-  through with it, `n` or `esc` backs out. A bound panel is already on disk,
-  and an empty one has nothing to lose, so neither is worth a keypress to
-  confirm.
+- Loading over an **unnamed panel that is filtering** asks first, in a
+  centered window that says what goes and what stays: `y` goes through with
+  it, `n` or `esc` backs out. A bound panel is already on disk, and an empty
+  one has nothing to lose, so neither is worth a keypress to confirm.
 - `w` opens a one-line prompt on the sidebar's border, pre-filled with the
   loaded name. `enter` commits, `esc` cancels. An existing name is
-  overwritten; a new one is created. A blank name is refused.
-- `d` deletes the **loaded** entry after a `y`/`n` confirmation, and unbinds
+  overwritten; a new one is created. A blank name is refused. Naming a thing
+  is not a decision worth a window; the two that discard something are, so
+  those are the ones that get one.
+- `d` deletes the **loaded** entry after the same confirmation, and unbinds
   the panel. It is refused when nothing is loaded.
 - `n` throws the panel away and starts from nothing: one empty set, every row
   back to the match mode it was built with, and nothing bound. Unlike `a`,

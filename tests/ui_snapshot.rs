@@ -710,6 +710,23 @@ fn filter_mode_confirming_a_load_over_unsaved_filters() {
     );
 }
 
+/// `d` over a loaded entry: the other confirmation, which says what leaving
+/// and what staying actually mean.
+#[test]
+fn filter_mode_confirming_a_delete() {
+    assert_snapshot_with(
+        named_sets_config(),
+        vec![120],
+        "filter-sets-delete-confirm",
+        || {
+            vec![
+                enter_task_mode(),
+                vec![key('f'), key('b'), key('3'), key('d')],
+            ]
+        },
+    );
+}
+
 /// A require-empty on `Due`, so `(none)` is drawn next to the `—` of the
 /// untouched rows and the two are visibly different.
 #[test]

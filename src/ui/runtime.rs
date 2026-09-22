@@ -193,10 +193,17 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
             );
 
             // Drawn last so it sits over the panes; the layout underneath is
-            // unchanged, which is the whole point of an overlay. Only one shows
-            // at a time, and help wins: it is reachable from inside the picker
-            // via `?`, so asking for it has to actually show it.
-            if help_visible(app, mode) {
+            // unchanged, which is the whole point of an overlay. Only one
+            // shows at a time.
+            //
+            // A confirmation wins outright: every key goes to it until it is
+            // answered, and `?` is not among them, so help showing over it
+            // would be stale and unclosable. Below that help wins, because it
+            // *is* reachable from inside the picker via `?` and asking for it
+            // has to actually show it.
+            if let Some(confirm) = filter_sets::confirm_view(&app.tasks) {
+                filter_sets::render_confirm(frame, regions.body, &theme, mode, &confirm);
+            } else if help_visible(app, mode) {
                 help_overlay::render(frame, regions.body, &theme, keymap, mode);
             } else if let Some(dialog) = app.tasks.gantt().dialog() {
                 gantt_order::render(frame, regions.body, &theme, keymap, dialog);
