@@ -698,7 +698,8 @@ fn default_bindings() -> Vec<Bind> {
         // bound in task mode only.
         Bind::with_mode("b", Mode::Filter, "filter_sets_toggle"),
         Bind::with_mode("w", Mode::Filter, "filter_set_save"),
-        Bind::with_mode("y", Mode::Filter, "filter_set_detach"),
+        Bind::with_mode("y", Mode::Filter, "filter_set_copy_to_new"),
+        Bind::with_mode("n", Mode::Filter, "filter_set_new"),
         Bind::with_mode("d", Mode::Filter, "filter_set_delete"),
         Bind::with_mode("<", Mode::Filter, "filter_sets_page_back"),
         Bind::with_mode(">", Mode::Filter, "filter_sets_page_forward"),
@@ -1494,7 +1495,8 @@ name = "Mine"
         for (key, action) in [
             (KeyBinding::Char('b'), Action::FilterSetsToggle),
             (KeyBinding::Char('w'), Action::FilterSetSave),
-            (KeyBinding::Char('y'), Action::FilterSetDetach),
+            (KeyBinding::Char('y'), Action::FilterSetCopyToNew),
+            (KeyBinding::Char('n'), Action::FilterSetNew),
             (KeyBinding::Char('d'), Action::FilterSetDelete),
             (KeyBinding::Char('<'), Action::FilterSetsPageBack),
             (KeyBinding::Char('>'), Action::FilterSetsPageForward),

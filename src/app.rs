@@ -821,8 +821,16 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 }
                 return Ok(None);
             }
-            Action::FilterSetDetach => {
+            Action::FilterSetCopyToNew => {
                 self.tasks.filter_set_detach();
+                return Ok(None);
+            }
+            Action::FilterSetNew => {
+                self.tasks.filter_set_new();
+                // Clearing a due filter widens the window pushed down to
+                // Asana, for the same reason loading an entry can, so this
+                // takes the same route past the fetch decision.
+                self.update_task_data_after_action(task_targets_before);
                 return Ok(None);
             }
             Action::SetProjectMode => {
@@ -1852,7 +1860,7 @@ mod tests {
     }
 
     #[test]
-    fn y_detaches_and_leaves_the_saved_entry_as_it_was() {
+    fn y_copies_the_panel_to_a_new_unnamed_one_and_leaves_the_entry_as_it_was() {
         let (mut app, path) = filter_sets_app();
         type_into_field(&mut app, "Assignee", "alex");
         save_as(&mut app, "mine");
@@ -1874,6 +1882,63 @@ mod tests {
             "and later edits no longer reach the entry"
         );
 
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn n_starts_a_fresh_panel_without_disturbing_the_entry_it_came_from() {
+        let (mut app, path) = filter_sets_app();
+        type_into_field(&mut app, "Assignee", "alex");
+        save_as(&mut app, "mine");
+        let before = reread(&path);
+
+        press(&mut app, KeyCode::Char('n'));
+
+        assert_eq!(app.tasks.filter_set_loaded_name(), None);
+        assert_eq!(app.tasks.active_filter_count(), 0, "nothing is set");
+        assert_eq!(app.tasks.filter_set_position(), (0, 1), "one empty tab");
+        assert_eq!(
+            reread(&path).filter_sets,
+            before.filter_sets,
+            "the entry keeps what was last written to it"
+        );
+
+        // And the now-unbound panel writes nothing on a later edit.
+        type_into_field(&mut app, "Title", "ship");
+        assert_eq!(reread(&path).filter_sets, before.filter_sets);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_fresh_panel_refetches_what_the_filter_it_dropped_was_hiding() {
+        // `n` clears a due filter, which widens the window pushed down to
+        // Asana — and a window recorded as covered but never fetched leaves
+        // rows missing for good.
+        let (mut app, path) = filter_sets_app();
+
+        move_to_field(&mut app, "Due");
+        press(&mut app, KeyCode::Enter);
+        for ch in "2026-07-01..2026-07-31".chars() {
+            press(&mut app, KeyCode::Char(ch));
+        }
+        press(&mut app, KeyCode::Enter);
+
+        app.tasks.invalidate_cache();
+        app.request_task_data().expect("fetch starts");
+        settle(&mut app);
+        app.poll_task_data();
+        assert!(app.task_data_receiver.is_none());
+
+        press(&mut app, KeyCode::Char('n'));
+
+        assert_eq!(app.tasks.desired_task_query().due_after, None);
+        assert!(
+            app.task_data_receiver.is_some(),
+            "the dropped filter has to be refetched, not filtered from cache"
+        );
+
+        settle(&mut app);
         let _ = std::fs::remove_file(&path);
     }
 

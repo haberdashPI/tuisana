@@ -718,7 +718,7 @@ fn saved_sets(path: &std::path::Path) -> Vec<tuisana::config::NamedFilterSet> {
 }
 
 #[test]
-fn a_filter_set_can_be_named_kept_current_detached_and_loaded_back() {
+fn a_filter_set_can_be_named_kept_current_copied_to_new_and_loaded_back() {
     let (mut app, mut terminal, path) = named_sets_app();
 
     // Fill in Assignee, then save the panel under a name.
@@ -752,8 +752,9 @@ fn a_filter_set_can_be_named_kept_current_detached_and_loaded_back() {
         && field.query == "alex"));
     assert!(fields.iter().any(|field| field.key == "due" && field.empty));
 
-    // `y` detaches. The panel keeps what it is showing, the entry keeps what
-    // was last written to it, and a later edit reaches neither.
+    // `y` copies the panel to a new unnamed one: it keeps what it is
+    // showing, the entry keeps what was last written to it, and a later edit
+    // reaches neither.
     press(&mut app, &mut terminal, vec![chr('y')]);
     assert_eq!(app.tasks.filter_set_loaded_name(), None);
     let before = saved_sets(&path);
@@ -763,9 +764,9 @@ fn a_filter_set_can_be_named_kept_current_detached_and_loaded_back() {
         &mut terminal,
         "2026-10-01".chars().map(chr).chain([ret()]).collect(),
     );
-    assert_eq!(saved_sets(&path), before, "a detached panel writes nothing");
+    assert_eq!(saved_sets(&path), before, "an unnamed panel writes nothing");
 
-    // `1` loads it back, replacing what the detached panel wandered off to.
+    // `1` loads it back, replacing what the unnamed copy wandered off to.
     press(&mut app, &mut terminal, vec![chr('1')]);
 
     assert_eq!(app.tasks.filter_set_loaded_name(), Some("mine"));
@@ -773,7 +774,20 @@ fn a_filter_set_can_be_named_kept_current_detached_and_loaded_back() {
     assert_eq!(rows[1], ("Assignee".to_string(), "alex".to_string()));
     assert_eq!(rows[2].0, "Due");
     assert_eq!(rows[2].1, "(none)", "the require-empty came back");
-    assert_eq!(rows[3].1, "", "and the Start the detached panel picked did not");
+    assert_eq!(rows[3].1, "", "and the Start the unnamed copy picked did not");
+
+    // `n` throws the panel away and starts from nothing, leaving the entry
+    // it was bound to exactly as it was on disk.
+    let before = saved_sets(&path);
+    press(&mut app, &mut terminal, vec![chr('n')]);
+
+    assert_eq!(app.tasks.filter_set_loaded_name(), None);
+    assert!(app
+        .tasks
+        .filter_panel_rows()
+        .iter()
+        .all(|(_, query)| query.is_empty()));
+    assert_eq!(saved_sets(&path), before);
 
     let _ = std::fs::remove_file(&path);
 }

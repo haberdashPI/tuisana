@@ -78,8 +78,8 @@ pub struct HintContext {
     /// How many named filter sets are saved, which is what decides whether
     /// there is a second page to move to.
     pub saved_filter_sets: usize,
-    /// The panel is bound to a named entry, so there is something to detach
-    /// from and something to delete.
+    /// The panel is bound to a named entry, so there is something to copy
+    /// away from and something to delete.
     pub filter_set_loaded: bool,
 }
 
@@ -129,8 +129,9 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
             if context.filter_sets_sidebar {
                 hints.push(Hint::literal("1-9", "load"));
                 hints.push(Hint::new(&[Action::FilterSetSave], "save"));
+                hints.push(Hint::new(&[Action::FilterSetNew], "new"));
                 if context.filter_set_loaded {
-                    hints.push(Hint::new(&[Action::FilterSetDetach], "detach"));
+                    hints.push(Hint::new(&[Action::FilterSetCopyToNew], "copy to new"));
                     hints.push(Hint::new(&[Action::FilterSetDelete], "delete"));
                 }
                 if context.saved_filter_sets > crate::app::task::MAX_SIDEBAR_ROWS {
@@ -512,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn detach_and_delete_appear_only_once_the_panel_is_bound() {
+    fn copy_to_new_and_delete_appear_only_once_the_panel_is_bound() {
         let unbound = hints_for(
             Mode::Filter,
             HintContext {
@@ -529,9 +530,12 @@ mod tests {
             },
         );
 
-        assert!(!unbound.iter().any(|hint| hint.label == "detach"));
+        // Both act on the entry the panel is bound to, so neither is offered
+        // before there is one. `new` needs no binding, so it always shows.
+        assert!(!unbound.iter().any(|hint| hint.label == "copy to new"));
         assert!(!unbound.iter().any(|hint| hint.label == "delete"));
-        assert!(bound.iter().any(|hint| hint.label == "detach"));
+        assert!(unbound.iter().any(|hint| hint.label == "new"));
+        assert!(bound.iter().any(|hint| hint.label == "copy to new"));
         assert!(bound.iter().any(|hint| hint.label == "delete"));
     }
 

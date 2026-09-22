@@ -244,7 +244,8 @@ fn filter_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::FilterSetsToggle], "show the sidebar"),
                 Hint::literal("1-9", "load that entry"),
                 Hint::new(&[Action::FilterSetSave], "save under a name"),
-                Hint::new(&[Action::FilterSetDetach], "detach, keeping the panel"),
+                Hint::new(&[Action::FilterSetCopyToNew], "copy to a new unnamed one"),
+                Hint::new(&[Action::FilterSetNew], "start from nothing"),
                 Hint::new(&[Action::FilterSetDelete], "delete the loaded one"),
                 Hint::new(
                     &[Action::FilterSetsPageBack, Action::FilterSetsPageForward],

@@ -241,7 +241,8 @@ All bindable commands:
 - `filter_sets_page_back`
 - `filter_sets_page_forward`
 - `filter_set_save`
-- `filter_set_detach`
+- `filter_set_copy_to_new`
+- `filter_set_new`
 - `filter_set_delete`
 
 **Calendar mode** (the date picker)
@@ -364,7 +365,9 @@ The top window is shared between the project list and the filter view. When the 
 - `!` to negate the selected field, `~` to negate the whole set
 - `b` to show or hide the named-set sidebar
 - `1`-`9` to load a named set, `<`/`>` to page the list
-- `w` to save the panel under a name, `y` to detach from it, `d` to delete it
+- `w` to save the panel under a name, `y` to copy it to a new unnamed one,
+  `d` to delete it
+- `n` to start a completely fresh panel
 - `ctrl-l` to clear the search string
 - `ctrl-z`, `ctrl-s`, `ctrl-r` to switch search mode
 
@@ -418,8 +421,12 @@ of.
 - `w` opens a one-line prompt on the sidebar's border, pre-filled with the
   loaded name. `enter` commits, `esc` cancels. An existing name is
   overwritten; a new one is created. A blank name is refused.
-- `d` deletes the **loaded** entry after a `y`/`n` confirmation, and detaches
+- `d` deletes the **loaded** entry after a `y`/`n` confirmation, and unbinds
   the panel. It is refused when nothing is loaded.
+- `n` throws the panel away and starts from nothing: one empty set, every row
+  back to the match mode it was built with, and nothing bound. Unlike `a`,
+  which keeps the match modes so a second set inherits them, this is a blank
+  slate. The entry you were on keeps whatever was last written to it.
 
 **Loading binds the panel to the name.** From then on the entry is a live view
 rather than a snapshot: type into a field, add a tab, negate a set, and the
@@ -428,10 +435,11 @@ open, not like a clipboard — the alternative, a snapshot you have to remember
 to re-save, is the one that loses work. The write happens once per settled
 burst of typing, not once per keystroke.
 
-Two escapes: `y` **detaches**, keeping exactly what is on screen while the
-entry keeps whatever was last written to it — this is how you take a saved
-filter as a starting point and go somewhere else with it. `w` saves under a
-new name, which rebinds to that one.
+Two escapes: `y` **copies the panel to a new unnamed one**, keeping exactly
+what is on screen while the entry keeps whatever was last written to it —
+this is how you take a saved filter as a starting point and go somewhere else
+with it without disturbing the original. `w` saves under a new name, which
+rebinds to that one.
 
 A filter naming a custom field from a project you have not loaded is *kept*,
 not dropped: it is re-resolved each time a project's fields arrive, and

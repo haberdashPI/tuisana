@@ -1092,6 +1092,28 @@ impl TaskFilterEditorState {
         self.stop_editing();
     }
 
+    /// Throws the panel away and starts again: one empty set, every row back
+    /// to the match mode it was built with, and nothing parked.
+    ///
+    /// Stronger than the `cleared` that `add_set` uses, which keeps the match
+    /// modes on purpose so a second set inherits the first one's. This is
+    /// "start from nothing", so the modes and the field cursor go too.
+    fn reset(&mut self) {
+        let mut fresh = self
+            .sets
+            .first()
+            .map(TaskFilterSet::cleared)
+            .unwrap_or_default();
+        for field in &mut fresh.fields {
+            field.string_mode = field.default_string_mode;
+        }
+
+        self.sets = vec![fresh];
+        self.active = 0;
+        self.selected = 0;
+        self.stop_editing();
+    }
+
     /// Pages the numbered window, clamped at both ends.
     ///
     /// A no-op when everything fits: the digits would address the same rows
@@ -2336,8 +2358,21 @@ impl TaskState {
     }
 
     /// Keeps what is on screen and stops being the named entry.
+    ///
+    /// The whole of both `copy to new` and the tail of a delete: the panel is
+    /// untouched, and the entry keeps whatever was last written to it.
     pub fn filter_set_detach(&mut self) {
         self.view.filter_editor.loaded = None;
+        self.view.filter_editor.dirty = false;
+    }
+
+    /// Starts a completely fresh panel: one empty set, nothing bound.
+    pub fn filter_set_new(&mut self) {
+        // Unbound *before* the rebuild, so emptying the panel is not written
+        // through to the entry it was loaded from.
+        self.view.filter_editor.loaded = None;
+        self.view.filter_editor.reset();
+        self.refresh_table();
         self.view.filter_editor.dirty = false;
     }
 
@@ -6194,7 +6229,7 @@ mod tests {
     }
 
     #[test]
-    fn detaching_keeps_the_panel_and_stops_the_write_through() {
+    fn copying_to_new_keeps_the_panel_and_stops_the_write_through() {
         let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship", false)]);
         state.filter_sets_load(
             "Mine",
@@ -6221,6 +6256,60 @@ mod tests {
             !state.filter_set_dirty(),
             "and a later edit has nothing to write through to"
         );
+    }
+
+    #[test]
+    fn a_fresh_panel_keeps_nothing_at_all() {
+        let mut state = loaded_state_with_priority_field(vec![task_with(
+            "a",
+            Some("2026-09-01"),
+            Some("Alex"),
+            Some("High"),
+        )]);
+        set_field(&mut state, "title", "ship");
+        // A non-default match mode, a second tab, a negation, and a parked
+        // value: everything `new` has to throw away.
+        state.filter_cycle_mode();
+        state.filter_add_set();
+        state.filter_toggle_negate_set();
+        set_field(&mut state, "assignee", "alex");
+        state.view.filter_editor.sets[0].unresolved.push(
+            crate::config::SavedFilterField {
+                key: "custom:Gone".to_string(),
+                query: "x".to_string(),
+                ..Default::default()
+            },
+        );
+        state.filter_set_bind("mine");
+
+        state.filter_set_new();
+
+        assert_eq!(state.filter_set_position(), (0, 1), "one empty tab");
+        assert!(!state.filter_active_set_negated());
+        assert_eq!(state.active_filter_count(), 0);
+        assert!(state
+            .filter_panel_rows()
+            .iter()
+            .all(|(_, query)| query.is_empty()));
+        assert_eq!(
+            state.filter_sets_to_saved(),
+            vec![crate::config::SavedFilterSet::default()],
+            "nothing is left parked either"
+        );
+        assert_eq!(
+            state.view.filter_editor.selected, 0,
+            "and the field cursor starts at the top"
+        );
+
+        // Unlike `a`, which keeps the match modes so a second set inherits
+        // them, `new` puts every row back to the one it was built with.
+        let title = &state.view.filter_editor.fields()[0];
+        assert_eq!(title.string_mode, title.default_string_mode);
+
+        // Nothing is bound, so the panel it just emptied is not written
+        // through to the entry it came from.
+        assert_eq!(state.filter_set_loaded_name(), None);
+        assert!(!state.filter_set_dirty());
     }
 
     #[test]

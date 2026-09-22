@@ -285,8 +285,9 @@ command = "filter_negate_set"
 # Named filter sets. `b` shows the `Sets` sidebar, `1`-`9` load the entry at
 # that position in its visible window, and `<`/`>` page the window when there
 # are more entries than fit. `w` saves the panel under a name and binds to it:
-# from then on every edit writes through to that entry. `y` detaches, keeping
-# what is on screen; `d` deletes the loaded entry after a confirmation.
+# from then on every edit writes through to that entry. `y` copies the panel
+# to a new unnamed one, keeping what is on screen; `n` throws it away and
+# starts from nothing; `d` deletes the loaded entry after a confirmation.
 #
 # The input layer lowercases letters, so a shifted *letter* is unreachable —
 # but shifted punctuation arrives as its own character, which is what makes
@@ -305,7 +306,12 @@ command = "filter_set_save"
 [[bind]]
 key = "y"
 mode = "filter"
-command = "filter_set_detach"
+command = "filter_set_copy_to_new"
+
+[[bind]]
+key = "n"
+mode = "filter"
+command = "filter_set_new"
 
 [[bind]]
 key = "d"

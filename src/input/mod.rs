@@ -192,8 +192,13 @@ pub enum Action {
     FilterSetsPageForward,
     /// Save the panel under a name.
     FilterSetSave,
-    /// Keep what is on screen, stop being the named entry.
-    FilterSetDetach,
+    /// Keep what is on screen as an unnamed copy, stop being the named entry.
+    ///
+    /// A detach, named for what it is *for*: taking a saved filter as a
+    /// starting point and going somewhere else with it.
+    FilterSetCopyToNew,
+    /// Throw the panel away and start from nothing.
+    FilterSetNew,
     /// Delete the loaded entry.
     FilterSetDelete,
     /// Move the calendar's highlighted day back one day.
@@ -338,7 +343,8 @@ impl Action {
             "filter_sets_page_back" => Ok(Self::FilterSetsPageBack),
             "filter_sets_page_forward" => Ok(Self::FilterSetsPageForward),
             "filter_set_save" => Ok(Self::FilterSetSave),
-            "filter_set_detach" => Ok(Self::FilterSetDetach),
+            "filter_set_copy_to_new" => Ok(Self::FilterSetCopyToNew),
+            "filter_set_new" => Ok(Self::FilterSetNew),
             "filter_set_delete" => Ok(Self::FilterSetDelete),
             "calendar_prev_day" => Ok(Self::CalendarPrevDay),
             "calendar_next_day" => Ok(Self::CalendarNextDay),
@@ -528,7 +534,8 @@ impl Display for Action {
             Action::FilterSetsPageBack => "filter_sets_page_back",
             Action::FilterSetsPageForward => "filter_sets_page_forward",
             Action::FilterSetSave => "filter_set_save",
-            Action::FilterSetDetach => "filter_set_detach",
+            Action::FilterSetCopyToNew => "filter_set_copy_to_new",
+            Action::FilterSetNew => "filter_set_new",
             Action::FilterSetDelete => "filter_set_delete",
             // Handled above: it carries a position rather than a fixed name.
             Action::FilterSetLoad(_) => unreachable!("handled before the match"),
@@ -690,7 +697,8 @@ mod tests {
             Action::FilterSetsPageBack,
             Action::FilterSetsPageForward,
             Action::FilterSetSave,
-            Action::FilterSetDetach,
+            Action::FilterSetCopyToNew,
+            Action::FilterSetNew,
             Action::FilterSetDelete,
         ];
         actions.extend((1..=9u8).map(Action::FilterSetLoad));
