@@ -176,6 +176,8 @@ pub enum Action {
     FilterSetAdd,
     FilterSetRemove,
     FilterRequireEmpty,
+    FilterNegateField,
+    FilterNegateSet,
     /// Move the calendar's highlighted day back one day.
     CalendarPrevDay,
     /// Move the calendar's highlighted day forward one day.
@@ -312,6 +314,8 @@ impl Action {
             "filter_set_add" => Ok(Self::FilterSetAdd),
             "filter_set_remove" => Ok(Self::FilterSetRemove),
             "filter_require_empty" => Ok(Self::FilterRequireEmpty),
+            "filter_negate_field" => Ok(Self::FilterNegateField),
+            "filter_negate_set" => Ok(Self::FilterNegateSet),
             "calendar_prev_day" => Ok(Self::CalendarPrevDay),
             "calendar_next_day" => Ok(Self::CalendarNextDay),
             "calendar_prev_month" => Ok(Self::CalendarPrevMonth),
@@ -480,6 +484,8 @@ impl Display for Action {
             Action::FilterSetAdd => "filter_set_add",
             Action::FilterSetRemove => "filter_set_remove",
             Action::FilterRequireEmpty => "filter_require_empty",
+            Action::FilterNegateField => "filter_negate_field",
+            Action::FilterNegateSet => "filter_negate_set",
             Action::CalendarPrevDay => "calendar_prev_day",
             Action::CalendarNextDay => "calendar_next_day",
             Action::CalendarPrevMonth => "calendar_prev_month",
@@ -619,6 +625,8 @@ mod tests {
             Action::FilterSetAdd,
             Action::FilterSetRemove,
             Action::FilterRequireEmpty,
+            Action::FilterNegateField,
+            Action::FilterNegateSet,
         ] {
             assert_eq!(
                 Action::from_command(&action.to_string()).expect("parses"),

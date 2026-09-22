@@ -14,9 +14,12 @@ use ratatui::{style::Modifier, text::{Line, Span}};
 
 use crate::{
     app::task::{TaskFilterPanelEntry, TaskState},
+    config::Mode,
     ui::{
         chrome::{Chip, PaneMessage, Tone},
-        text::{pad_cell, slice_spans, spans_width, truncate_with_ellipsis, visible_width},
+        text::{
+            clip_spans, pad_cell, slice_spans, spans_width, truncate_with_ellipsis, visible_width,
+        },
         theme::Theme,
     },
 };
@@ -68,6 +71,8 @@ pub struct FilterTab {
     /// How many of its fields filter anything, so a working set is visible from
     /// another tab.
     pub filters: usize,
+    /// Whether the set's whole verdict is inverted.
+    pub negated: bool,
 }
 
 /// One row in the filter panel.
@@ -87,6 +92,8 @@ pub struct FilterRow {
     /// the calendar can have its caret anywhere in the text, because the arrow
     /// keys move it, so this is a position rather than a flag.
     pub caret: Option<usize>,
+    /// Whether this row's verdict is inverted.
+    pub negated: bool,
 }
 
 /// Snapshot of the filter panel used by the UI renderer.
@@ -127,15 +134,21 @@ pub fn render_filter_panel(state: &TaskState) -> Option<FilterPanelView> {
     if editing {
         counts.push(Chip::toned("editing", Tone::Warn));
     }
+    // The rows below state a positive filter and the set then inverts all of
+    // them at once, so the tab's marker is not enough on its own: this says it
+    // about the fields you are actually looking at.
+    if state.filter_active_set_negated() {
+        counts.push(Chip::toned("negated set", Tone::Danger));
+    }
 
     // A lone `1` tab is noise, and with one set the pane then renders
     // byte-identically to how it did before sets existed.
+    //
+    // There is no matching `set n/m` count on the right of the border: the
+    // strip is on the same line and says it already.
     let (active_set, total_sets) = state.filter_set_position();
     let tabs = if total_sets > 1 {
-        counts.push(Chip::toned(
-            format!("set {}/{total_sets}", active_set + 1),
-            Tone::Info,
-        ));
+        let negations = state.filter_set_negations();
         state
             .filter_set_counts()
             .into_iter()
@@ -144,6 +157,7 @@ pub fn render_filter_panel(state: &TaskState) -> Option<FilterPanelView> {
                 label: (index + 1).to_string(),
                 active: index == active_set,
                 filters,
+                negated: negations.get(index).copied().unwrap_or(false),
             })
             .collect()
     } else {
@@ -164,37 +178,122 @@ pub fn render_filter_panel(state: &TaskState) -> Option<FilterPanelView> {
 
 /// Renders the tab strip: one tab per filter set, the active one picked out.
 ///
-/// Drawn as the pane's first interior line rather than in the border. The
-/// number of sets is unbounded and the border truncates from the left — the
-/// mistake that turned "Aug 2026" into "6" in the calendar overlay.
+/// It rides the pane's top border, immediately right of the `Filters` title,
+/// because which set you are editing is a fact *about* that title. As an
+/// interior line it read as one more filter row with numbers in it.
 ///
-/// The separator is the word `or`, because that is the whole semantics of the
-/// strip and there is nowhere else on screen to say it.
-pub fn tab_strip_line(view: &FilterPanelView, theme: &Theme, width: usize) -> Line<'static> {
-    let glyphs = &theme.glyphs;
-    // The same gutter the rows use, so the tabs line up with the label column.
-    let mut spans = vec![Span::raw(" ".repeat(MARKER_WIDTH))];
+/// Each set is a cell in a rule-separated strip, which is what makes it read as
+/// a row of tabs rather than a run of numbers, and the whole strip hangs off a
+/// stub of the border rule so it looks mounted on the frame. Two things mark
+/// the current set, because colour alone is not allowed to carry it: the cell
+/// is filled, and it is the only one that spells out the word the strip is
+/// naming.
+///
+/// A negated set is marked three ways, none of which is only colour: the cell
+/// carries the same `¬` its fields would, it is drawn in the danger style, and
+/// the two dividers around it thicken into the negated edge — so the boundary
+/// of "this tab means the opposite" is visible even between two other tabs.
+///
+/// The number of sets is unbounded, so a strip past its `budget` collapses to a
+/// single `set n/m` cell rather than being cut off mid-tab.
+pub fn tab_strip_spans(
+    view: &FilterPanelView,
+    theme: &Theme,
+    focused: bool,
+    mode: Mode,
+    budget: usize,
+) -> Vec<Span<'static>> {
+    if view.tabs.is_empty() || budget == 0 {
+        return Vec::new();
+    }
+
+    let filled = theme
+        .pane_title(focused, mode)
+        .add_modifier(Modifier::REVERSED);
+    let active = view.tabs.iter().position(|tab| tab.active).unwrap_or(0);
+
+    // A stub of the pane's own rule, so the strip hangs off the frame instead
+    // of floating in the gap after the title.
+    let rule = || {
+        Span::styled(
+            theme.border_set(focused).horizontal_top.to_string(),
+            theme.pane_border(focused, mode),
+        )
+    };
+    // A divider belongs to both tabs it sits between, so either one being
+    // negated is enough to change it.
+    let divider = |left: Option<&FilterTab>, right: Option<&FilterTab>| {
+        let negated = [left, right]
+            .iter()
+            .flatten()
+            .any(|tab: &&FilterTab| tab.negated);
+        match negated {
+            true => Span::styled(theme.glyphs.negated_edge.to_string(), theme.danger),
+            false => Span::styled(theme.glyphs.column_rule.to_string(), theme.border),
+        }
+    };
+
+    // `any of` is the whole semantics of having more than one set, and there is
+    // nowhere else on screen that says it.
+    let mut spans = vec![
+        rule(),
+        Span::raw(" "),
+        Span::styled("any of ".to_string(), theme.muted),
+    ];
 
     for (index, tab) in view.tabs.iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::styled(" or ".to_string(), theme.muted));
-        }
-        let text = if tab.filters > 0 {
-            format!(" {}{} ", tab.label, glyphs.active)
-        } else {
-            format!(" {} ", tab.label)
-        };
+        spans.push(divider(index.checked_sub(1).and_then(|i| view.tabs.get(i)), Some(tab)));
         spans.push(Span::styled(
-            text,
-            if tab.active {
-                theme.accent.add_modifier(Modifier::REVERSED)
-            } else {
-                theme.muted
+            tab_text(tab, &theme.glyphs),
+            match (tab.negated, tab.active) {
+                (true, true) => theme.danger.add_modifier(Modifier::REVERSED),
+                (true, false) => theme.danger,
+                (false, true) => filled,
+                (false, false) => theme.muted,
             },
         ));
     }
+    spans.push(divider(view.tabs.last(), None));
+    spans.push(Span::raw(" "));
 
-    Line::from(slice_spans(&spans, 0, width))
+    if spans_width(&spans) > budget {
+        let negated = match view.tabs[active].negated {
+            true => theme.glyphs.negate,
+            false => "",
+        };
+        spans = vec![
+            rule(),
+            Span::styled(
+                format!(" {negated}set {}/{} ", active + 1, view.tabs.len()),
+                match view.tabs[active].negated {
+                    true => theme.danger.add_modifier(Modifier::REVERSED),
+                    false => filled,
+                },
+            ),
+        ];
+    }
+
+    clip_spans(spans, budget)
+}
+
+/// The text inside one tab cell.
+///
+/// A set that is filtering something carries the same marker the rows use, so
+/// a working set left behind on another tab is visible from here, and a
+/// negated one leads with the same `¬` its rows would.
+fn tab_text(tab: &FilterTab, glyphs: &crate::ui::theme::GlyphSet) -> String {
+    let negate = match tab.negated {
+        true => glyphs.negate,
+        false => "",
+    };
+    let marker = match tab.filters > 0 {
+        true => glyphs.active,
+        false => "",
+    };
+    match tab.active {
+        true => format!(" {negate}set {}{marker} ", tab.label),
+        false => format!(" {negate}{}{marker} ", tab.label),
+    }
 }
 
 /// Renders every filter row. Exactly one line per row, so the panel's scroll
@@ -236,16 +335,23 @@ fn filter_row_line(
     let glyphs = &theme.glyphs;
     let active = row.value.is_active();
 
+    // The gutter's second slot answers "what is this row doing", and being
+    // inverted is a different answer from being on: the negate glyph replaces
+    // the active one rather than sitting beside it, so the column stays one
+    // cell wide and every row still lines up.
+    let (marker, marker_style) = match (row.negated, active) {
+        (true, _) => (glyphs.negate, theme.danger),
+        (false, true) => (glyphs.active, theme.accent),
+        (false, false) => (" ", theme.accent),
+    };
+
     let mut spans = vec![
         Span::styled(
             if row.selected { glyphs.cursor } else { " " }.to_string(),
             theme.marker,
         ),
         Span::raw(" "),
-        Span::styled(
-            if active { glyphs.active } else { " " }.to_string(),
-            theme.accent,
-        ),
+        Span::styled(marker.to_string(), marker_style),
         Span::raw(" "),
         Span::styled(
             pad_cell(&row.label, label_width, glyphs.ellipsis),
@@ -259,6 +365,15 @@ fn filter_row_line(
         Span::styled(pad_cell(&row.kind, kind_width, glyphs.ellipsis), theme.muted),
         Span::raw("  "),
     ];
+
+    // `¬ alex` in front of the value is what makes the row *read* correctly:
+    // the gutter says the row is inverted, this says which half of it is.
+    if row.negated {
+        spans.push(Span::styled(
+            format!("{} ", glyphs.negate),
+            theme.danger,
+        ));
+    }
 
     let value_width = width.saturating_sub(spans_width(&spans));
     spans.extend(value_spans(row, editing, theme, value_width));
@@ -377,6 +492,7 @@ fn filter_row(entry: TaskFilterPanelEntry) -> FilterRow {
         value,
         selected: entry.selected,
         caret: entry.caret,
+        negated: entry.negated,
     }
 }
 
@@ -391,7 +507,7 @@ fn kind_chip(kind: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_panel_lines, kind_chip, render_filter_panel, tab_strip_line, FilterValue,
+        filter_panel_lines, kind_chip, render_filter_panel, tab_strip_spans, FilterValue,
         MARKER_WIDTH,
     };
     use ratatui::style::Modifier;
@@ -403,8 +519,12 @@ mod tests {
                 TaskMembershipSectionDto},
             fake::FakeAsanaClient,
         },
+        config::Mode,
         domain::Project,
-        ui::{text::visible_width, theme::Theme},
+        ui::{
+            text::{spans_width, visible_width},
+            theme::Theme,
+        },
     };
 
     /// The filter fields are derived from a loaded dataset, so the panel is
@@ -636,17 +756,28 @@ mod tests {
         );
     }
 
+    /// The rendered text of the tab strip at a generous budget.
+    fn strip_text(view: &super::FilterPanelView, theme: &Theme, budget: usize) -> String {
+        tab_strip_spans(view, theme, true, Mode::Filter, budget)
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect()
+    }
+
     #[test]
     fn a_single_set_draws_no_tab_strip() {
         // The common case has to look exactly as it did before sets existed.
+        let theme = Theme::default();
         let view = render_filter_panel(&panel_state()).expect("panel is open");
 
         assert!(view.tabs.is_empty());
+        assert!(tab_strip_spans(&view, &theme, true, Mode::Filter, 80).is_empty());
         assert!(view.counts.iter().all(|chip| !chip.text.starts_with("set ")));
     }
 
     #[test]
-    fn a_second_set_earns_a_tab_strip_and_a_chip() {
+    fn a_second_set_earns_a_tab_strip() {
+        let theme = Theme::default();
         let mut state = panel_state();
         state.filter_push_char('a');
         state.filter_add_set();
@@ -660,13 +791,24 @@ mod tests {
             vec![("1".to_string(), false, 1), ("2".to_string(), true, 0)],
             "the set left behind still shows that it is filtering"
         );
-        assert!(view.counts.iter().any(|chip| chip.text == "set 2/2"));
+
+        let text = strip_text(&view, &theme, 80);
+        assert!(text.contains("any of"), "the strip says how sets combine");
+        assert!(text.contains("set 2"), "and which one the keys act on");
+        assert!(
+            text.contains(&format!("1{}", theme.glyphs.active)),
+            "the set left behind is marked as filtering"
+        );
+        assert!(
+            view.counts.iter().all(|chip| !chip.text.starts_with("set ")),
+            "the strip is the only place the position is stated"
+        );
     }
 
     #[test]
-    fn the_tab_strip_is_one_line_at_exactly_the_requested_width() {
-        // Same invariant the rows have: the pane's scroll offset is a field
-        // index, so nothing here may wrap.
+    fn the_tab_strip_never_outgrows_its_budget() {
+        // It shares the top border with the pane's counts, so an overlong strip
+        // would draw straight through them.
         let theme = Theme::default();
         let mut state = panel_state();
         for _ in 0..8 {
@@ -674,10 +816,25 @@ mod tests {
         }
         let view = render_filter_panel(&state).expect("panel is open");
 
-        for width in [MARKER_WIDTH + 8, 40, 80, 160] {
-            let line = tab_strip_line(&view, &theme, width);
-            assert_eq!(visible_width(&line.to_string()), width);
+        for budget in [0, 1, MARKER_WIDTH, 12, 40, 80, 160] {
+            let spans = tab_strip_spans(&view, &theme, true, Mode::Filter, budget);
+            assert!(spans_width(&spans) <= budget, "overran a {budget} budget");
         }
+    }
+
+    #[test]
+    fn too_many_sets_for_the_border_collapse_to_a_position() {
+        // Cutting the strip mid-tab would leave a half-drawn number that reads
+        // as a different set than it is.
+        let theme = Theme::default();
+        let mut state = panel_state();
+        for _ in 0..8 {
+            state.filter_add_set();
+        }
+        let view = render_filter_panel(&state).expect("panel is open");
+
+        let text = strip_text(&view, &theme, 24);
+        assert!(text.ends_with(" set 9/9 "), "collapsed to {text:?}");
     }
 
     #[test]
@@ -688,12 +845,105 @@ mod tests {
         let mut state = panel_state();
         state.filter_add_set();
         let view = render_filter_panel(&state).expect("panel is open");
-        let line = tab_strip_line(&view, &theme, 60);
+        let spans = tab_strip_spans(&view, &theme, true, Mode::Filter, 60);
 
-        assert!(line
-            .spans
+        assert!(spans
             .iter()
             .any(|span| span.style.add_modifier.contains(Modifier::REVERSED)));
+    }
+
+    #[test]
+    fn a_negated_row_is_marked_in_the_gutter_and_in_front_of_its_value() {
+        // Two marks, not one: the gutter is what you scan, and the prefix is
+        // what makes the row read as "assignee is not alex".
+        let theme = Theme::default();
+        let mut state = panel_state();
+        state.move_filter_down();
+        state.filter_edit_begin();
+        for ch in "alex".chars() {
+            state.filter_push_char(ch);
+        }
+        state.filter_edit_done();
+        state.filter_toggle_negate_field();
+
+        let view = render_filter_panel(&state).expect("panel is open");
+        let line = filter_panel_lines(&view, &theme, 60)[1].to_string();
+
+        assert!(view.rows[1].negated);
+        assert_eq!(
+            line.matches(theme.glyphs.negate).count(),
+            2,
+            "one in the gutter and one on the value: {line:?}"
+        );
+        assert!(!line.contains(theme.glyphs.active), "which it replaces");
+        assert!(line.contains(&format!("{} alex", theme.glyphs.negate)));
+    }
+
+    #[test]
+    fn a_negated_row_keeps_its_columns_aligned_with_the_others() {
+        // The gutter is one cell wide for every row, so a negated row must not
+        // push its label along.
+        let theme = Theme::default();
+        let mut state = panel_state();
+        state.filter_toggle_negate_field();
+        let view = render_filter_panel(&state).expect("panel is open");
+        let lines = filter_panel_lines(&view, &theme, 60);
+
+        // Display columns, not byte offsets: the cursor and negate glyphs are
+        // one cell but several bytes each.
+        let column = |line: &str| {
+            let at = line.find("fuzzy").expect("the kind column");
+            visible_width(&line[..at])
+        };
+        assert_eq!(column(&lines[0].to_string()), column(&lines[1].to_string()));
+    }
+
+    #[test]
+    fn a_negated_set_is_marked_in_its_tab_and_in_the_pane_counts() {
+        let theme = Theme::default();
+        let mut state = panel_state();
+        state.filter_add_set();
+        state.filter_toggle_negate_set();
+        let view = render_filter_panel(&state).expect("panel is open");
+
+        assert_eq!(
+            view.tabs.iter().map(|tab| tab.negated).collect::<Vec<_>>(),
+            vec![false, true]
+        );
+        assert!(
+            view.counts.iter().any(|chip| chip.text == "negated set"),
+            "the rows on screen are the ones being inverted"
+        );
+
+        let text = strip_text(&view, &theme, 80);
+        assert!(text.contains(&format!("{}set 2", theme.glyphs.negate)));
+        assert_eq!(
+            text.matches(theme.glyphs.negated_edge).count(),
+            2,
+            "both of the negated tab's edges change: {text:?}"
+        );
+        assert_eq!(
+            text.matches(theme.glyphs.column_rule).count(),
+            1,
+            "and the untouched tab keeps its own: {text:?}"
+        );
+    }
+
+    #[test]
+    fn the_negated_edge_is_shared_by_the_tabs_it_sits_between() {
+        // A divider belongs to both of its neighbours, so one negated tab is
+        // enough to change it — otherwise the boundary would be drawn twice
+        // between two negated sets and inconsistently beside one.
+        let theme = Theme::default();
+        let mut state = panel_state();
+        state.filter_add_set();
+        state.filter_add_set();
+        state.filter_toggle_negate_set();
+        let view = render_filter_panel(&state).expect("panel is open");
+
+        let text = strip_text(&view, &theme, 80);
+        assert_eq!(text.matches(theme.glyphs.negated_edge).count(), 2);
+        assert_eq!(text.matches(theme.glyphs.column_rule).count(), 2);
     }
 
     #[test]

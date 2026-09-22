@@ -211,18 +211,36 @@ pub fn pane_block(
     title: &str,
     right: &[Chip],
 ) -> Block<'static> {
+    pane_block_with_title_extra(theme, focused, mode, title, Vec::new(), right)
+}
+
+/// Builds a pane frame whose title is followed by a run of caller-built spans.
+///
+/// The extra run rides the top border immediately after the title, for state
+/// that *qualifies* the title rather than reporting on the pane's contents —
+/// the counts on the right are for the latter. Both title runs are drawn on the
+/// same line, so the caller sizes its run with [`title_extra_budget`];
+/// overrunning it collides with the counts rather than wrapping.
+pub fn pane_block_with_title_extra(
+    theme: &Theme,
+    focused: bool,
+    mode: Mode,
+    title: &str,
+    extra: Vec<Span<'static>>,
+    right: &[Chip],
+) -> Block<'static> {
+    let mut left = vec![
+        Span::raw(" "),
+        Span::styled(title.to_string(), theme.pane_title(focused, mode)),
+        Span::raw(" "),
+    ];
+    left.extend(extra);
+
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_set(theme.border_set(focused))
         .border_style(theme.pane_border(focused, mode))
-        .title_top(
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(title.to_string(), theme.pane_title(focused, mode)),
-                Span::raw(" "),
-            ])
-            .left_aligned(),
-        );
+        .title_top(Line::from(left).left_aligned());
 
     if !right.is_empty() {
         let mut spans = vec![Span::raw(" ")];
@@ -232,6 +250,22 @@ pub fn pane_block(
     }
 
     block
+}
+
+/// Columns a pane's top border has left for a [`pane_block_with_title_extra`]
+/// run, once the corners, the title, and the counts have taken their share.
+///
+/// One column is held back so the run never butts straight up against the
+/// counts.
+pub fn title_extra_budget(theme: &Theme, width: u16, title: &str, right: &[Chip]) -> usize {
+    let corners = 2;
+    let titled = visible_width(title) + 2;
+    let counted = match right.is_empty() {
+        true => 0,
+        false => chips_width(right, theme) + 2,
+    };
+
+    (width as usize).saturating_sub(corners + titled + counted + 1)
 }
 
 /// Renders a centered message, vertically and horizontally, inside `area`.

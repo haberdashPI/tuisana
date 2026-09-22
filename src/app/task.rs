@@ -190,6 +190,13 @@ struct TaskFilterFieldState {
     /// typing clears this. "Has no due date" is not expressible as a date
     /// expression, so it is a flag rather than a magic token in the text.
     empty_required: bool,
+    /// Invert this row's verdict: keep what it would have thrown away.
+    ///
+    /// Orthogonal to everything else on the row. The match mode, the value,
+    /// and require-empty all still mean exactly what they say; the answer is
+    /// flipped once they have given it. Negating a require-empty is therefore
+    /// "has some value", which nothing else in the panel can express.
+    negated: bool,
 }
 
 /// A display-friendly snapshot of one task filter row for the filter panel UI.
@@ -210,6 +217,8 @@ pub(crate) struct TaskFilterPanelEntry {
     pub custom: bool,
     /// Whether this row filters to records with no value at all.
     pub empty_required: bool,
+    /// Whether this row's verdict is inverted.
+    pub negated: bool,
 }
 
 /// One filter set: the field list the panel has always shown.
@@ -219,6 +228,12 @@ pub(crate) struct TaskFilterPanelEntry {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct TaskFilterSet {
     fields: Vec<TaskFilterFieldState>,
+    /// Invert the whole set: keep the records its fields would have rejected.
+    ///
+    /// Applied after the fields have ANDed, so this is `not (a and b)` rather
+    /// than `(not a) and (not b)` — negating a set is a different statement
+    /// from negating each of its rows, and both are reachable.
+    negated: bool,
 }
 
 /// Tracks the filter panel's visibility, edit mode, field cursor, and the
@@ -456,7 +471,7 @@ impl TaskFilterEditorState {
             visible: false,
             editing: false,
             selected: 0,
-            sets: vec![TaskFilterSet { fields }],
+            sets: vec![TaskFilterSet { fields, negated: false }],
             active: 0,
             calendar: None,
         }
@@ -587,8 +602,10 @@ impl TaskFilterEditorState {
             field.query_caret = 0;
             field.label_values.clear();
             field.label_cursor = 0;
-            // `ctrl-l` resets the row completely, require-empty included.
+            // `ctrl-l` resets the row completely: require-empty and the
+            // negation go with the value they were qualifying.
             field.empty_required = false;
+            field.negated = false;
         }
     }
 
@@ -817,9 +834,9 @@ impl TaskFilterEditorState {
     /// Two different kinds of unbounded, which is why there are two exits:
     ///
     /// - A set that says nothing about the due date at all — no due row, an
-    ///   unparseable query, an empty one, or a require-empty — constrains
-    ///   *neither* side, so the whole union is unbounded and the early
-    ///   `return (None, None)` is right: no later set can narrow it. A
+    ///   unparseable query, an empty one, a require-empty, or either negation
+    ///   — constrains *neither* side, so the whole union is unbounded and the
+    ///   early `return (None, None)` is right: no later set can narrow it. A
     ///   require-empty in particular has to drop the window rather than
     ///   restrict it, because `due_on.after` would filter out exactly the
     ///   undated tasks that set asked for.
@@ -832,10 +849,19 @@ impl TaskFilterEditorState {
         let (mut after_unbounded, mut before_unbounded) = (false, false);
 
         for set in &self.sets {
+            // Both negations are satisfied by dates outside whatever window
+            // this set names: a negated set keeps what its due row rejected,
+            // and a negated due row does the same one level down. Either way
+            // the union is unbounded — and a window narrower than the truth
+            // is *recorded as covered*, so the rows it drops stay missing
+            // until something else forces a refresh.
+            if set.negated {
+                return (None, None);
+            }
             let Some(field) = set.fields.iter().find(|f| f.spec.key == "due") else {
                 return (None, None);
             };
-            if field.empty_required {
+            if field.empty_required || field.negated {
                 return (None, None);
             }
             let Some(query) = DateQuery::parse(&field.query, date::today()) else {
@@ -877,6 +903,34 @@ impl TaskFilterEditorState {
             field.label_cursor = 0;
         }
         true
+    }
+
+    /// Toggles negation on the selected field. Answers whether it changed, so
+    /// the caller knows whether the table needs rebuilding.
+    ///
+    /// Allowed on a row with nothing in it. An inactive row is skipped before
+    /// its verdict is ever asked for, so arming the negation first and typing
+    /// the value second is the same as doing it the other way round.
+    fn toggle_negate_field(&mut self) -> bool {
+        let Some(field) = self.selected_field_mut() else {
+            return false;
+        };
+        field.negated = !field.negated;
+        true
+    }
+
+    /// Toggles negation on the active set. Answers whether it changed.
+    fn toggle_negate_set(&mut self) -> bool {
+        let Some(set) = self.sets.get_mut(self.active) else {
+            return false;
+        };
+        set.negated = !set.negated;
+        true
+    }
+
+    /// Whether the set the panel is showing is negated.
+    fn active_set_negated(&self) -> bool {
+        self.sets.get(self.active).is_some_and(|set| set.negated)
     }
 
     fn set_count(&self) -> usize {
@@ -927,12 +981,19 @@ impl TaskFilterEditorState {
 }
 
 impl TaskFilterSet {
-    /// Whether this set accepts a record. Fields AND.
+    /// Whether this set accepts a record. Fields AND, then the set's own
+    /// negation flips the answer.
+    ///
+    /// An empty set accepts everything, so a *negated* empty set accepts
+    /// nothing — it contributes no records to the union, which is the same
+    /// "can only widen" guarantee adding a set has always had.
     fn matches(&self, record: &TaskRecord) -> bool {
-        self.fields
+        let accepted = self
+            .fields
             .iter()
             .filter(|field| field.is_active())
-            .all(|field| field.matches(record))
+            .all(|field| field.matches(record));
+        accepted != self.negated
     }
 
     /// Clears everything the user typed, keeping the rows and their match modes.
@@ -947,7 +1008,9 @@ impl TaskFilterSet {
             field.label_values.clear();
             field.label_cursor = 0;
             field.empty_required = false;
+            field.negated = false;
         }
+        set.negated = false;
         set
     }
 
@@ -965,6 +1028,7 @@ impl TaskFilterSet {
     /// rather than id: a reload can bring a different set of projects, and so
     /// different ids, for the same field.
     fn restore_from(&mut self, previous: &Self) {
+        self.negated = previous.negated;
         for field in &mut self.fields {
             let Some(old) = previous
                 .fields
@@ -978,6 +1042,7 @@ impl TaskFilterSet {
             // values seen so far, so a row's spec really can change between
             // loads.
             field.empty_required = old.empty_required && field.spec.can_be_empty;
+            field.negated = old.negated;
             match field.spec.kind {
                 TaskFieldFilterKind::Labels => {
                     field.label_values = if old.label_values.is_empty() {
@@ -1014,6 +1079,7 @@ impl TaskFilterFieldState {
             label_options,
             label_cursor: 0,
             empty_required: false,
+            negated: false,
         }
     }
 
@@ -1073,7 +1139,13 @@ impl TaskFilterFieldState {
         }
     }
 
+    /// Whether this field accepts a record, negation included.
     fn matches(&self, record: &TaskRecord) -> bool {
+        self.matches_value(record) != self.negated
+    }
+
+    /// The verdict the row's mode and value give, before negation.
+    fn matches_value(&self, record: &TaskRecord) -> bool {
         if self.empty_required {
             return self.value_is_empty(record);
         }
@@ -1721,6 +1793,35 @@ impl TaskState {
         }
     }
 
+    /// Inverts the selected field: it now keeps what it was throwing away.
+    pub(crate) fn filter_toggle_negate_field(&mut self) {
+        if self.view.filter_editor.toggle_negate_field() {
+            self.refresh_table();
+        }
+    }
+
+    /// Inverts the whole active set, after its fields have ANDed.
+    pub(crate) fn filter_toggle_negate_set(&mut self) {
+        if self.view.filter_editor.toggle_negate_set() {
+            self.refresh_table();
+        }
+    }
+
+    /// Whether the set on screen is negated, for the pane's chips.
+    pub fn filter_active_set_negated(&self) -> bool {
+        self.view.filter_editor.active_set_negated()
+    }
+
+    /// Which sets are negated, in tab order.
+    pub fn filter_set_negations(&self) -> Vec<bool> {
+        self.view
+            .filter_editor
+            .sets
+            .iter()
+            .map(|set| set.negated)
+            .collect()
+    }
+
     pub(crate) fn filter_add_set(&mut self) {
         self.view.filter_editor.add_set();
         self.refresh_table();
@@ -1800,6 +1901,7 @@ impl TaskState {
                     }
                 },
                 empty_required: field.empty_required,
+                negated: field.negated,
                 custom: field.spec.key.starts_with("custom:"),
                 kind: match field.spec.kind {
                     TaskFieldFilterKind::String => match field.string_mode {
@@ -2455,6 +2557,14 @@ impl TaskState {
                     self.filter_toggle_require_empty();
                     return None;
                 }
+                Action::FilterNegateField => {
+                    self.filter_toggle_negate_field();
+                    return None;
+                }
+                Action::FilterNegateSet => {
+                    self.filter_toggle_negate_set();
+                    return None;
+                }
                 Action::CycleFilterStringMode => {
                     self.filter_cycle_mode();
                     return None;
@@ -2606,7 +2716,8 @@ impl TaskState {
                 .and_then(|record| record.parent_gid.clone())
         });
 
-        let filtered_records = self.apply_filter_panel(&dataset.records);
+        let mut filtered_records = self.apply_filter_panel(&dataset.records);
+        prefer_selected_projects(&mut filtered_records, &self.view.settings.sort.project_order);
 
         self.view.table = TaskTableModel::from_records_with_settings(
             filtered_records,
@@ -2695,6 +2806,38 @@ impl TaskState {
             .clone()?;
 
         self.view.table.rows.iter().position(|row| row.gid == parent_gid)
+    }
+}
+
+/// Moves a selected project to the front of each record's project list.
+///
+/// A task in several projects is grouped under the first name in its list, and
+/// the list is held sorted — so a task in "Alpha" and "Northwind" was drawn
+/// under an "Alpha" header even with only Northwind selected, naming a project
+/// the user had deselected. The cache keeps every project a task has been
+/// loaded under, so this outlives the load that put the extra name there.
+///
+/// `selected` is the same project-list order the groups are ranked by, so the
+/// name a task is filed under and the place that group appears both come from
+/// one source. Records with no selected project among their own are left
+/// alone: that is the assigned-to-me row, whose tasks are grouped by the
+/// project their own membership named.
+fn prefer_selected_projects(records: &mut [TaskRecord], selected: &[String]) {
+    if selected.is_empty() {
+        return;
+    }
+
+    for record in records {
+        let Some(index) = record
+            .projects
+            .iter()
+            .position(|project| selected.iter().any(|name| name == project))
+        else {
+            continue;
+        };
+        // Rotating keeps the rest of the list in the order it was in, so the
+        // Projects column still reads the same apart from which name leads.
+        record.projects[..=index].rotate_right(1);
     }
 }
 
@@ -2912,10 +3055,13 @@ mod tests {
             fake::FakeAsanaClient,
             TaskLoadScope,
         },
-        domain::{Project, TaskRowKind, TaskTableModel},
+        domain::{Project, TaskRecord, TaskRowKind, TaskTableModel},
     };
 
-    use super::{TaskDataset, TaskFieldFilterKind, TaskFilterEditorState, TaskState, TaskStatus};
+    use super::{
+        prefer_selected_projects, TaskDataset, TaskFieldFilterKind, TaskFilterEditorState,
+        TaskState, TaskStatus,
+    };
 
     fn task(
         gid: &str,
@@ -4312,6 +4458,36 @@ mod tests {
     }
 
     #[test]
+    fn a_negated_due_row_pushes_down_no_due_window_at_all() {
+        // `not (due in September)` is satisfied by everything outside the
+        // window, so pushing the window down would drop exactly the tasks the
+        // row asked for — and `TaskQuery::covers` would then call it cached.
+        let mut state = state_for_push_down();
+        set_field(&mut state, "due", "2026-09-01..2026-09-07");
+        assert!(state.desired_task_query().due_after.is_some());
+
+        select_field(&mut state, "due");
+        state.filter_toggle_negate_field();
+
+        let query = state.desired_task_query();
+        assert_eq!(query.due_after, None);
+        assert_eq!(query.due_before, None);
+    }
+
+    #[test]
+    fn a_negated_set_pushes_down_no_due_window_at_all() {
+        // Same reasoning one level up: the set keeps what its due row rejected.
+        let mut state = state_for_push_down();
+        set_field(&mut state, "due", "2026-09-01..2026-09-07");
+
+        state.filter_toggle_negate_set();
+
+        let query = state.desired_task_query();
+        assert_eq!(query.due_after, None);
+        assert_eq!(query.due_before, None);
+    }
+
+    #[test]
     fn a_set_with_no_due_filter_pushes_down_no_due_window_at_all() {
         // Otherwise the server drops the very tasks the second set asked for,
         // and TaskQuery::covers then records the narrow window as cached.
@@ -4643,6 +4819,289 @@ mod tests {
             vec!["alex-aug", "jo-dec"],
             "and the two sets union"
         );
+    }
+
+    #[test]
+    fn a_task_in_two_projects_is_grouped_under_the_one_that_is_selected() {
+        // The cache keeps every project a task has been loaded under, and the
+        // names are held sorted — so a task in "Alpha" and "Northwind" was
+        // drawn under an "Alpha" header even with only Northwind selected,
+        // naming a project the user had deselected.
+        let alpha = Project::new("p1", "Alpha", true);
+        let northwind = Project::new("p2", "Northwind", true);
+        let task = sel_task("shared", "In both projects", false);
+        let client = FakeAsanaClient::new(vec![alpha.clone(), northwind.clone()])
+            .with_sections(
+                "p1",
+                vec![SectionDto { gid: "s1".to_string(), name: "Today".to_string() }],
+            )
+            .with_sections(
+                "p2",
+                vec![SectionDto { gid: "s2".to_string(), name: "Today".to_string() }],
+            )
+            .with_tasks("p1", vec![task.clone()])
+            .with_tasks("p2", vec![task]);
+
+        let mut state = TaskState::new();
+        state.set_completed_filter(None);
+        state
+            .load_task_dataset_for_projects(&client, &[alpha, northwind.clone()])
+            .expect("both projects load");
+        state
+            .load_task_dataset_for_projects(&client, &[northwind])
+            .expect("then only Northwind is selected");
+
+        assert_eq!(project_group_of(&state, "shared"), Some("Northwind"));
+    }
+
+    #[test]
+    fn a_record_with_no_selected_project_keeps_the_grouping_it_arrived_with() {
+        // The assigned-to-me row: its tasks are grouped by the project their
+        // own membership named, and none of those is the selected "target".
+        let mut record = TaskRecord::new("t1", "Task one");
+        record.projects = vec!["Alpha".to_string(), "Northwind".to_string()];
+        let mut records = vec![record];
+
+        prefer_selected_projects(&mut records, &["Assigned to me".to_string()]);
+
+        assert_eq!(records[0].projects, vec!["Alpha", "Northwind"]);
+    }
+
+    #[test]
+    fn filtering_a_parent_away_leaves_its_subtask_in_its_own_project() {
+        // The way this shows up in practice: filter by assignee, the parent is
+        // someone else's so it drops out, and the subtask that is left has no
+        // parent to sit under. It used to fall under whichever project header
+        // was drawn last.
+        let alpha = Project::new("p1", "Alpha", true);
+        let northwind = Project::new("p2", "Northwind", true);
+
+        let mut parent = sel_task("parent", "Jo's parent task", false);
+        parent.assignee = Some(UserDto {
+            gid: "u-jo".to_string(),
+            name: Some("Jo".to_string()),
+            display_name: Some("Jo".to_string()),
+        });
+        parent.num_subtasks = 1;
+        parent.memberships = membership("p1", "Alpha");
+
+        let mut child = sel_task("child", "Alex's subtask", false);
+        child.assignee = Some(UserDto {
+            gid: "u-alex".to_string(),
+            name: Some("Alex".to_string()),
+            display_name: Some("Alex".to_string()),
+        });
+        child.memberships = vec![];
+
+        let mut other = sel_task("other", "Alex's Northwind task", false);
+        other.assignee = Some(UserDto {
+            gid: "u-alex".to_string(),
+            name: Some("Alex".to_string()),
+            display_name: Some("Alex".to_string()),
+        });
+        other.memberships = membership("p2", "Northwind");
+
+        let client = FakeAsanaClient::new(vec![alpha.clone(), northwind.clone()])
+            .with_sections(
+                "p1",
+                vec![SectionDto { gid: "s1".to_string(), name: "Today".to_string() }],
+            )
+            .with_sections(
+                "p2",
+                vec![SectionDto { gid: "s2".to_string(), name: "Today".to_string() }],
+            )
+            .with_tasks("p1", vec![parent])
+            .with_subtasks("parent", vec![child])
+            .with_tasks("p2", vec![other]);
+
+        let mut state = TaskState::new();
+        state.set_completed_filter(None);
+        state
+            .load_task_dataset_for_projects(&client, &[alpha, northwind])
+            .expect("tasks load");
+        assert_eq!(project_group_of(&state, "child"), Some("Alpha"));
+
+        state.toggle_filter_panel();
+        set_field(&mut state, "assignee", "alex");
+
+        assert!(
+            !visible_gids(&state).contains(&"parent"),
+            "the parent really was filtered out"
+        );
+        assert_eq!(project_group_of(&state, "child"), Some("Alpha"));
+    }
+
+    /// A single project membership, for the two-project fixtures.
+    fn membership(gid: &str, name: &str) -> Vec<TaskMembershipDto> {
+        vec![TaskMembershipDto {
+            project: TaskMembershipProjectDto {
+                gid: gid.to_string(),
+                name: name.to_string(),
+            },
+            section: Some(TaskMembershipSectionDto {
+                gid: format!("s-{gid}"),
+                name: "Today".to_string(),
+            }),
+        }]
+    }
+
+    /// The project header a task row is drawn under.
+    fn project_group_of<'a>(state: &'a TaskState, gid: &str) -> Option<&'a str> {
+        let mut project = None;
+        for row in &state.table().rows {
+            if row.kind == TaskRowKind::ProjectHeader {
+                project = Some(row.cells[0].as_str());
+            }
+            if row.kind.is_task() && row.gid == gid {
+                return project;
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn negating_a_field_keeps_exactly_what_it_was_throwing_away() {
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task_due("alex-aug", "Alex August", "Alex", "2026-08-10"),
+            sel_task_due("jo-aug", "Jo August", "Jo", "2026-08-11"),
+        ]);
+        state.toggle_filter_panel();
+        set_field(&mut state, "assignee", "alex");
+        assert_eq!(visible_gids(&state), vec!["alex-aug"]);
+
+        state.filter_toggle_negate_field();
+        assert_eq!(visible_gids(&state), vec!["jo-aug"], "the complement");
+
+        state.filter_toggle_negate_field();
+        assert_eq!(visible_gids(&state), vec!["alex-aug"], "and back");
+    }
+
+    #[test]
+    fn a_negated_field_with_no_value_still_filters_nothing() {
+        // An empty field means "do not filter", and inverting a row that is
+        // never consulted must not turn it into "match nothing".
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task("t1", "Task one", false),
+            sel_task("t2", "Task two", false),
+        ]);
+        state.toggle_filter_panel();
+        select_field(&mut state, "assignee");
+
+        state.filter_toggle_negate_field();
+
+        assert_eq!(visible_gids(&state).len(), 2);
+        assert_eq!(state.active_filter_count(), 0, "and it is not counted");
+    }
+
+    #[test]
+    fn negating_a_require_empty_asks_for_any_value_at_all() {
+        // The one thing the panel could not say before: "has an assignee".
+        let mut state = loaded_state_with_tasks(vec![
+            task_with("owned", None, Some("Alex"), None),
+            task_with("orphan", None, None, None),
+        ]);
+        state.toggle_filter_panel();
+        select_field(&mut state, "assignee");
+        state.filter_toggle_require_empty();
+        assert_eq!(visible_gids(&state), vec!["orphan"]);
+
+        state.filter_toggle_negate_field();
+
+        assert_eq!(visible_gids(&state), vec!["owned"]);
+    }
+
+    #[test]
+    fn negating_a_set_inverts_its_fields_together_rather_than_one_by_one() {
+        // `not (assignee alex and due in august)` keeps the August task Jo
+        // owns; negating each row instead would have dropped it.
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task_due("alex-aug", "Alex August", "Alex", "2026-08-10"),
+            sel_task_due("jo-aug", "Jo August", "Jo", "2026-08-11"),
+            sel_task_due("alex-dec", "Alex December", "Alex", "2026-12-01"),
+        ]);
+        state.toggle_filter_panel();
+        set_field(&mut state, "assignee", "alex");
+        set_field(&mut state, "due", "2026-08-01..2026-08-31");
+
+        state.filter_toggle_negate_set();
+
+        assert!(state.filter_active_set_negated());
+        assert_eq!(visible_gids(&state), vec!["jo-aug", "alex-dec"]);
+    }
+
+    #[test]
+    fn a_negated_set_still_ors_with_the_others() {
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task_due("alex-aug", "Alex August", "Alex", "2026-08-10"),
+            sel_task_due("jo-aug", "Jo August", "Jo", "2026-08-11"),
+            sel_task_due("jo-dec", "Jo December", "Jo", "2026-12-01"),
+        ]);
+        state.toggle_filter_panel();
+        // Set 1: not Alex's. Set 2: December, whoever owns it.
+        set_field(&mut state, "assignee", "alex");
+        state.filter_toggle_negate_set();
+        state.filter_add_set();
+        set_field(&mut state, "due", "2026-12-01");
+
+        assert_eq!(state.filter_set_negations(), vec![true, false]);
+        assert_eq!(visible_gids(&state), vec!["jo-aug", "jo-dec"]);
+    }
+
+    #[test]
+    fn a_negated_empty_set_contributes_nothing_rather_than_everything() {
+        // A fresh set accepts everything, so its complement accepts nothing —
+        // which keeps "adding a set can only widen" true even after `~`.
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task_due("alex-aug", "Alex August", "Alex", "2026-08-10"),
+            sel_task_due("jo-aug", "Jo August", "Jo", "2026-08-11"),
+        ]);
+        state.toggle_filter_panel();
+        set_field(&mut state, "assignee", "alex");
+        state.filter_add_set();
+
+        state.filter_toggle_negate_set();
+
+        assert_eq!(visible_gids(&state), vec!["alex-aug"], "set 1 alone");
+    }
+
+    #[test]
+    fn a_new_set_and_a_cleared_row_drop_the_negations_they_inherited() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Task one", false)]);
+        state.toggle_filter_panel();
+        set_field(&mut state, "assignee", "alex");
+        state.filter_toggle_negate_field();
+        state.filter_toggle_negate_set();
+
+        state.filter_add_set();
+
+        assert_eq!(state.filter_set_negations(), vec![true, false]);
+        assert!(
+            !state.filter_panel_entries()[1].negated,
+            "the copied row starts clean"
+        );
+
+        // And `ctrl-l` on the original row takes the negation with the value.
+        state.filter_select_set(-1);
+        select_field(&mut state, "assignee");
+        state.filter_clear_current();
+        assert!(!state.filter_panel_entries()[1].negated);
+    }
+
+    #[test]
+    fn negations_survive_the_rebuild_a_reload_triggers() {
+        let mut state = loaded_state_with_tasks(vec![sel_task_due(
+            "alex-aug", "Alex August", "Alex", "2026-08-10",
+        )]);
+        state.toggle_filter_panel();
+        set_field(&mut state, "assignee", "alex");
+        state.filter_toggle_negate_field();
+        state.filter_toggle_negate_set();
+
+        // The same rebuild each streamed project triggers.
+        state.refresh_from_cache();
+
+        assert_eq!(state.filter_set_negations(), vec![true]);
+        assert!(state.filter_panel_entries()[1].negated);
     }
 
     #[test]

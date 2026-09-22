@@ -144,8 +144,8 @@ Date filters accept:
 A `due` filter is also pushed to the API as `due_on.after` / `due_on.before`, so
 narrowing it reduces what gets downloaded. With more than one filter set the
 window sent is the *union* of theirs, and a set that is open-ended, unfiltered,
-or asking for an empty due date opens that side of it — otherwise the server
-would drop rows a set had asked for.
+asking for an empty due date, or negating either the due row or itself opens
+that side of it — otherwise the server would drop rows a set had asked for.
 
 ### Key bindings
 
@@ -350,6 +350,7 @@ The top window is shared between the project list and the filter view. When the 
 - `s` to cycle the string-match mode
 - `e` to require the field to be empty
 - `a` to add a filter set, `x` to remove the current one, `h`/`l` to move between
+- `!` to negate the selected field, `~` to negate the whole set
 - `ctrl-l` to clear the search string
 - `ctrl-z`, `ctrl-s`, `ctrl-r` to switch search mode
 
@@ -367,9 +368,11 @@ filter sets:
 - Sets are ORed: a task is shown when it satisfies **any** set.
 - A new set starts empty, so adding one never hides a task that was visible
   before — it can only add.
-- Sets appear as numbered tabs along the top of the pane, with an active marker
-  on any set that is filtering, so a set doing work is visible while you are
-  standing on another one. With a single set there is no strip at all.
+- Sets appear as numbered tabs on the pane's top border, immediately right of
+  the `Filters` title and introduced by `any of`. The set you are standing on
+  is filled in and spells out `set`; an active marker on any other tab means it
+  is filtering, so a set doing work is visible from a different tab. With a
+  single set there is no strip at all.
 - `x` is refused when there is only one set: one set is the panel, not a set of
   sets.
 
@@ -399,6 +402,32 @@ Combining the two is the point: set 1 asks for tasks due this week, set 2 for
 tasks with no due date at all, and the table shows the work that is either
 imminent or unscheduled.
 
+**Negation.** `!` on a filter row inverts it: the row keeps exactly what it was
+throwing away. Everything else on the row still means what it says — the match
+mode, the value, and require-empty are all evaluated first and the answer is
+flipped afterwards — so `!` on a require-empty row reads "has some value",
+which nothing else in the panel can express. `ctrl-n` does the same while
+editing, where `!` is an ordinary character. Negating a row with nothing in it
+changes nothing: an empty field still means "do not filter".
+
+`~` negates the whole active set instead, after its fields have ANDed. That is
+`not (a and b)`, which is a different statement from negating each row: with
+`Assignee: alex` and `Due: August`, negating the rows asks for tasks that are
+neither Alex's nor in August, while negating the set also keeps Jo's August
+task. A negated *empty* set matches nothing rather than everything, so adding a
+set still can only widen the result.
+
+Both are marked without relying on colour. A negated row swaps the gutter's
+active marker for `¬` and puts `¬` in front of its value, so the row reads
+`Assignee ¬ alex`. A negated set's tab carries the same `¬`, and the dividers
+on either side of it thicken from `│` to `║`; while you are standing on it the
+pane's counts also say `negated set`, because the rows below show a positive
+filter that the set then inverts wholesale.
+
+A negation on a `Due` row, or on a set containing one, stops that due window
+being pushed to the API — the negated form is satisfied by dates outside the
+window, and a window narrower than the truth would be cached as covered.
+
 **Filter field editing** (filter edit mode):
 
 - Ordinary typing to edit a text field, inserted at the caret
@@ -407,6 +436,7 @@ imminent or unscheduled.
 - `enter` to confirm the edit and return to filter browse mode
 - `esc` to discard the edit, close the panel, and return to task mode
 - `ctrl-z`, `ctrl-s`, `ctrl-r` to switch match mode, `ctrl-l` to clear
+- `ctrl-n` to negate the field, `ctrl-t` to negate the set
 
 For fields include a fixed set of labels, the edit keys navigate instead of typing:
 

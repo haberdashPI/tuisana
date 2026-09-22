@@ -90,6 +90,13 @@ pub struct GlyphSet {
     pub sort_desc: &'static str,
     /// Marker for a filter that is doing something.
     pub active: &'static str,
+    /// Marker for a filter field or set whose verdict is inverted.
+    pub negate: &'static str,
+    /// Edge of a filter-set tab that is negated, in place of `column_rule`.
+    ///
+    /// A second glyph rather than a colour: a negated set changes what the
+    /// whole strip means, so its boundary has to survive a mono terminal.
+    pub negated_edge: &'static str,
     /// Body of a Gantt bar in one of the palette's colours.
     pub bar: &'static str,
     /// Body of a Gantt bar whose value fell past the palette.
@@ -134,6 +141,8 @@ impl GlyphSet {
         sort_asc: "▲",
         sort_desc: "▼",
         active: "●",
+        negate: "¬",
+        negated_edge: "║",
         bar: "█",
         bar_neutral: "▒",
         milestone: "◆",
@@ -168,6 +177,8 @@ impl GlyphSet {
         sort_asc: "^",
         sort_desc: "v",
         active: "*",
+        negate: "!",
+        negated_edge: "#",
         bar: "#",
         bar_neutral: "=",
         milestone: "<",
@@ -520,6 +531,8 @@ mod tests {
             set.sort_asc,
             set.sort_desc,
             set.active,
+            set.negate,
+            set.negated_edge,
             set.bar,
             set.bar_neutral,
             set.milestone,

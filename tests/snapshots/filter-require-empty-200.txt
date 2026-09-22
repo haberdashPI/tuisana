@@ -36,5 +36,5 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-⏎ edit   j/k field   e require empty   s match mode   ^l clear   a add set   f close   ? help                                                                                         r refresh   q quit
+⏎ edit   j/k field   e require empty   ! negate   s match mode   ^l clear   a add set   f close   ? help                                                                              r refresh   q quit
  FILTER                                                                                                                                                                                         1 filter

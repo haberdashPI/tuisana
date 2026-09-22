@@ -1,6 +1,5 @@
  TUISANA  ▸ 1 project ▸ 2 tasks
-┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1 active · set 2/2 ┓
-┃     1●  or  2●                                                               ┃
+┏ Filters ━ any of │ 1● │ set 2● │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1 active ┓
 ┃    Title     fuzzy     —                                                     ┃
 ┃    Assignee  fuzzy     —                                                     ┃
 ┃▍ ● Due       date      (none)                                                ┃
@@ -8,6 +7,7 @@
 ┃    State     labels    —                                                     ┃
 ┃    Projects  contains  —                                                     ┃
 ┃    Priority  labels    —                                                     ┃
+┃                                                                              ┃
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ┌ Tasks ─────────────────────────────────────── 2 tasks · row 1 · columns 0/32 ┐
@@ -36,5 +36,5 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-⏎ edit   j/k field   e require empty   s match mode           r refresh   q quit
+⏎ edit   j/k field   e require empty   ! negate               r refresh   q quit
  FILTER                                                                 1 filter

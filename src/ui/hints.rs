@@ -97,6 +97,7 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
                 Hint::new(&[Action::BeginFilterEdit], "edit"),
                 Hint::new(&[Action::MoveDown, Action::MoveUp], "field"),
                 Hint::new(&[Action::FilterRequireEmpty], "require empty"),
+                Hint::new(&[Action::FilterNegateField], "negate"),
                 Hint::new(&[Action::CycleFilterStringMode], "match mode"),
                 Hint::new(&[Action::ClearSearch], "clear"),
                 // `add set` is how the feature is discovered, so it shows even
@@ -109,6 +110,10 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
                     "set",
                 ));
                 hints.push(Hint::new(&[Action::FilterSetRemove], "remove set"));
+                // Negating the only set is legal but pointless — it turns the
+                // panel into "show nothing" — so the key is offered once there
+                // is a second set for it to be the complement of.
+                hints.push(Hint::new(&[Action::FilterNegateSet], "negate set"));
             }
             hints.push(Hint::new(&[Action::ToggleTaskFilters], "close"));
             hints.push(Hint::new(&[Action::ToggleHelpDetails], "help"));

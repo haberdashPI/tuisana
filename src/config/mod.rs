@@ -545,12 +545,21 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("a", Mode::Filter, "filter_set_add"),
         Bind::with_mode("x", Mode::Filter, "filter_set_remove"),
         Bind::with_mode("e", Mode::Filter, "filter_require_empty"),
+        // `!` is the standard "not" on a keyboard, and `~` is the other one —
+        // the pair keeps the two negations next to each other rather than
+        // giving the set-level one a letter that reads as a word.
+        Bind::with_mode("!", Mode::Filter, "filter_negate_field"),
+        Bind::with_mode("~", Mode::Filter, "filter_negate_set"),
         // Letters type while editing, so the require-empty key needs a ctrl-
         // pair there. ctrl-e is free in filter-edit mode; in calendar mode it
         // is already "jump to the end of a range", which is why the date
         // fields' require-empty is set from filter-browse mode, before the
         // picker opens.
         Bind::with_mode("ctrl-e", Mode::FilterEdit, "filter_require_empty"),
+        // `!` and `~` are ordinary characters in a query, so the negations need
+        // ctrl- pairs here for the same reason require-empty does.
+        Bind::with_mode("ctrl-n", Mode::FilterEdit, "filter_negate_field"),
+        Bind::with_mode("ctrl-t", Mode::FilterEdit, "filter_negate_set"),
         Bind::with_mode("enter", Mode::FilterEdit, "filter_done_editing"),
         Bind::with_mode("esc", Mode::FilterEdit, "filter_cancel_editing"),
         Bind::with_mode("ctrl-l", Mode::FilterEdit, "clear_search"),

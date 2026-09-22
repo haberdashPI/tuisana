@@ -591,8 +591,9 @@ fn filter_edit_mode() {
     });
 }
 
-/// Two sets, the second active and both filtering, so the tab strip, the set
-/// chip, and the `or` between the tabs are all on screen.
+/// Two sets, the second active and both filtering, so the border-mounted tab
+/// strip, its `any of` lead-in, and the marker on the set left behind are all
+/// on screen.
 #[test]
 fn filter_mode_with_two_sets() {
     assert_snapshot("filter-sets", || {
@@ -606,6 +607,24 @@ fn filter_mode_with_two_sets() {
             // `a` adds a set. The field cursor is shared, so one `j` moves both
             // sets' cursor from Assignee to Due; `e` requires it to be empty.
             vec![key('a'), key('j'), key('e')],
+        ]
+    });
+}
+
+/// Both negations at once: a negated `Assignee` row inside a negated set, so
+/// the row's `¬`, the tab's `¬` and its heavier edges, and the `negated set`
+/// chip are all on one frame.
+#[test]
+fn filter_mode_with_negations() {
+    assert_snapshot("filter-negated", || {
+        vec![
+            enter_task_mode(),
+            vec![key('f'), key('j'), enter()],
+            "alex".chars().map(key).chain([enter()]).collect(),
+            // `!` inverts the row the cursor is still on and `~` the set
+            // around it. `a` then `h` adds a plain second set and steps back,
+            // because a lone set draws no strip to mark.
+            vec![key('!'), key('~'), key('a'), key('h')],
         ]
     });
 }
@@ -718,10 +737,20 @@ fn the_monochrome_theme_emits_no_color() {
     // highlight, and a shaded range, all of which are easy to reach for color or
     // a box-drawing glyph without noticing.
     // `a` adds a second filter set before the picker opens, so the tab strip
-    // and its active marker are inside this pass rather than beside it. The
-    // keys are spelled out rather than reusing `open_due_calendar`, whose
-    // leading `f` would close the panel `a` needs open.
-    let mut keys = vec![key('f'), key('a'), key('j'), key('j'), enter()];
+    // and its active marker are inside this pass rather than beside it, and
+    // `~` then `!` bring both negation markers — the tab edge and the row
+    // glyph — along with it. The keys are spelled out rather than reusing
+    // `open_due_calendar`, whose leading `f` would close the panel `a` needs
+    // open.
+    let mut keys = vec![
+        key('f'),
+        key('a'),
+        key('~'),
+        key('j'),
+        key('j'),
+        key('!'),
+        enter(),
+    ];
     keys.extend("2026-08-10..2026-08-20".chars().map(key));
     run_session(
         &mut app,
@@ -736,6 +765,10 @@ fn the_monochrome_theme_emits_no_color() {
     assert!(
         app.tasks.filter_calendar_open(),
         "the calendar is what this pass is checking"
+    );
+    assert!(
+        app.tasks.filter_active_set_negated(),
+        "and a negated set is what puts the ascii tab edge on screen"
     );
 
     let buffer = terminal.backend_mut().buffer().clone();

@@ -323,32 +323,30 @@ fn render_filter_pane<C: AsanaClient + Clone + Send + 'static>(
         return 1;
     };
 
-    let block = chrome::pane_block(theme, focused, mode, &view.title, &view.counts);
-    let inner = block.inner(area);
+    // The tab strip rides the top border beside the title, so the sets cost no
+    // interior line and the scroll offset stays a plain field index.
+    let tabs = filter_panel::tab_strip_spans(
+        &view,
+        theme,
+        focused,
+        mode,
+        chrome::title_extra_budget(theme, area.width, &view.title, &view.counts),
+    );
+    let block = chrome::pane_block_with_title_extra(
+        theme,
+        focused,
+        mode,
+        &view.title,
+        tabs,
+        &view.counts,
+    );
+    let body = block.inner(area);
     frame.render_widget(block, area);
 
     if let Some(message) = &view.message {
-        chrome::render_pane_message(frame, inner, theme, message);
+        chrome::render_pane_message(frame, body, theme, message);
         return 1;
     }
-
-    // The strip is a line of the pane's interior, not of its border, so the
-    // rows below it keep one line each and the scroll offset stays a plain
-    // field index.
-    let body = if view.tabs.is_empty() || inner.height < 2 {
-        inner
-    } else {
-        let (strip, body) = split_header(inner);
-        frame.render_widget(
-            Paragraph::new(filter_panel::tab_strip_line(
-                &view,
-                theme,
-                strip.width as usize,
-            )),
-            strip,
-        );
-        body
-    };
 
     app.tasks.ensure_filter_visible(body.height as usize);
     let lines = filter_panel::filter_panel_lines(&view, theme, body.width as usize);
@@ -358,7 +356,7 @@ fn render_filter_pane<C: AsanaClient + Clone + Send + 'static>(
     );
 
     // The page size is what is actually visible, so ctrl-d pages by the rows
-    // below the strip rather than by the whole interior.
+    // rather than by the pane's height.
     body.height.max(1) as usize
 }
 

@@ -256,6 +256,32 @@ key = "ctrl-e"
 mode = "filter_edit"
 command = "filter_require_empty"
 
+# Negation. `!` inverts the selected field — it now keeps what it was throwing
+# away, so `!` on a require-empty reads "has some value". `~` inverts the whole
+# active set, after its fields have ANDed: `not (a and b)`, which is a
+# different statement from negating each row. Both are ordinary characters in a
+# query, so filter-edit mode gets ctrl- pairs.
+
+[[bind]]
+key = "!"
+mode = "filter"
+command = "filter_negate_field"
+
+[[bind]]
+key = "~"
+mode = "filter"
+command = "filter_negate_set"
+
+[[bind]]
+key = "ctrl-n"
+mode = "filter_edit"
+command = "filter_negate_field"
+
+[[bind]]
+key = "ctrl-t"
+mode = "filter_edit"
+command = "filter_negate_set"
+
 [[bind]]
 key = "["
 mode = "task"
