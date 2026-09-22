@@ -1,6 +1,6 @@
 use crate::{
     asana::{AsanaClient, TaskQuery, TaskTarget},
-    config::{Config, Mode},
+    config::{Config, Mode, NamedFilterSet},
     domain::{Project, ProjectKind},
     error::Result,
     input::{Action, AppCommand, KeyBinding, KeyMap},
@@ -457,6 +457,205 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         }
     }
 
+    /// Handle the sidebar's one-line prompt: typing a name for `w`, or
+    /// answering the `y`/`n` confirmation for `d`.
+    ///
+    /// Read outside the keymap, like project search, so an unbound letter
+    /// types instead of firing `b` or `d`. One mode covers both prompts: the
+    /// handler already has the prompt in hand to know which it is.
+    fn handle_filter_set_name_input(
+        &mut self,
+        event: crossterm::event::KeyEvent,
+    ) -> Result<bool> {
+        use crate::app::task::SidebarPrompt;
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let Some(prompt) = self.tasks.filter_set_prompt().cloned() else {
+            // The mode outlived its prompt, which nothing should do; leaving
+            // it would swallow every key from here on.
+            self.set_filter_mode();
+            return Ok(false);
+        };
+
+        let typed = !event
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+
+        match prompt {
+            SidebarPrompt::Save { .. } => match event.code {
+                KeyCode::Enter => {
+                    self.commit_filter_set_save();
+                    Ok(true)
+                }
+                KeyCode::Esc => {
+                    self.tasks.filter_set_prompt_cancel();
+                    self.set_filter_mode();
+                    Ok(true)
+                }
+                KeyCode::Backspace => {
+                    self.tasks.filter_set_prompt_pop_char();
+                    Ok(true)
+                }
+                KeyCode::Left => {
+                    self.tasks.filter_set_prompt_move_caret(-1);
+                    Ok(true)
+                }
+                KeyCode::Right => {
+                    self.tasks.filter_set_prompt_move_caret(1);
+                    Ok(true)
+                }
+                KeyCode::Char(c) if typed => {
+                    self.tasks.filter_set_prompt_push_char(c);
+                    Ok(true)
+                }
+                _ => Ok(false),
+            },
+            SidebarPrompt::ConfirmDelete { .. } => match event.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') if typed => {
+                    self.commit_filter_set_delete();
+                    Ok(true)
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') if typed => {
+                    self.tasks.filter_set_prompt_cancel();
+                    self.set_filter_mode();
+                    Ok(true)
+                }
+                KeyCode::Esc => {
+                    self.tasks.filter_set_prompt_cancel();
+                    self.set_filter_mode();
+                    Ok(true)
+                }
+                _ => Ok(false),
+            },
+        }
+    }
+
+    /// Commits `w`: saves the panel under the typed name and binds to it.
+    ///
+    /// An empty name is refused with the prompt left open — an entry nothing
+    /// can name is an entry nothing can load or delete.
+    fn commit_filter_set_save(&mut self) {
+        let name = self
+            .tasks
+            .filter_set_prompt_text()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            self.tasks.set_filter_sets_notice("a name is required");
+            return;
+        }
+
+        let entry = NamedFilterSet {
+            name: name.clone(),
+            sets: self.tasks.filter_sets_to_saved(),
+        };
+        match self
+            .config
+            .filter_sets
+            .iter_mut()
+            .find(|existing| existing.name.eq_ignore_ascii_case(&name))
+        {
+            Some(existing) => *existing = entry,
+            None => self.config.filter_sets.push(entry),
+        }
+
+        self.tasks.filter_set_prompt_cancel();
+        self.tasks.filter_set_bind(name);
+        self.set_filter_mode();
+        self.write_config_or_report();
+    }
+
+    /// Commits `d`: removes the loaded entry and detaches the panel.
+    fn commit_filter_set_delete(&mut self) {
+        if let Some(name) = self.tasks.filter_set_loaded_name().map(str::to_string) {
+            self.config
+                .filter_sets
+                .retain(|entry| !entry.name.eq_ignore_ascii_case(&name));
+        }
+
+        self.tasks.filter_set_prompt_cancel();
+        self.tasks.filter_set_detach();
+        self.clamp_filter_sets_page();
+        self.set_filter_mode();
+        self.write_config_or_report();
+    }
+
+    /// Replaces the panel with the saved entry at a position in the sidebar's
+    /// visible window.
+    fn load_named_filter_set(&mut self, position: u8) {
+        let index = self
+            .tasks
+            .filter_sets_page_start()
+            .saturating_add(position.saturating_sub(1) as usize);
+        let Some(entry) = self
+            .config
+            .sorted_filter_sets()
+            .get(index)
+            .map(|entry| (*entry).clone())
+        else {
+            return;
+        };
+
+        self.tasks.filter_sets_load(&entry.name, &entry.sets);
+    }
+
+    /// Keeps the numbered window pointing at entries that still exist.
+    fn clamp_filter_sets_page(&mut self) {
+        let total = self.config.filter_sets.len();
+        self.tasks.filter_sets_page(0, total);
+    }
+
+    /// Writes the config, reporting a failure on the sidebar rather than
+    /// returning it.
+    ///
+    /// Project visibility can afford to propagate a write error because it
+    /// happens on one deliberate keypress; this also runs while someone is
+    /// typing into a filter, and an unwritable config must not take the
+    /// session down mid-word.
+    fn write_config_or_report(&mut self) {
+        match self.config.save_to_source_path() {
+            Ok(()) => self.tasks.clear_filter_sets_notice(),
+            Err(err) => {
+                debug_log(&format!("filter set write failed: {err}"));
+                self.tasks
+                    .set_filter_sets_notice(format!("could not save: {err}"));
+            }
+        }
+    }
+
+    /// Writes the panel back to the named entry it was loaded from.
+    ///
+    /// No-op unless the panel is bound and something actually changed. The
+    /// comparison is what makes the deliberately over-eager `dirty` flag safe.
+    fn sync_named_filter_set(&mut self) {
+        if !self.tasks.filter_set_dirty() {
+            return;
+        }
+        // Cleared whether or not anything is written, so a config that cannot
+        // be written reports once rather than once per keystroke.
+        self.tasks.clear_filter_set_dirty();
+
+        let Some(name) = self.tasks.filter_set_loaded_name().map(str::to_string) else {
+            return;
+        };
+        let sets = self.tasks.filter_sets_to_saved();
+        let Some(entry) = self
+            .config
+            .filter_sets
+            .iter_mut()
+            .find(|entry| entry.name.eq_ignore_ascii_case(&name))
+        else {
+            return;
+        };
+        if entry.sets == sets {
+            return;
+        }
+
+        entry.sets = sets;
+        self.write_config_or_report();
+    }
+
     fn handle_project_search_input(&mut self, event: crossterm::event::KeyEvent) -> Result<bool> {
         use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -586,6 +785,44 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 self.tasks.filter_edit_done();
                 self.tasks.toggle_filter_panel();
                 self.set_task_mode();
+                return Ok(None);
+            }
+            Action::FilterSetsToggle => {
+                self.tasks.filter_sets_toggle_sidebar();
+                self.clamp_filter_sets_page();
+                return Ok(None);
+            }
+            Action::FilterSetsPageBack => {
+                self.tasks.filter_sets_page(-1, self.config.filter_sets.len());
+                return Ok(None);
+            }
+            Action::FilterSetsPageForward => {
+                self.tasks.filter_sets_page(1, self.config.filter_sets.len());
+                return Ok(None);
+            }
+            Action::FilterSetLoad(position) => {
+                self.load_named_filter_set(*position);
+                // Deliberately not an early return past the fetch decision:
+                // loading an entry can widen the due window pushed down to
+                // Asana, and `TaskQuery::covers` records a fetched window as
+                // cached — so skipping this leaves rows permanently missing
+                // rather than merely late.
+                self.update_task_data_after_action(task_targets_before);
+                return Ok(None);
+            }
+            Action::FilterSetSave => {
+                self.tasks.filter_set_prompt_save();
+                self.mode = Mode::FilterSetName;
+                return Ok(None);
+            }
+            Action::FilterSetDelete => {
+                if self.tasks.filter_set_prompt_delete() {
+                    self.mode = Mode::FilterSetName;
+                }
+                return Ok(None);
+            }
+            Action::FilterSetDetach => {
+                self.tasks.filter_set_detach();
                 return Ok(None);
             }
             Action::SetProjectMode => {
@@ -824,6 +1061,25 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         event: crossterm::event::KeyEvent,
         page_size: usize,
     ) -> Result<Option<AppCommand>> {
+        let result = self.handle_key_event_inner(keymap, event, page_size);
+        // The last key of a burst is the one with an empty queue behind it,
+        // which is the same moment `settle_table` picks to rebuild. Typing a
+        // filter is one write, not one per character.
+        //
+        // Here rather than in `handle_action` because the prompt's keys, and
+        // the filter-field ones, are read outside the keymap entirely.
+        if !self.tasks.input_pending() {
+            self.sync_named_filter_set();
+        }
+        result
+    }
+
+    fn handle_key_event_inner(
+        &mut self,
+        keymap: &KeyMap,
+        event: crossterm::event::KeyEvent,
+        page_size: usize,
+    ) -> Result<Option<AppCommand>> {
         if matches!(
             KeyBinding::from_crossterm_event(event),
             Some(KeyBinding::Ctrl('c'))
@@ -837,6 +1093,14 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             "key event: {:?} {:?}",
             event.code, event.modifiers
         ));
+
+        // Ahead of the keymap: the prompt owns every key it is shown, so an
+        // unbound letter types rather than falling through to a binding.
+        if matches!(self.mode, Mode::FilterSetName)
+            && self.handle_filter_set_name_input(event)?
+        {
+            return Ok(None);
+        }
 
         if let Some(binding) = KeyBinding::from_crossterm_event(event) {
             debug_log(&format!("resolved binding: {binding:?}"));
@@ -1380,6 +1644,423 @@ mod tests {
         )
         .expect("write config");
         (Config::load_from_path(&path).expect("config loads"), path)
+    }
+
+
+    // ---- Named filter sets -------------------------------------------------
+
+    /// An app in filter mode, fully loaded, with a config file to write to.
+    fn filter_sets_app() -> (App<FakeAsanaClient>, std::path::PathBuf) {
+        let (config, path) = config_on_disk();
+        let mut app = gantt_app();
+        app.config = config;
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('f'));
+        assert_eq!(app.mode(), Mode::Filter);
+        (app, path)
+    }
+
+    fn reread(path: &std::path::Path) -> Config {
+        Config::from_toml_str(&std::fs::read_to_string(path).expect("config exists"))
+            .expect("the written config reparses")
+    }
+
+    /// `w`, a name, `enter`, clearing whatever the prompt was pre-filled with.
+    fn save_as(app: &mut App<FakeAsanaClient>, name: &str) {
+        press(app, KeyCode::Char('w'));
+        assert_eq!(app.mode(), Mode::FilterSetName);
+        for _ in 0..40 {
+            press(app, KeyCode::Backspace);
+        }
+        for ch in name.chars() {
+            press(app, KeyCode::Char(ch));
+        }
+        press(app, KeyCode::Enter);
+    }
+
+    /// Moves the field cursor to a row by label, from filter-browse mode.
+    fn move_to_field(app: &mut App<FakeAsanaClient>, label: &str) {
+        // Back to the top first: `j` only goes one way, and the cursor is
+        // shared with wherever the last test step left it.
+        for _ in 0..20 {
+            press(app, KeyCode::Char('k'));
+        }
+        for _ in 0..20 {
+            let rows = app.tasks.filter_panel_rows();
+            let selected = app
+                .tasks
+                .filter_panel_entries()
+                .iter()
+                .position(|entry| entry.selected)
+                .expect("a row is selected");
+            if rows[selected].0 == label {
+                return;
+            }
+            press(app, KeyCode::Char('j'));
+        }
+        panic!("never reached the {label} row");
+    }
+
+    /// `enter`, some text, `enter` — the browse-mode way to fill a text field.
+    fn type_into_field(app: &mut App<FakeAsanaClient>, label: &str, text: &str) {
+        move_to_field(app, label);
+        press(app, KeyCode::Enter);
+        for ch in text.chars() {
+            press(app, KeyCode::Char(ch));
+        }
+        press(app, KeyCode::Enter);
+    }
+
+    #[test]
+    fn w_saves_the_panel_under_a_name_and_binds_to_it() {
+        let (mut app, path) = filter_sets_app();
+        type_into_field(&mut app, "Assignee", "alex");
+
+        save_as(&mut app, "mine");
+
+        assert_eq!(app.mode(), Mode::Filter, "the prompt closed");
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("mine"));
+        let written = reread(&path);
+        assert_eq!(written.filter_sets.len(), 1);
+        assert_eq!(written.filter_sets[0].name, "mine");
+        assert_eq!(written.filter_sets[0].sets[0].fields[0].key, "assignee");
+        assert_eq!(written.filter_sets[0].sets[0].fields[0].query, "alex");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn saving_over_an_existing_name_replaces_it_rather_than_adding_a_second() {
+        let (mut app, path) = filter_sets_app();
+        type_into_field(&mut app, "Assignee", "alex");
+        save_as(&mut app, "mine");
+
+        type_into_field(&mut app, "Title", "ship");
+        // `w` then `enter`: the prompt comes pre-filled with the loaded name,
+        // so re-saving where you are takes two keys.
+        press(&mut app, KeyCode::Char('w'));
+        assert_eq!(app.tasks.filter_set_prompt_text(), Some("mine"));
+        press(&mut app, KeyCode::Enter);
+
+        let written = reread(&path);
+        assert_eq!(written.filter_sets.len(), 1, "one entry, not two");
+        assert_eq!(written.filter_sets[0].sets[0].fields.len(), 2);
+
+        // A name that differs only in case is the same entry, because the
+        // sidebar could not tell the two rows apart.
+        save_as(&mut app, "MINE");
+        assert_eq!(reread(&path).filter_sets.len(), 1);
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("MINE"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_empty_name_is_refused_with_the_prompt_still_open() {
+        let (mut app, path) = filter_sets_app();
+
+        press(&mut app, KeyCode::Char('w'));
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Enter);
+
+        assert_eq!(app.mode(), Mode::FilterSetName, "still typing");
+        assert!(app.tasks.filter_set_prompt_text().is_some());
+        assert!(app.config.filter_sets.is_empty());
+        assert!(
+            app.tasks
+                .filter_sets_notice()
+                .is_some_and(|notice| notice.contains("name")),
+            "and it says why"
+        );
+
+        // esc backs out without saving anything.
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.mode(), Mode::Filter);
+        assert!(app.tasks.filter_set_prompt_text().is_none());
+        assert_eq!(app.tasks.filter_set_loaded_name(), None);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_burst_of_typing_into_a_bound_panel_costs_exactly_one_write() {
+        let (mut app, path) = filter_sets_app();
+        save_as(&mut app, "mine");
+        let before = reread(&path);
+
+        move_to_field(&mut app, "Assignee");
+        press(&mut app, KeyCode::Enter);
+
+        // Mid-burst: the table rebuild is deferred and so is the write.
+        app.tasks.set_input_pending(true);
+        for ch in "alex".chars() {
+            press(&mut app, KeyCode::Char(ch));
+        }
+        assert_eq!(
+            reread(&path).filter_sets,
+            before.filter_sets,
+            "nothing written mid-burst"
+        );
+
+        // The key that empties the queue writes once, with the whole word.
+        app.tasks.set_input_pending(false);
+        press(&mut app, KeyCode::Char('x'));
+        assert_eq!(
+            reread(&path).filter_sets[0].sets[0].fields[0].query,
+            "alexx"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_change_that_changes_nothing_does_not_rewrite_the_config() {
+        // The `dirty` flag is deliberately over-eager, so the writer's
+        // comparison is the only thing stopping the file from churning.
+        let (mut app, path) = filter_sets_app();
+        type_into_field(&mut app, "Assignee", "alex");
+        save_as(&mut app, "mine");
+
+        // A marker the app would erase if it rewrote the file.
+        let marked = format!(
+            "# untouched\n{}",
+            std::fs::read_to_string(&path).expect("config exists")
+        );
+        std::fs::write(&path, &marked).expect("mark the config");
+
+        // `ctrl-l` clears a row that is already clear: a real refresh_table,
+        // so the panel is marked dirty, but nothing about it changed.
+        move_to_field(&mut app, "Title");
+        let keymap = app.keymap().expect("bindings parse");
+        app.handle_key_event(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL),
+            10,
+        )
+        .expect("key handled");
+        // And a plain cursor move, which does not even rebuild.
+        press(&mut app, KeyCode::Char('j'));
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("config exists"),
+            marked,
+            "the config was rewritten for a no-op change"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn y_detaches_and_leaves_the_saved_entry_as_it_was() {
+        let (mut app, path) = filter_sets_app();
+        type_into_field(&mut app, "Assignee", "alex");
+        save_as(&mut app, "mine");
+        let before = reread(&path);
+
+        press(&mut app, KeyCode::Char('y'));
+
+        assert_eq!(app.tasks.filter_set_loaded_name(), None);
+        assert_eq!(
+            app.tasks.filter_panel_rows()[1].1,
+            "alex",
+            "the panel keeps what it was showing"
+        );
+
+        type_into_field(&mut app, "Title", "ship");
+        assert_eq!(
+            reread(&path).filter_sets,
+            before.filter_sets,
+            "and later edits no longer reach the entry"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn d_deletes_the_loaded_entry_after_a_confirmation_and_detaches() {
+        let (mut app, path) = filter_sets_app();
+        type_into_field(&mut app, "Assignee", "alex");
+        save_as(&mut app, "mine");
+
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(app.mode(), Mode::FilterSetName, "it asks first");
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(app.mode(), Mode::Filter);
+        assert_eq!(reread(&path).filter_sets.len(), 1, "`n` keeps it");
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("mine"));
+
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('y'));
+
+        assert_eq!(app.mode(), Mode::Filter);
+        assert!(reread(&path).filter_sets.is_empty());
+        assert_eq!(app.tasks.filter_set_loaded_name(), None);
+        assert_eq!(
+            app.tasks.filter_panel_rows()[1].1,
+            "alex",
+            "deleting the entry does not empty the panel"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn d_is_refused_when_nothing_is_loaded() {
+        // With no cursor in the sidebar there is no other unambiguous target.
+        let (mut app, path) = filter_sets_app();
+        type_into_field(&mut app, "Assignee", "alex");
+        save_as(&mut app, "mine");
+        press(&mut app, KeyCode::Char('y'));
+
+        press(&mut app, KeyCode::Char('d'));
+
+        assert_eq!(app.mode(), Mode::Filter, "no prompt opened");
+        assert_eq!(reread(&path).filter_sets.len(), 1);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_digit_loads_the_entry_at_that_position_in_the_window() {
+        let (mut app, path) = filter_sets_app();
+        type_into_field(&mut app, "Assignee", "alex");
+        save_as(&mut app, "bravo");
+        press(&mut app, KeyCode::Char('y'));
+        type_into_field(&mut app, "Assignee", "");
+        type_into_field(&mut app, "Title", "ship");
+        save_as(&mut app, "alpha");
+        press(&mut app, KeyCode::Char('y'));
+
+        // Sorted by name, so `1` is alpha and `2` is bravo whatever order
+        // they were written in.
+        press(&mut app, KeyCode::Char('2'));
+
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("bravo"));
+        assert_eq!(app.tasks.filter_panel_rows()[1].1, "alex");
+        assert_eq!(app.tasks.filter_panel_rows()[0].1, "");
+
+        press(&mut app, KeyCode::Char('1'));
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("alpha"));
+        assert_eq!(app.tasks.filter_panel_rows()[0].1, "ship");
+
+        // A digit past the end of the list does nothing rather than clearing
+        // the panel.
+        press(&mut app, KeyCode::Char('9'));
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("alpha"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn b_toggles_the_sidebar_without_taking_the_field_cursor() {
+        let (mut app, path) = filter_sets_app();
+        let before = app
+            .tasks
+            .filter_panel_entries()
+            .iter()
+            .position(|entry| entry.selected);
+
+        press(&mut app, KeyCode::Char('b'));
+        assert!(app.tasks.filter_sets_sidebar_visible());
+
+        // `j` still walks the filter fields, which is what the unfocused
+        // border is promising.
+        press(&mut app, KeyCode::Char('j'));
+        let after = app
+            .tasks
+            .filter_panel_entries()
+            .iter()
+            .position(|entry| entry.selected);
+        assert_eq!(after, before.map(|index| index + 1));
+
+        press(&mut app, KeyCode::Char('b'));
+        assert!(!app.tasks.filter_sets_sidebar_visible());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn loading_an_entry_that_widens_the_due_window_starts_a_fetch() {
+        // The Milestone 13 hazard, one level up: `TaskQuery::covers` records
+        // a fetched window as cached, so a load that skips the fetch decision
+        // leaves rows permanently missing rather than merely late.
+        let (mut app, path) = filter_sets_app();
+        save_as(&mut app, "everything");
+        press(&mut app, KeyCode::Char('y'));
+
+        // A narrow due window, picked on the calendar the way a user would.
+        move_to_field(&mut app, "Due");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.mode(), Mode::Calendar);
+        for ch in "2026-07-01..2026-07-31".chars() {
+            press(&mut app, KeyCode::Char(ch));
+        }
+        press(&mut app, KeyCode::Enter);
+        save_as(&mut app, "july");
+        press(&mut app, KeyCode::Char('y'));
+
+        // Re-fetch so the cache records the narrow window, not the broad one
+        // the first load used.
+        app.tasks.invalidate_cache();
+        app.request_task_data().expect("fetch starts");
+        settle(&mut app);
+        app.poll_task_data();
+        assert!(
+            app.task_data_receiver.is_none(),
+            "the narrow fetch finished before the load"
+        );
+        let targets = app.task_target_projects();
+        let narrow = app.tasks.desired_task_query();
+        assert_eq!(narrow.due_after.as_deref(), Some("2026-07-01"));
+        assert!(app.tasks.can_serve_query_for_targets(&targets, &narrow));
+
+        // `everything` sorts before `july`, so `1` is the wider entry.
+        press(&mut app, KeyCode::Char('1'));
+
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("everything"));
+        let widened = app.tasks.desired_task_query();
+        assert_eq!(widened.due_after, None, "no due filter left to push down");
+        assert_eq!(widened.due_before, None);
+        assert!(
+            app.task_data_receiver.is_some(),
+            "the load has to go through the same fetch decision every other \
+             filter change does"
+        );
+
+        settle(&mut app);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_config_that_cannot_be_written_reports_instead_of_ending_the_session() {
+        let (mut app, path) = filter_sets_app();
+        type_into_field(&mut app, "Assignee", "alex");
+        save_as(&mut app, "mine");
+
+        // A directory where the file should be: the write fails, the session
+        // does not.
+        std::fs::remove_file(&path).expect("remove the config");
+        std::fs::create_dir(&path).expect("put a directory in its way");
+
+        type_into_field(&mut app, "Title", "ship");
+
+        assert!(
+            app.tasks
+                .filter_sets_notice()
+                .is_some_and(|notice| notice.contains("could not save")),
+            "the failure is reported"
+        );
+        assert_eq!(
+            app.tasks.filter_panel_rows()[0].1,
+            "ship",
+            "and the edit still happened"
+        );
+        // Cleared with the write attempt, so a broken config produces one
+        // message rather than one per keystroke.
+        assert!(!app.tasks.filter_set_dirty());
+
+        let _ = std::fs::remove_dir(&path);
     }
 
     #[test]

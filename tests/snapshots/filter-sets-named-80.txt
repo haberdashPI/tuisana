@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 3 tasks
+┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1 active ┓
+┃▍ ● Title     fuzzy     ship                                                  ┃
+┃    Assignee  fuzzy     —                                                     ┃
+┃    Due       date      —                                                     ┃
+┃    Start     date      —                                                     ┃
+┃    State     labels    —                                                     ┃
+┃    Projects  contains  —                                                     ┃
+┃    Priority  labels    —                                                     ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌ Tasks ─────────────────────────────────────── 3 tasks · row 1 · columns 0/36 ┐
+│   Task                                     │ Assignee     │    Due▲ │  Start │
+│                                                                              │
+│▌Northwind BTX 4412 ──────────────────────────────────────────────────────────│
+│                                                                              │
+│   Study Kit Design ··························································│
+│▍  Review shipment requirements doc         │ Morgan Ellis │ !Aug 19 │  Aug 3 │
+│   Ship release candidate to the study team │ Alex Chen    │   Today │ Aug 10 │
+│                                                                              │
+│   Shipment ··································································│
+│   Close the quarter's shipping report      │ Priya Raman  │  Dec 18 │  Nov 2 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+⏎ edit   j/k field   e require empty   ! negate               r refresh   q quit
+ FILTER                                                                 1 filter

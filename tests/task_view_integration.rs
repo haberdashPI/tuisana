@@ -689,3 +689,133 @@ fn removing_a_set_puts_its_rows_back_behind_the_remaining_filter() {
     assert_eq!(app.tasks.filter_set_position(), (0, 1));
     assert_eq!(visible_task_names(&app), vec!["Imminent"]);
 }
+
+/// A [`spread_app`] whose config is backed by a real file, so
+/// `save_to_source_path` has somewhere to write.
+fn named_sets_app() -> (App<FakeAsanaClient>, Terminal<TestBackend>, std::path::PathBuf) {
+    std::env::set_var("TUISANA_TODAY", "2026-06-10");
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("tuisana-named-sets-{unique}.toml"));
+    std::fs::write(&path, "[header]\ntype = \"tuisana\"\nversion = 1.0\n")
+        .expect("write config");
+
+    let mut app = App::new(
+        Config::load_from_path(&path).expect("config loads"),
+        spread_client(),
+    );
+    app.load_projects().expect("projects load");
+    let terminal = Terminal::new(TestBackend::new(140, 30)).expect("terminal");
+    (app, terminal, path)
+}
+
+fn saved_sets(path: &std::path::Path) -> Vec<tuisana::config::NamedFilterSet> {
+    Config::from_toml_str(&std::fs::read_to_string(path).expect("config exists"))
+        .expect("it reparses")
+        .filter_sets
+}
+
+#[test]
+fn a_filter_set_can_be_named_kept_current_detached_and_loaded_back() {
+    let (mut app, mut terminal, path) = named_sets_app();
+
+    // Fill in Assignee, then save the panel under a name.
+    press(&mut app, &mut terminal, vec![chr(' '), chr('t'), chr('f')]);
+    press(&mut app, &mut terminal, vec![chr('j'), ret()]);
+    press(
+        &mut app,
+        &mut terminal,
+        "alex".chars().map(chr).chain([ret()]).collect(),
+    );
+    press(&mut app, &mut terminal, vec![chr('w')]);
+    press(
+        &mut app,
+        &mut terminal,
+        "mine".chars().map(chr).chain([ret()]).collect(),
+    );
+
+    assert_eq!(app.tasks.filter_set_loaded_name(), Some("mine"));
+    let entry = saved_sets(&path);
+    assert_eq!(entry.len(), 1);
+    assert_eq!(entry[0].name, "mine");
+    assert_eq!(entry[0].sets[0].fields.len(), 1);
+
+    // A loaded entry stays current without a save step: `j` to Due, `e` to
+    // require it empty, and the file has both without another `w`.
+    press(&mut app, &mut terminal, vec![chr('j'), chr('e')]);
+
+    let fields = &saved_sets(&path)[0].sets[0].fields;
+    assert_eq!(fields.len(), 2, "both filters are on disk: {fields:?}");
+    assert!(fields.iter().any(|field| field.key == "assignee"
+        && field.query == "alex"));
+    assert!(fields.iter().any(|field| field.key == "due" && field.empty));
+
+    // `y` detaches. The panel keeps what it is showing, the entry keeps what
+    // was last written to it, and a later edit reaches neither.
+    press(&mut app, &mut terminal, vec![chr('y')]);
+    assert_eq!(app.tasks.filter_set_loaded_name(), None);
+    let before = saved_sets(&path);
+    press(&mut app, &mut terminal, vec![chr('j'), ret()]);
+    press(
+        &mut app,
+        &mut terminal,
+        "2026-10-01".chars().map(chr).chain([ret()]).collect(),
+    );
+    assert_eq!(saved_sets(&path), before, "a detached panel writes nothing");
+
+    // `1` loads it back, replacing what the detached panel wandered off to.
+    press(&mut app, &mut terminal, vec![chr('1')]);
+
+    assert_eq!(app.tasks.filter_set_loaded_name(), Some("mine"));
+    let rows = app.tasks.filter_panel_rows();
+    assert_eq!(rows[1], ("Assignee".to_string(), "alex".to_string()));
+    assert_eq!(rows[2].0, "Due");
+    assert_eq!(rows[2].1, "(none)", "the require-empty came back");
+    assert_eq!(rows[3].1, "", "and the Start the detached panel picked did not");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn the_sidebar_lists_the_saved_entries_and_never_takes_the_field_cursor() {
+    let (mut app, mut terminal, path) = named_sets_app();
+
+    press(&mut app, &mut terminal, vec![chr(' '), chr('t'), chr('f')]);
+    assert!(!app.tasks.filter_sets_sidebar_visible(), "closed until asked for");
+    press(&mut app, &mut terminal, vec![chr('b')]);
+    press(&mut app, &mut terminal, vec![chr('w')]);
+    press(
+        &mut app,
+        &mut terminal,
+        "sprint".chars().map(chr).chain([ret()]).collect(),
+    );
+
+    assert!(app.tasks.filter_sets_sidebar_visible());
+    let text = screen(&mut terminal);
+    assert!(text.contains("Sets"), "{text}");
+    assert!(text.contains("sprint"), "{text}");
+
+    // The sidebar is never focused, so the filter rows keep `j`/`k`.
+    assert_eq!(app.tasks.filter_panel_rows()[0].0, "Title");
+    press(&mut app, &mut terminal, vec![chr('j'), chr('j'), chr('e')]);
+    assert_eq!(app.tasks.filter_panel_rows()[2].1, "(none)");
+
+    // And `b` puts it away again.
+    press(&mut app, &mut terminal, vec![chr('b')]);
+    assert!(!app.tasks.filter_sets_sidebar_visible());
+    assert!(!screen(&mut terminal).contains("Sets"));
+
+    let _ = std::fs::remove_file(&path);
+}
+
+fn screen(terminal: &mut Terminal<TestBackend>) -> String {
+    let buffer = terminal.backend_mut().buffer().clone();
+    buffer
+        .content
+        .chunks(buffer.area.width as usize)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}

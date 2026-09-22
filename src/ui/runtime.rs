@@ -24,7 +24,8 @@ use crate::{
     input::KeyMap,
     ui::{
         chrome::{self, Chip, Tone},
-        calendar, filter_panel, gantt, gantt_order, help_overlay, hints, layout, project_list,
+        calendar, filter_panel, filter_sets, gantt, gantt_order, help_overlay, hints, layout,
+        project_list,
         task_table::{self, TaskTableView},
         theme::Theme,
     },
@@ -116,6 +117,7 @@ fn focused_pane(mode: Mode) -> FocusedPane {
         | Mode::ProjectSearch
         | Mode::Filter
         | Mode::FilterEdit
+        | Mode::FilterSetName
         | Mode::Calendar
         | Mode::Any => FocusedPane::Top,
     }
@@ -152,7 +154,10 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
             if let Some(area) = regions.top_pane {
                 let focused = focus == FocusedPane::Top;
                 page_size = match mode {
-                    Mode::Filter | Mode::FilterEdit | Mode::Calendar => {
+                    Mode::Filter
+                    | Mode::FilterEdit
+                    | Mode::FilterSetName
+                    | Mode::Calendar => {
                         render_filter_pane(frame, area, app, &theme, mode, focused)
                     }
                     _ => render_project_pane(frame, area, app, &theme, mode, focused),
@@ -211,6 +216,7 @@ fn help_visible<C: AsanaClient + Clone + Send + 'static>(app: &App<C>, mode: Mod
         | Mode::GanttOrder
         | Mode::Filter
         | Mode::FilterEdit
+        | Mode::FilterSetName
         | Mode::Calendar => {
             app.tasks.help_details_visible()
         }
@@ -279,7 +285,7 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
         searching: app.projects.search_active() || !app.projects.search_query().is_empty(),
         has_selection: match mode {
             Mode::Task => app.tasks.selected_task_count() > 0,
-            Mode::Filter | Mode::FilterEdit | Mode::Calendar => false,
+            Mode::Filter | Mode::FilterEdit | Mode::FilterSetName | Mode::Calendar => false,
             _ => app.projects.selected_count() > 0,
         },
         can_scroll: task_view.is_some_and(|view| view.max_scroll > 0),
@@ -287,6 +293,9 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
         on_date_range: app.tasks.filter_calendar_is_range(),
         timeline_windowed: app.tasks.gantt().timeline_windowed(),
         many_filter_sets: app.tasks.filter_set_position().1 > 1,
+        filter_sets_sidebar: app.tasks.filter_sets_sidebar_visible(),
+        saved_filter_sets: app.config.filter_sets.len(),
+        filter_set_loaded: app.tasks.filter_set_loaded_name().is_some(),
     };
 
     let line = hints::hint_line(
@@ -352,6 +361,21 @@ fn render_filter_pane<C: AsanaClient + Clone + Send + 'static>(
         return 1;
     };
 
+    // The split is inside the filter pane rather than in `layout`: the
+    // sidebar belongs to the panel, not to the frame.
+    let (sidebar, area) =
+        filter_sets::split_sidebar(area, app.tasks.filter_sets_sidebar_visible());
+    if let Some(sidebar) = sidebar {
+        render_filter_sets_pane(frame, sidebar, app, theme, mode);
+    }
+    // The prompt normally rides the sidebar's border. When the sidebar has
+    // given way to the filter rows it borrows theirs, because a prompt with
+    // nowhere to be makes `w` a blind edit.
+    let orphaned_prompt = sidebar
+        .is_none()
+        .then(|| filter_sets::prompt_line(&app.tasks))
+        .flatten();
+
     // The tab strip rides the top border beside the title, so the sets cost no
     // interior line and the scroll offset stays a plain field index.
     let tabs = filter_panel::tab_strip_spans(
@@ -361,7 +385,7 @@ fn render_filter_pane<C: AsanaClient + Clone + Send + 'static>(
         mode,
         chrome::title_extra_budget(theme, area.width, &view.title, &view.counts),
     );
-    let block = chrome::pane_block_with_title_extra(
+    let mut block = chrome::pane_block_with_title_extra(
         theme,
         focused,
         mode,
@@ -369,6 +393,10 @@ fn render_filter_pane<C: AsanaClient + Clone + Send + 'static>(
         tabs,
         &view.counts,
     );
+    if let Some(prompt) = &orphaned_prompt {
+        block = block
+            .title_bottom(filter_sets::prompt_footer_line(prompt, theme).left_aligned());
+    }
     let body = block.inner(area);
     frame.render_widget(block, area);
 
@@ -387,6 +415,44 @@ fn render_filter_pane<C: AsanaClient + Clone + Send + 'static>(
     // The page size is what is actually visible, so ctrl-d pages by the rows
     // rather than by the pane's height.
     body.height.max(1) as usize
+}
+
+/// Draws the `Sets` sidebar.
+///
+/// Always unfocused: the thin border is the signal that keys do not go there.
+fn render_filter_sets_pane<C: AsanaClient + Clone + Send + 'static>(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &mut App<C>,
+    theme: &Theme,
+    mode: Mode,
+) {
+    // The renderer is the only thing that knows how tall the pane is, so it
+    // is what tells the panel how many entries a numbered window holds.
+    app.tasks
+        .set_filter_sets_window(filter_sets::window_rows(area));
+
+    let Some(view) = filter_sets::render_filter_sets(&app.tasks, &app.config.filter_sets)
+    else {
+        return;
+    };
+
+    let mut block = chrome::pane_block(theme, false, mode, "Sets", &view.counts);
+    if let Some(prompt) = &view.prompt {
+        block = block
+            .title_bottom(filter_sets::prompt_footer_line(prompt, theme).left_aligned());
+    }
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    frame.render_widget(
+        Paragraph::new(filter_sets::filter_sets_lines(
+            &view,
+            theme,
+            inner.width as usize,
+        )),
+        inner,
+    );
 }
 
 fn render_task_pane<C: AsanaClient + Clone + Send + 'static>(

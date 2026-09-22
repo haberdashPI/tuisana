@@ -20,6 +20,7 @@ pub mod calendar;
 pub mod chrome;
 pub mod date;
 pub mod filter_panel;
+pub mod filter_sets;
 pub mod gantt;
 pub mod gantt_order;
 pub mod help_overlay;

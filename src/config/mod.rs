@@ -36,6 +36,9 @@ pub struct Config {
     #[serde(default, rename = "project")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub project_visibility: Vec<ProjectVisibilityConfig>,
+    #[serde(default, rename = "filter_set")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub filter_sets: Vec<NamedFilterSet>,
     #[serde(skip)]
     source_path: Option<PathBuf>,
 }
@@ -48,6 +51,7 @@ impl PartialEq for Config {
             && self.auth == other.auth
             && self.bind == other.bind
             && self.project_visibility == other.project_visibility
+            && self.filter_sets == other.filter_sets
     }
 }
 
@@ -60,6 +64,7 @@ impl Default for Config {
             auth: None,
             bind: default_bindings(),
             project_visibility: Vec::new(),
+            filter_sets: Vec::new(),
             source_path: None,
         }
     }
@@ -111,6 +116,17 @@ impl Config {
         bindings
     }
 
+    /// The named filter sets in the order the sidebar lists them.
+    ///
+    /// By name, case-insensitively, rather than by file order: the sidebar
+    /// numbers the rows it shows and the digits address those numbers, so the
+    /// order has to be one the user can predict from the names alone.
+    pub fn sorted_filter_sets(&self) -> Vec<&NamedFilterSet> {
+        let mut entries = self.filter_sets.iter().collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.name.to_lowercase());
+        entries
+    }
+
     fn validate(&self) -> Result<()> {
         if self.header.version != Header::EXPECTED_VERSION {
             return Err(Error::ConfigValidation(format!(
@@ -144,8 +160,128 @@ impl Config {
             }
         }
 
+        let mut seen_names = HashSet::new();
+        for entry in &self.filter_sets {
+            entry.validate()?;
+            // The sidebar lists entries by number and two rows reading the
+            // same is a trap: there would be no way to tell which one a digit
+            // loads, or which one `w` overwrites.
+            if !seen_names.insert(entry.name.trim().to_lowercase()) {
+                return Err(Error::ConfigValidation(format!(
+                    "duplicate filter_set.name value: {}",
+                    entry.name
+                )));
+            }
+        }
+
         Ok(())
     }
+}
+
+/// The match modes a saved string filter may name.
+const SAVED_MATCH_MODES: [&str; 3] = ["fuzzy", "contains", "regex"];
+
+/// One named filter set: a whole filter panel, saved under a name.
+///
+/// Every tab, each tab's negation, and each field's query, match mode,
+/// require-empty flag, and negation — one name for one complete filter
+/// expression, including the union across tabs that a single tab cannot say.
+///
+/// The scalars come before the `Vec`, here and in the two types below,
+/// because `toml`'s serializer cannot emit a value after it has emitted a
+/// table. Getting the order wrong round-trips fine through `Value` and fails
+/// at [`Config::save_to_source_path`], on a real user's config.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct NamedFilterSet {
+    pub name: String,
+    /// The ORed sets, in tab order.
+    #[serde(default, rename = "set", skip_serializing_if = "Vec::is_empty")]
+    pub sets: Vec<SavedFilterSet>,
+}
+
+impl NamedFilterSet {
+    fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty() {
+            return Err(Error::ConfigValidation(
+                "filter_set.name must not be empty".to_string(),
+            ));
+        }
+
+        for set in &self.sets {
+            set.validate()?;
+        }
+
+        Ok(())
+    }
+}
+
+/// One tab of a named filter set.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SavedFilterSet {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub negated: bool,
+    /// Only the fields that filter something; an untouched row is not written.
+    #[serde(default, rename = "field", skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<SavedFilterField>,
+}
+
+impl SavedFilterSet {
+    fn validate(&self) -> Result<()> {
+        for field in &self.fields {
+            field.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// One filter row's value, keyed the way the panel keys its rows.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SavedFilterField {
+    /// `title`, `assignee`, `due`, `start`, `state`, `projects`, or
+    /// `custom:<Name>` — the panel's own row key, which is keyed by custom
+    /// field *name* precisely so it survives a reload that brings different
+    /// ids.
+    ///
+    /// An unknown key is **not** rejected: a `custom:Priority` belonging to a
+    /// project that is not loaded this session is legitimate, and the panel
+    /// parks it rather than dropping it.
+    pub key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub query: String,
+    /// `fuzzy` | `contains` | `regex`. Omitted when it is the row's default.
+    #[serde(default, rename = "match", skip_serializing_if = "Option::is_none")]
+    pub string_mode: Option<String>,
+    /// The row requires no value at all.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub empty: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub negated: bool,
+}
+
+impl SavedFilterField {
+    fn validate(&self) -> Result<()> {
+        if self.key.trim().is_empty() {
+            return Err(Error::ConfigValidation(
+                "filter_set.set.field.key must not be empty".to_string(),
+            ));
+        }
+
+        if let Some(mode) = &self.string_mode {
+            if !SAVED_MATCH_MODES.contains(&mode.as_str()) {
+                return Err(Error::ConfigValidation(format!(
+                    "filter_set.set.field.match must be one of {}, found {mode}",
+                    SAVED_MATCH_MODES.join(", ")
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// `skip_serializing_if` predicate for flags that default to off.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// How the UI resolves colors for the terminal.
@@ -343,6 +479,8 @@ pub enum Mode {
     ProjectSearch,
     Filter,
     FilterEdit,
+    /// Typing a name for `w`, or answering the `d` confirmation.
+    FilterSetName,
     Calendar,
     Task,
     Gantt,
@@ -361,7 +499,10 @@ impl Mode {
     }
 
     pub fn allows_any_fallback(&self) -> bool {
-        !matches!(self, Self::ProjectSearch | Self::FilterEdit | Self::Calendar)
+        !matches!(
+            self,
+            Self::ProjectSearch | Self::FilterEdit | Self::FilterSetName | Self::Calendar
+        )
     }
 
     pub fn label(&self) -> &'static str {
@@ -371,6 +512,7 @@ impl Mode {
             Self::ProjectSearch => "project-search",
             Self::Filter => "filter",
             Self::FilterEdit => "filter-edit",
+            Self::FilterSetName => "set name",
             Self::Calendar => "calendar",
             Self::Task => "task",
             Self::Gantt => "gantt",
@@ -550,6 +692,27 @@ fn default_bindings() -> Vec<Bind> {
         // giving the set-level one a letter that reads as a word.
         Bind::with_mode("!", Mode::Filter, "filter_negate_field"),
         Bind::with_mode("~", Mode::Filter, "filter_negate_set"),
+        // The named-set keys. `<` and `>` are safe here: the input layer
+        // lowercases letters, so a shifted *letter* is unreachable, but
+        // shifted punctuation arrives as its own character — and `,`/`.` are
+        // bound in task mode only.
+        Bind::with_mode("b", Mode::Filter, "filter_sets_toggle"),
+        Bind::with_mode("w", Mode::Filter, "filter_set_save"),
+        Bind::with_mode("y", Mode::Filter, "filter_set_detach"),
+        Bind::with_mode("d", Mode::Filter, "filter_set_delete"),
+        Bind::with_mode("<", Mode::Filter, "filter_sets_page_back"),
+        Bind::with_mode(">", Mode::Filter, "filter_sets_page_forward"),
+        // All nine digits spelled out, so a user can rebind any of them.
+        // `0` is left alone: it is `restore_top_pane` globally.
+        Bind::with_mode("1", Mode::Filter, "filter_set_load_1"),
+        Bind::with_mode("2", Mode::Filter, "filter_set_load_2"),
+        Bind::with_mode("3", Mode::Filter, "filter_set_load_3"),
+        Bind::with_mode("4", Mode::Filter, "filter_set_load_4"),
+        Bind::with_mode("5", Mode::Filter, "filter_set_load_5"),
+        Bind::with_mode("6", Mode::Filter, "filter_set_load_6"),
+        Bind::with_mode("7", Mode::Filter, "filter_set_load_7"),
+        Bind::with_mode("8", Mode::Filter, "filter_set_load_8"),
+        Bind::with_mode("9", Mode::Filter, "filter_set_load_9"),
         // Letters type while editing, so the require-empty key needs a ctrl-
         // pair there. ctrl-e is free in filter-edit mode; in calendar mode it
         // is already "jump to the end of a range", which is why the date
@@ -662,7 +825,7 @@ fn default_bindings() -> Vec<Bind> {
 mod tests {
     use crate::input::{Action, KeyBinding, KeyMap};
 
-    use super::{Config, Mode};
+    use super::{Config, Mode, NamedFilterSet, SavedFilterField, SavedFilterSet};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -799,6 +962,276 @@ mod tests {
         .expect_err("duplicate project ids should be rejected");
 
         assert!(format!("{err}").contains("duplicate project.gid value"));
+    }
+
+    #[test]
+    fn parses_the_documented_named_filter_set_block() {
+        // The literal shape from the milestone, so the documented spelling
+        // and the serialized one are both pinned.
+        let config = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 1.0
+
+[[filter_set]]
+name = "Sprint triage"
+
+  [[filter_set.set]]
+
+    [[filter_set.set.field]]
+    key = "assignee"
+    query = "alex"
+    match = "fuzzy"
+
+    [[filter_set.set.field]]
+    key = "due"
+    query = "..today"
+
+  [[filter_set.set]]
+  negated = true
+
+    [[filter_set.set.field]]
+    key = "custom:Priority"
+    query = "Low"
+"#,
+        )
+        .expect("the documented block parses");
+
+        assert_eq!(config.filter_sets.len(), 1);
+        let entry = &config.filter_sets[0];
+        assert_eq!(entry.name, "Sprint triage");
+        assert_eq!(entry.sets.len(), 2);
+        assert!(!entry.sets[0].negated);
+        assert_eq!(entry.sets[0].fields.len(), 2);
+        assert_eq!(entry.sets[0].fields[0].key, "assignee");
+        assert_eq!(entry.sets[0].fields[0].query, "alex");
+        assert_eq!(entry.sets[0].fields[0].string_mode.as_deref(), Some("fuzzy"));
+        assert!(!entry.sets[0].fields[0].empty);
+        assert!(entry.sets[1].negated);
+        assert_eq!(entry.sets[1].fields[0].key, "custom:Priority");
+    }
+
+    fn config_with_two_named_sets() -> Config {
+        let filter_sets = vec![
+            NamedFilterSet {
+                name: "Blocked".to_string(),
+                sets: vec![SavedFilterSet {
+                    negated: false,
+                    fields: vec![SavedFilterField {
+                        key: "custom:Priority".to_string(),
+                        query: "High".to_string(),
+                        ..SavedFilterField::default()
+                    }],
+                }],
+            },
+            NamedFilterSet {
+                name: "Overdue mine".to_string(),
+                sets: vec![
+                    SavedFilterSet {
+                        negated: false,
+                        fields: vec![
+                            SavedFilterField {
+                                key: "assignee".to_string(),
+                                query: "alex".to_string(),
+                                string_mode: Some("contains".to_string()),
+                                ..SavedFilterField::default()
+                            },
+                            SavedFilterField {
+                                key: "due".to_string(),
+                                query: "..today".to_string(),
+                                negated: true,
+                                ..SavedFilterField::default()
+                            },
+                        ],
+                    },
+                    SavedFilterSet {
+                        negated: true,
+                        fields: vec![SavedFilterField {
+                            key: "start".to_string(),
+                            empty: true,
+                            ..SavedFilterField::default()
+                        }],
+                    },
+                ],
+            },
+        ];
+
+        Config {
+            filter_sets,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn a_config_holding_named_filter_sets_round_trips_through_the_serializer() {
+        // The `toml` serializer cannot emit a value after a table, so a struct
+        // with its `Vec` before its scalars serializes to something it cannot
+        // read back — and only at `save_to_source_path`, on a real config.
+        let config = config_with_two_named_sets();
+
+        let text = toml::to_string_pretty(&config).expect("serializes");
+
+        assert_eq!(Config::from_toml_str(&text).expect("parses"), config);
+    }
+
+    #[test]
+    fn a_named_filter_set_leaves_out_everything_at_its_default() {
+        let config = Config {
+            filter_sets: vec![NamedFilterSet {
+                name: "Mine".to_string(),
+                sets: vec![SavedFilterSet {
+                    negated: false,
+                    fields: vec![SavedFilterField {
+                        key: "assignee".to_string(),
+                        query: "alex".to_string(),
+                        ..SavedFilterField::default()
+                    }],
+                }],
+            }],
+            ..Config::default()
+        };
+
+        let text = toml::to_string_pretty(&config).expect("serializes");
+        // Only the entry itself: the default bindings above it spell out
+        // commands like `filter_require_empty`.
+        let entry = text
+            .split("[[filter_set]]")
+            .nth(1)
+            .expect("the entry was written");
+
+        assert!(entry.contains("name = \"Mine\""), "{entry}");
+        assert!(!entry.contains("negated"), "an off flag is not written: {entry}");
+        assert!(!entry.contains("empty"), "an off flag is not written: {entry}");
+        assert!(!entry.contains("match"), "a default mode is not written: {entry}");
+    }
+
+    #[test]
+    fn an_untouched_config_writes_no_filter_set_section() {
+        let text = toml::to_string_pretty(&Config::default()).expect("serializes");
+
+        assert!(!text.contains("[[filter_set]]"), "{text}");
+    }
+
+    #[test]
+    fn rejects_two_named_filter_sets_whose_names_differ_only_in_case() {
+        // The sidebar lists them by number, and two rows reading the same is a
+        // trap: there is no way to tell which one a digit loads.
+        let error = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 1.0
+
+[[filter_set]]
+name = "Mine"
+
+[[filter_set]]
+name = "mine"
+"#,
+        )
+        .expect_err("duplicate names are rejected");
+
+        assert!(
+            error.to_string().contains("duplicate filter_set.name"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_an_empty_named_filter_set_name() {
+        let error = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 1.0
+
+[[filter_set]]
+name = "   "
+"#,
+        )
+        .expect_err("a blank name is rejected");
+
+        assert!(
+            error.to_string().contains("filter_set.name must not be empty"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_saved_match_mode_that_names_no_mode() {
+        let error = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 1.0
+
+[[filter_set]]
+name = "Mine"
+
+  [[filter_set.set]]
+
+    [[filter_set.set.field]]
+    key = "assignee"
+    match = "glob"
+"#,
+        )
+        .expect_err("an unknown match mode is rejected");
+
+        assert!(
+            error.to_string().contains("field.match"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_field_key_is_kept_rather_than_rejected() {
+        // A `custom:` field belonging to a project that is not loaded this
+        // session is legitimate; rejecting it would make the config
+        // unloadable depending on which projects you had selected.
+        let config = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 1.0
+
+[[filter_set]]
+name = "Mine"
+
+  [[filter_set.set]]
+
+    [[filter_set.set.field]]
+    key = "custom:Nobody Has This"
+    query = "Low"
+"#,
+        )
+        .expect("an unknown key is kept");
+
+        assert_eq!(
+            config.filter_sets[0].sets[0].fields[0].key,
+            "custom:Nobody Has This"
+        );
+    }
+
+    #[test]
+    fn the_sidebar_order_is_by_name_rather_than_by_file_order() {
+        let config = Config {
+            filter_sets: vec![
+                NamedFilterSet { name: "zebra".to_string(), sets: Vec::new() },
+                NamedFilterSet { name: "Apple".to_string(), sets: Vec::new() },
+                NamedFilterSet { name: "mango".to_string(), sets: Vec::new() },
+            ],
+            ..Config::default()
+        };
+
+        assert_eq!(
+            config
+                .sorted_filter_sets()
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Apple", "mango", "zebra"]
+        );
     }
 
     #[test]
@@ -1050,6 +1483,58 @@ mod tests {
         assert_eq!(
             keymap.action_for(&KeyBinding::Char('h'), Mode::Calendar),
             Some(&Action::CalendarPrevDay)
+        );
+    }
+
+    #[test]
+    fn default_bindings_include_the_named_filter_set_controls() {
+        let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
+            .expect("default bindings parse");
+
+        for (key, action) in [
+            (KeyBinding::Char('b'), Action::FilterSetsToggle),
+            (KeyBinding::Char('w'), Action::FilterSetSave),
+            (KeyBinding::Char('y'), Action::FilterSetDetach),
+            (KeyBinding::Char('d'), Action::FilterSetDelete),
+            (KeyBinding::Char('<'), Action::FilterSetsPageBack),
+            (KeyBinding::Char('>'), Action::FilterSetsPageForward),
+        ] {
+            assert_eq!(
+                keymap.action_for(&key, Mode::Filter),
+                Some(&action),
+                "{key:?} should be bound in filter mode"
+            );
+        }
+
+        // All nine digits, so every row the sidebar can show is reachable.
+        for position in 1..=9u8 {
+            let key = KeyBinding::Char(char::from_digit(position as u32, 10).expect("digit"));
+            assert_eq!(
+                keymap.action_for(&key, Mode::Filter),
+                Some(&Action::FilterSetLoad(position))
+            );
+        }
+
+        // `0` is left alone: it restores the top pane, everywhere.
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('0'), Mode::Filter),
+            Some(&Action::RestoreTopPane)
+        );
+        // The keys these took are unbound in filter mode only; the modes that
+        // already used them keep them.
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('y'), Mode::Task),
+            Some(&Action::CopyTasksToClipboard)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('d'), Mode::FilterEdit),
+            Some(&Action::FilterDeleteLabel)
+        );
+        // Nothing resolves in the prompt: its keys are read outside the
+        // keymap, so an unbound letter has to type rather than fire `b`.
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('b'), Mode::FilterSetName),
+            None
         );
     }
 

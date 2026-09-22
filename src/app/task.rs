@@ -25,13 +25,19 @@ use crate::{
         DateQuery, Project, ProjectKind, TaskRecord, TaskRowKind, TaskTableModel,
         TaskTableSettings,
     },
-    config::GanttConfig,
+    config::{GanttConfig, SavedFilterField, SavedFilterSet},
     error::Result,
     input::Action,
     util::fuzzy_match,
 };
 
 const HORIZONTAL_SCROLL_STEP: usize = 8;
+
+/// Most saved filter sets one numbered window of the sidebar can hold.
+///
+/// Nine because `1`-`9` are the access path: a row the digits cannot reach is
+/// a row with no way to load it.
+pub(crate) const MAX_SIDEBAR_ROWS: usize = 9;
 
 /// High-level status for the task state machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -210,6 +216,12 @@ struct TaskFilterFieldState {
     /// flipped once they have given it. Negating a require-empty is therefore
     /// "has some value", which nothing else in the panel can express.
     negated: bool,
+    /// The mode this row was built with.
+    ///
+    /// Kept so a saved field can leave `match` out when the user never
+    /// changed it — the defaults differ per row, so the row is the only thing
+    /// that knows its own.
+    default_string_mode: TaskFieldStringMode,
 }
 
 /// A display-friendly snapshot of one task filter row for the filter panel UI.
@@ -247,6 +259,24 @@ struct TaskFilterSet {
     /// than `(not a) and (not b)` — negating a set is a different statement
     /// from negating each of its rows, and both are reachable.
     negated: bool,
+    /// Saved values with no row to land on yet.
+    ///
+    /// A custom-field row only exists once a project carrying that field has
+    /// loaded, and the panel is written back to the named entry on every
+    /// change — so a value with nowhere to go has to be parked rather than
+    /// discarded, or loading a set with the wrong projects selected would
+    /// quietly erase half of it. Re-resolved on every rebuild, and written
+    /// back out by [`TaskFilterSet::to_saved`].
+    unresolved: Vec<SavedFilterField>,
+}
+
+/// The sidebar's one-line prompt, mounted on its bottom border.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SidebarPrompt {
+    /// Typing a name for `w`.
+    Save { text: String, caret: usize },
+    /// Confirming `d`.
+    ConfirmDelete { name: String },
 }
 
 /// Tracks the filter panel's visibility, edit mode, field cursor, and the
@@ -269,6 +299,26 @@ struct TaskFilterEditorState {
     active: usize,
     /// The date picker, while a date field is being edited through it.
     calendar: Option<CalendarState>,
+    /// The named entry the panel currently *is*, if any.
+    ///
+    /// `Some(name)` means every change writes through to that entry. `y`
+    /// clears it, which is the whole of "detach".
+    loaded: Option<String>,
+    /// Set by `refresh_table` whenever the panel is bound; cleared by a write.
+    dirty: bool,
+    sidebar_visible: bool,
+    /// First saved entry in the numbered window.
+    sidebar_page_start: usize,
+    /// How many saved entries the sidebar can currently show.
+    ///
+    /// Measured by the renderer, which is the only thing that knows the pane's
+    /// height, in the same way `ensure_filter_visible` learns the viewport.
+    /// `None` until the sidebar has been drawn once.
+    sidebar_rows: Option<usize>,
+    prompt: Option<SidebarPrompt>,
+    /// A one-line report that has nowhere better to go, such as a config
+    /// write that failed. Shown on the sidebar's bottom border.
+    notice: Option<String>,
 }
 
 /// Small cache of task records and custom field names keyed by task GID.
@@ -481,12 +531,11 @@ impl TaskFilterEditorState {
         }
 
         Self {
-            visible: false,
-            editing: false,
-            selected: 0,
-            sets: vec![TaskFilterSet { fields, negated: false }],
-            active: 0,
-            calendar: None,
+            sets: vec![TaskFilterSet {
+                fields,
+                ..TaskFilterSet::default()
+            }],
+            ..Self::default()
         }
     }
 
@@ -503,6 +552,16 @@ impl TaskFilterEditorState {
         self.visible = previous.visible;
         self.editing = previous.editing && self.visible;
         self.calendar = if self.editing { previous.calendar } else { None };
+        // The named entry, its binding, and the sidebar's own state are all
+        // things the user set; a rebuild that dropped them would detach the
+        // panel mid-load.
+        self.loaded = previous.loaded;
+        self.dirty = previous.dirty;
+        self.sidebar_visible = previous.sidebar_visible;
+        self.sidebar_page_start = previous.sidebar_page_start;
+        self.sidebar_rows = previous.sidebar_rows;
+        self.prompt = previous.prompt;
+        self.notice = previous.notice;
 
         let template = self.sets.first().cloned().unwrap_or_default();
         self.sets = previous
@@ -520,6 +579,46 @@ impl TaskFilterEditorState {
 
         self.active = previous.active.min(self.sets.len() - 1);
         self.selected = previous.selected.min(self.fields().len().saturating_sub(1));
+    }
+
+    /// Every set as it would be written to `tuisana.toml`.
+    fn to_saved(&self) -> Vec<SavedFilterSet> {
+        self.sets.iter().map(TaskFilterSet::to_saved).collect()
+    }
+
+    /// Replaces every set with the saved ones.
+    ///
+    /// The panel's own state — visibility, the field cursor, the sidebar — is
+    /// not part of a named entry, so it survives; the active tab and the field
+    /// cursor are clamped to whatever the entry brought.
+    fn apply_saved(&mut self, saved: &[SavedFilterSet]) {
+        let template = self
+            .sets
+            .first()
+            .map(TaskFilterSet::cleared)
+            .unwrap_or_default();
+        self.sets = saved
+            .iter()
+            .map(|set| {
+                let mut fresh = template.clone();
+                fresh.apply_saved(set);
+                fresh
+            })
+            .collect();
+        if self.sets.is_empty() {
+            self.sets.push(template);
+        }
+
+        self.active = self.active.min(self.sets.len() - 1);
+        self.selected = self.selected.min(self.fields().len().saturating_sub(1));
+        self.stop_editing();
+    }
+
+    /// How many saved entries the numbered window holds.
+    fn sidebar_window(&self) -> usize {
+        self.sidebar_rows
+            .unwrap_or(MAX_SIDEBAR_ROWS)
+            .clamp(1, MAX_SIDEBAR_ROWS)
     }
 
     /// The active set's fields, or nothing before a dataset has loaded.
@@ -611,14 +710,9 @@ impl TaskFilterEditorState {
 
     fn clear_current(&mut self) {
         if let Some(field) = self.selected_field_mut() {
-            field.query.clear();
-            field.query_caret = 0;
-            field.label_values.clear();
-            field.label_cursor = 0;
             // `ctrl-l` resets the row completely: require-empty and the
             // negation go with the value they were qualifying.
-            field.empty_required = false;
-            field.negated = false;
+            field.clear_value();
         }
     }
 
@@ -998,6 +1092,87 @@ impl TaskFilterEditorState {
         self.stop_editing();
     }
 
+    /// Pages the numbered window, clamped at both ends.
+    ///
+    /// A no-op when everything fits: the digits would address the same rows
+    /// either way, so moving the window would only make them lie.
+    fn page_sidebar(&mut self, delta: i32, total: usize) {
+        let window = self.sidebar_window();
+        if total <= window {
+            self.sidebar_page_start = 0;
+            return;
+        }
+
+        let last_start = total.saturating_sub(1) / window * window;
+        let start = self.sidebar_page_start as i32 + delta * window as i32;
+        self.sidebar_page_start = start.clamp(0, last_start as i32) as usize;
+    }
+
+    /// Opens the save prompt, pre-filled with the loaded name.
+    ///
+    /// Opens the sidebar too, because the prompt rides its bottom border and
+    /// has nowhere else to be.
+    fn prompt_save(&mut self) {
+        let text = self.loaded.clone().unwrap_or_default();
+        self.sidebar_visible = true;
+        self.notice = None;
+        self.prompt = Some(SidebarPrompt::Save {
+            caret: text.chars().count(),
+            text,
+        });
+    }
+
+    /// Opens the delete confirmation, or answers `false` when nothing is
+    /// loaded.
+    ///
+    /// Refused rather than guessed at: with no cursor in the sidebar there is
+    /// no other unambiguous target, and "the one you are currently editing"
+    /// is a target the user just chose by pressing its number.
+    fn prompt_delete(&mut self) -> bool {
+        let Some(name) = self.loaded.clone() else {
+            self.notice = Some("no set is loaded".to_string());
+            return false;
+        };
+        self.sidebar_visible = true;
+        self.notice = None;
+        self.prompt = Some(SidebarPrompt::ConfirmDelete { name });
+        true
+    }
+
+    fn prompt_push_char(&mut self, ch: char) {
+        // A report takes the prompt's line, so typing has to take it back or
+        // the name being entered would be invisible.
+        self.notice = None;
+        if let Some(SidebarPrompt::Save { text, caret }) = self.prompt.as_mut() {
+            let mut chars = text.chars().collect::<Vec<_>>();
+            let at = (*caret).min(chars.len());
+            chars.insert(at, ch);
+            *text = chars.into_iter().collect();
+            *caret = at + 1;
+        }
+    }
+
+    fn prompt_pop_char(&mut self) {
+        self.notice = None;
+        if let Some(SidebarPrompt::Save { text, caret }) = self.prompt.as_mut() {
+            let mut chars = text.chars().collect::<Vec<_>>();
+            let at = (*caret).min(chars.len());
+            if at == 0 {
+                return;
+            }
+            chars.remove(at - 1);
+            *text = chars.into_iter().collect();
+            *caret = at - 1;
+        }
+    }
+
+    fn prompt_move_caret(&mut self, delta: i64) {
+        if let Some(SidebarPrompt::Save { text, caret }) = self.prompt.as_mut() {
+            let len = text.chars().count() as i64;
+            *caret = (*caret as i64 + delta).clamp(0, len) as usize;
+        }
+    }
+
     /// Moves to another set, wrapping.
     fn select_set(&mut self, delta: i32) {
         if self.sets.len() <= 1 {
@@ -1138,14 +1313,10 @@ impl TaskFilterSet {
     fn cleared(&self) -> Self {
         let mut set = self.clone();
         for field in &mut set.fields {
-            field.query.clear();
-            field.query_caret = 0;
-            field.label_values.clear();
-            field.label_cursor = 0;
-            field.empty_required = false;
-            field.negated = false;
+            field.clear_value();
         }
         set.negated = false;
+        set.unresolved.clear();
         set
     }
 
@@ -1196,6 +1367,116 @@ impl TaskFilterSet {
             // values arrive, which rewrites `query` under the caret.
             field.query_caret = old.query_caret.min(field.query.chars().count());
         }
+
+        // A custom-field row only appears once a project carrying it has
+        // loaded, and this rebuild is exactly that moment — so the parked
+        // values get another try, and what still has nowhere to go stays
+        // parked rather than being dropped on the floor.
+        let parked = previous.unresolved.clone();
+        self.unresolved = parked
+            .into_iter()
+            .filter(|saved| !self.apply_saved_field(saved))
+            .collect();
+    }
+
+    /// This set as it would be written to `tuisana.toml`.
+    ///
+    /// The parked values go back out with the rest: the panel is written back
+    /// to the named entry on every change, so anything left out here is
+    /// deleted from the user's config.
+    fn to_saved(&self) -> SavedFilterSet {
+        let mut fields = self
+            .fields
+            .iter()
+            .filter_map(TaskFilterFieldState::to_saved)
+            .collect::<Vec<_>>();
+        fields.extend(self.unresolved.iter().cloned());
+
+        SavedFilterSet {
+            negated: self.negated,
+            fields,
+        }
+    }
+
+    /// Writes a saved set's values onto a freshly cleared field list.
+    fn apply_saved(&mut self, saved: &SavedFilterSet) {
+        self.negated = saved.negated;
+        self.unresolved.clear();
+        for field in &mut self.fields {
+            field.clear_value();
+        }
+
+        for value in &saved.fields {
+            if !self.apply_saved_field(value) {
+                self.unresolved.push(value.clone());
+            }
+        }
+    }
+
+    /// Writes one saved value onto the row with the matching key, answering
+    /// whether a row took it.
+    ///
+    /// Matched by `spec.key`, exactly as `restore_from` matches, with label
+    /// rows deriving their values from the query and `empty` gated on
+    /// `spec.can_be_empty`.
+    fn apply_saved_field(&mut self, saved: &SavedFilterField) -> bool {
+        let Some(field) = self
+            .fields
+            .iter_mut()
+            .find(|field| field.spec.key == saved.key)
+        else {
+            return false;
+        };
+
+        if let Some(mode) = saved.string_mode.as_deref().and_then(parse_string_mode) {
+            field.string_mode = mode;
+        }
+        field.negated = saved.negated;
+        field.empty_required = saved.empty && field.spec.can_be_empty;
+
+        if field.empty_required {
+            // A value and a require-empty cannot both be in force.
+            field.query.clear();
+            field.label_values.clear();
+            field.label_cursor = 0;
+        } else {
+            match field.spec.kind {
+                TaskFieldFilterKind::Labels => {
+                    field.label_values = parse_label_values(&saved.query);
+                    field.label_cursor = 0;
+                    field.query = field.label_values.join(" | ");
+                }
+                _ => field.query = saved.query.clone(),
+            }
+        }
+
+        // The end of the text, so typing continues from where the value
+        // leaves off — except on a labels row, whose text is rebuilt from the
+        // chips and whose caret is never shown.
+        field.query_caret = match field.spec.kind {
+            TaskFieldFilterKind::Labels => 0,
+            _ => field.query.chars().count(),
+        };
+        true
+    }
+}
+
+/// The saved spelling of a match mode.
+fn string_mode_name(mode: TaskFieldStringMode) -> &'static str {
+    match mode {
+        TaskFieldStringMode::Fuzzy => "fuzzy",
+        TaskFieldStringMode::Substring => "contains",
+        TaskFieldStringMode::Regex => "regex",
+    }
+}
+
+/// Parses a saved match mode, or `None` when it names no mode.
+fn parse_string_mode(name: &str) -> Option<TaskFieldStringMode> {
+    match name {
+        "fuzzy" => Some(TaskFieldStringMode::Fuzzy),
+        "contains" => Some(TaskFieldStringMode::Substring),
+        "regex" => Some(TaskFieldStringMode::Regex),
+        _ => None,
     }
 }
 
@@ -1215,6 +1496,7 @@ impl TaskFilterFieldState {
             label_cursor: 0,
             empty_required: false,
             negated: false,
+            default_string_mode: string_mode,
         }
     }
 
@@ -1260,6 +1542,46 @@ impl TaskFilterFieldState {
     /// Whether this field excludes anything.
     fn is_active(&self) -> bool {
         self.empty_required || !self.query.trim().is_empty()
+    }
+
+    /// Resets everything the user typed, keeping the row and its match mode.
+    ///
+    /// The match mode is deliberately kept: someone working in regex should
+    /// not have to re-pick it every time a row is emptied.
+    fn clear_value(&mut self) {
+        self.query.clear();
+        self.query_caret = 0;
+        self.label_values.clear();
+        self.label_cursor = 0;
+        self.empty_required = false;
+        self.negated = false;
+    }
+
+    /// This row as a saved field, or `None` when it filters nothing.
+    ///
+    /// An inactive row is skipped before its verdict is ever asked for, so
+    /// writing one out would put a line in the user's config that does
+    /// nothing.
+    fn to_saved(&self) -> Option<SavedFilterField> {
+        if !self.is_active() {
+            return None;
+        }
+
+        Some(SavedFilterField {
+            key: self.spec.key.clone(),
+            query: if self.empty_required {
+                String::new()
+            } else {
+                self.query.clone()
+            },
+            // Only for the rows a mode means anything on, and only when it is
+            // not the one the row was built with.
+            string_mode: (matches!(self.spec.kind, TaskFieldFilterKind::String)
+                && self.string_mode != self.default_string_mode)
+                .then(|| string_mode_name(self.string_mode).to_string()),
+            empty: self.empty_required,
+            negated: self.negated,
+        })
     }
 
     /// Whether the record has nothing at all in this field.
@@ -1946,6 +2268,141 @@ impl TaskState {
         self.refresh_table();
     }
 
+    /// Whether the `Sets` sidebar is drawn.
+    pub fn filter_sets_sidebar_visible(&self) -> bool {
+        self.view.filter_editor.sidebar_visible
+    }
+
+    pub(crate) fn filter_sets_toggle_sidebar(&mut self) {
+        let editor = &mut self.view.filter_editor;
+        editor.sidebar_visible = !editor.sidebar_visible;
+        if !editor.sidebar_visible {
+            // The prompt rides the sidebar's border, so closing the one
+            // closes the other.
+            editor.prompt = None;
+            editor.notice = None;
+        }
+    }
+
+    /// Tells the panel how many saved entries the sidebar can show.
+    ///
+    /// The renderer is the only thing that knows the pane's height, in the
+    /// same way it is the only thing that knows the filter viewport.
+    pub fn set_filter_sets_window(&mut self, rows: usize) {
+        self.view.filter_editor.sidebar_rows = Some(rows);
+    }
+
+    /// The first saved entry in the numbered window.
+    pub fn filter_sets_page_start(&self) -> usize {
+        self.view.filter_editor.sidebar_page_start
+    }
+
+    /// How many saved entries the numbered window holds.
+    pub fn filter_sets_window(&self) -> usize {
+        self.view.filter_editor.sidebar_window()
+    }
+
+    pub(crate) fn filter_sets_page(&mut self, delta: i32, total: usize) {
+        self.view.filter_editor.page_sidebar(delta, total);
+    }
+
+    /// The named entry the panel is bound to, if any.
+    pub fn filter_set_loaded_name(&self) -> Option<&str> {
+        self.view.filter_editor.loaded.as_deref()
+    }
+
+    /// The panel's sets, as they would be written to `tuisana.toml`.
+    pub fn filter_sets_to_saved(&self) -> Vec<SavedFilterSet> {
+        self.view.filter_editor.to_saved()
+    }
+
+    /// Replaces the panel with a named entry and binds it to that name.
+    ///
+    /// From here on the entry is a live view rather than a snapshot: every
+    /// change writes through to it.
+    pub fn filter_sets_load(&mut self, name: &str, saved: &[SavedFilterSet]) {
+        self.view.filter_editor.apply_saved(saved);
+        self.view.filter_editor.loaded = Some(name.to_string());
+        self.view.filter_editor.notice = None;
+        self.refresh_table();
+        // Freshly loaded is by definition what is already on disk.
+        self.view.filter_editor.dirty = false;
+    }
+
+    /// Binds the panel to a name without touching what it holds.
+    pub fn filter_set_bind(&mut self, name: impl Into<String>) {
+        self.view.filter_editor.loaded = Some(name.into());
+        self.view.filter_editor.dirty = false;
+    }
+
+    /// Keeps what is on screen and stops being the named entry.
+    pub fn filter_set_detach(&mut self) {
+        self.view.filter_editor.loaded = None;
+        self.view.filter_editor.dirty = false;
+    }
+
+    /// Whether the bound panel has changed since it was last written.
+    pub fn filter_set_dirty(&self) -> bool {
+        self.view.filter_editor.dirty
+    }
+
+    pub fn clear_filter_set_dirty(&mut self) {
+        self.view.filter_editor.dirty = false;
+    }
+
+    pub(crate) fn filter_set_prompt(&self) -> Option<&SidebarPrompt> {
+        self.view.filter_editor.prompt.as_ref()
+    }
+
+    pub(crate) fn filter_set_prompt_save(&mut self) {
+        self.view.filter_editor.prompt_save();
+    }
+
+    pub(crate) fn filter_set_prompt_delete(&mut self) -> bool {
+        self.view.filter_editor.prompt_delete()
+    }
+
+    pub(crate) fn filter_set_prompt_cancel(&mut self) {
+        self.view.filter_editor.prompt = None;
+    }
+
+    pub(crate) fn filter_set_prompt_push_char(&mut self, ch: char) {
+        self.view.filter_editor.prompt_push_char(ch);
+    }
+
+    pub(crate) fn filter_set_prompt_pop_char(&mut self) {
+        self.view.filter_editor.prompt_pop_char();
+    }
+
+    pub(crate) fn filter_set_prompt_move_caret(&mut self, delta: i64) {
+        self.view.filter_editor.prompt_move_caret(delta);
+    }
+
+    /// The name being typed at the save prompt, if that is the open one.
+    pub fn filter_set_prompt_text(&self) -> Option<&str> {
+        match self.view.filter_editor.prompt.as_ref() {
+            Some(SidebarPrompt::Save { text, .. }) => Some(text.as_str()),
+            _ => None,
+        }
+    }
+
+    /// A one-line report shown on the sidebar's bottom border.
+    pub fn filter_sets_notice(&self) -> Option<&str> {
+        self.view.filter_editor.notice.as_deref()
+    }
+
+    /// Clears a report, once whatever it was about has gone right.
+    pub fn clear_filter_sets_notice(&mut self) {
+        self.view.filter_editor.notice = None;
+    }
+
+    pub fn set_filter_sets_notice(&mut self, message: impl Into<String>) {
+        // Opened so the message has somewhere to be: a report nobody can see
+        // is not a report.
+        self.view.filter_editor.sidebar_visible = true;
+        self.view.filter_editor.notice = Some(message.into());
+    }
+
     /// `(active index, total)`, for the pane's chips and the tab strip.
     pub fn filter_set_position(&self) -> (usize, usize) {
         (
@@ -2156,6 +2613,11 @@ impl TaskState {
     /// The runtime owns this because only the runtime can see the input queue.
     pub fn set_input_pending(&mut self, pending: bool) {
         self.view.input_pending = pending;
+    }
+
+    /// Whether another input event is already waiting behind the current one.
+    pub fn input_pending(&self) -> bool {
+        self.view.input_pending
     }
 
     /// Rebuilds the table if a keystroke left it out of date.
@@ -2836,6 +3298,15 @@ impl TaskState {
     /// runtime settling it first: the event loop calls [`Self::settle_table`]
     /// before it draws, as soon as the input queue is empty.
     fn refresh_table(&mut self) {
+        // Set here rather than in twenty mutators: every panel change funnels
+        // through this one call, so this is the one place nothing can bypass.
+        // It over-reports — data arriving marks the panel dirty without the
+        // user having touched it — and that is fine, because the writer
+        // compares before it writes and skips a no-op.
+        if self.view.filter_editor.loaded.is_some() {
+            self.view.filter_editor.dirty = true;
+        }
+
         if self.view.input_pending {
             self.view.stale_since.get_or_insert_with(Instant::now);
             return;
@@ -5488,6 +5959,339 @@ mod tests {
         assert_eq!(state.view.filter_editor.selected, row);
         state.filter_select_set(-1);
         assert_eq!(state.view.filter_editor.selected, row);
+    }
+
+
+    // ---- Named filter sets -------------------------------------------------
+
+    /// A panel built from the same dataset twice: one to fill in and save, one
+    /// to apply the saved form onto.
+    fn saved_round_trip_pair() -> (TaskState, TaskState) {
+        let tasks = vec![
+            task_with("a", Some("2026-09-01"), Some("Alex"), Some("High")),
+            task_with("b", None, None, Some("Low")),
+        ];
+        (
+            loaded_state_with_priority_field(tasks.clone()),
+            loaded_state_with_priority_field(tasks),
+        )
+    }
+
+    #[test]
+    fn a_filled_in_panel_survives_the_trip_through_toml_and_back() {
+        let (mut state, mut fresh) = saved_round_trip_pair();
+
+        // One field of each kind, a negated row, a require-empty, and a
+        // second, negated set.
+        set_field(&mut state, "title", "ship");
+        state.filter_cycle_mode(); // fuzzy -> contains, so `match` is written
+        set_field(&mut state, "assignee", "alex");
+        state.filter_toggle_negate_field();
+        select_field(&mut state, "Priority");
+        state.filter_cycle_label_value(1);
+        select_field(&mut state, "start");
+        state.filter_toggle_require_empty();
+        state.filter_add_set();
+        set_field(&mut state, "due", "2026-09-01..2026-09-30");
+        // Its `Title` gets a value too: a row with nothing in it is not
+        // written, so the `contains` it inherited from the first set is
+        // session state rather than something a name captures.
+        set_field(&mut state, "title", "kit");
+        state.filter_toggle_negate_set();
+
+        let saved = state.filter_sets_to_saved();
+        let text = toml::to_string_pretty(&crate::config::NamedFilterSet {
+            name: "Round trip".to_string(),
+            sets: saved.clone(),
+        })
+        .expect("serializes");
+        let parsed: crate::config::NamedFilterSet =
+            toml::from_str(&text).expect("reparses");
+        assert_eq!(parsed.sets, saved, "the file is what the panel produced");
+
+        fresh.filter_sets_load("Round trip", &parsed.sets);
+
+        // The whole `Vec<TaskFilterSet>`, not field by field: that is what
+        // makes this catch a field added later and not carried.
+        assert_eq!(
+            fresh.view.filter_editor.sets, state.view.filter_editor.sets,
+            "the reloaded panel is the panel that was saved"
+        );
+    }
+
+    #[test]
+    fn a_saved_field_with_no_row_to_land_on_is_parked_rather_than_dropped() {
+        // The panel is written back to the named entry on every change, so a
+        // field dropped here is a filter deleted from the user's config.
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship", false)]);
+        let saved = vec![crate::config::SavedFilterSet {
+            negated: false,
+            fields: vec![
+                crate::config::SavedFilterField {
+                    key: "assignee".to_string(),
+                    query: "alex".to_string(),
+                    ..Default::default()
+                },
+                crate::config::SavedFilterField {
+                    key: "custom:Priority".to_string(),
+                    query: "High".to_string(),
+                    ..Default::default()
+                },
+            ],
+        }];
+
+        state.filter_sets_load("Mine", &saved);
+
+        assert!(
+            state
+                .view
+                .filter_editor
+                .fields()
+                .iter()
+                .all(|field| field.spec.key != "custom:Priority"),
+            "this dataset has no Priority row for it to land on"
+        );
+        assert_eq!(
+            state.filter_sets_to_saved(),
+            saved,
+            "and it is still written back out"
+        );
+    }
+
+    #[test]
+    fn a_parked_field_lands_once_the_project_carrying_it_loads() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship", false)]);
+        state.filter_sets_load(
+            "Mine",
+            &[crate::config::SavedFilterSet {
+                negated: false,
+                fields: vec![crate::config::SavedFilterField {
+                    key: "custom:Priority".to_string(),
+                    query: "High".to_string(),
+                    ..Default::default()
+                }],
+            }],
+        );
+
+        // The rebuild a streamed project triggers is exactly the moment the
+        // custom-field row appears.
+        let projects = vec![Project::new("p1", "Inbox", true)];
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_sections(
+                "p1",
+                vec![SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_custom_field_settings(
+                "p1",
+                vec![ProjectCustomFieldSettingDto {
+                    gid: "set-1".to_string(),
+                    custom_field: CustomFieldDto {
+                        gid: "cf1".to_string(),
+                        name: "Priority".to_string(),
+                    },
+                }],
+            )
+            .with_tasks(
+                "p1",
+                vec![task_with("t1", None, None, Some("High"))],
+            );
+        let query = crate::asana::TaskQuery::for_project("p1", TaskLoadScope::All);
+        let dataset = TaskState::build_dataset_for_projects(&client, &projects, &query)
+            .expect("dataset builds");
+        state.begin_loading(&projects);
+        state.ingest_loaded_project("p1", query, dataset);
+
+        let priority = state
+            .view
+            .filter_editor
+            .fields()
+            .iter()
+            .find(|field| field.spec.key == "custom:Priority")
+            .expect("the row exists now");
+        assert_eq!(priority.query, "High", "the parked value landed on it");
+        assert!(
+            state.view.filter_editor.sets[0].unresolved.is_empty(),
+            "and nothing is still parked"
+        );
+    }
+
+    #[test]
+    fn the_binding_and_the_sidebar_survive_a_streaming_reload() {
+        let projects = vec![Project::new("p1", "Inbox", true)];
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship", false)]);
+        state.filter_sets_load(
+            "Mine",
+            &[crate::config::SavedFilterSet {
+                negated: false,
+                fields: vec![crate::config::SavedFilterField {
+                    key: "assignee".to_string(),
+                    query: "alex".to_string(),
+                    ..Default::default()
+                }],
+            }],
+        );
+        state.filter_sets_toggle_sidebar();
+        state.set_filter_sets_window(3);
+        state.filter_sets_page(1, 14);
+
+        let client = FakeAsanaClient::new(projects.clone())
+            .with_sections(
+                "p1",
+                vec![SectionDto {
+                    gid: "s1".to_string(),
+                    name: "Today".to_string(),
+                }],
+            )
+            .with_tasks("p1", vec![sel_task("t1", "Ship", false)]);
+        let query = crate::asana::TaskQuery::for_project("p1", TaskLoadScope::All);
+        let dataset = TaskState::build_dataset_for_projects(&client, &projects, &query)
+            .expect("dataset builds");
+        state.begin_loading(&projects);
+        state.ingest_loaded_project("p1", query, dataset);
+
+        assert_eq!(state.filter_set_loaded_name(), Some("Mine"));
+        assert!(state.filter_sets_sidebar_visible());
+        assert_eq!(state.filter_sets_page_start(), 3);
+        assert_eq!(state.filter_panel_rows()[1].1, "alex");
+    }
+
+    #[test]
+    fn loading_replaces_every_tab_and_clamps_the_cursors() {
+        let mut state = loaded_state_with_priority_field(vec![task_with(
+            "a",
+            Some("2026-09-01"),
+            Some("Alex"),
+            Some("High"),
+        )]);
+        // Three tabs, standing on the last, with the cursor on the last row.
+        state.filter_add_set();
+        state.filter_add_set();
+        select_field(&mut state, "Priority");
+        assert_eq!(state.filter_set_position(), (2, 3));
+
+        state.filter_sets_load(
+            "One tab",
+            &[crate::config::SavedFilterSet {
+                negated: true,
+                fields: vec![crate::config::SavedFilterField {
+                    key: "assignee".to_string(),
+                    query: "alex".to_string(),
+                    ..Default::default()
+                }],
+            }],
+        );
+
+        assert_eq!(state.filter_set_position(), (0, 1), "one tab, back on it");
+        assert!(state.filter_active_set_negated());
+        assert_eq!(state.filter_panel_rows()[1].1, "alex");
+        assert!(
+            state.view.filter_editor.selected < state.view.filter_editor.fields().len(),
+            "the field cursor is inside the rows that exist"
+        );
+    }
+
+    #[test]
+    fn detaching_keeps_the_panel_and_stops_the_write_through() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship", false)]);
+        state.filter_sets_load(
+            "Mine",
+            &[crate::config::SavedFilterSet {
+                negated: false,
+                fields: vec![crate::config::SavedFilterField {
+                    key: "assignee".to_string(),
+                    query: "alex".to_string(),
+                    ..Default::default()
+                }],
+            }],
+        );
+
+        state.filter_set_detach();
+
+        assert_eq!(state.filter_set_loaded_name(), None);
+        assert_eq!(
+            state.filter_panel_rows()[1].1,
+            "alex",
+            "the panel keeps exactly what it was showing"
+        );
+        set_field(&mut state, "title", "ship");
+        assert!(
+            !state.filter_set_dirty(),
+            "and a later edit has nothing to write through to"
+        );
+    }
+
+    #[test]
+    fn a_bound_panel_is_marked_dirty_by_any_change_and_an_unbound_one_is_not() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship", false)]);
+
+        set_field(&mut state, "title", "ship");
+        assert!(!state.filter_set_dirty(), "nothing is bound yet");
+
+        state.filter_sets_load("Mine", &[]);
+        assert!(!state.filter_set_dirty(), "a fresh load is already on disk");
+
+        set_field(&mut state, "title", "ship");
+        assert!(state.filter_set_dirty());
+        state.clear_filter_set_dirty();
+        assert!(!state.filter_set_dirty());
+    }
+
+    #[test]
+    fn the_numbered_window_pages_and_clamps_at_both_ends() {
+        let mut state = TaskState::new();
+        state.set_filter_sets_window(9);
+
+        // Everything fits, so there is nothing to page to: moving the window
+        // would only make the digits lie about which entry they load.
+        state.filter_sets_page(1, 4);
+        assert_eq!(state.filter_sets_page_start(), 0);
+
+        state.filter_sets_page(1, 14);
+        assert_eq!(state.filter_sets_page_start(), 9);
+        state.filter_sets_page(1, 14);
+        assert_eq!(state.filter_sets_page_start(), 9, "clamped at the last page");
+        state.filter_sets_page(-1, 14);
+        assert_eq!(state.filter_sets_page_start(), 0);
+        state.filter_sets_page(-1, 14);
+        assert_eq!(state.filter_sets_page_start(), 0, "clamped at the first");
+    }
+
+    #[test]
+    fn deleting_the_prompt_target_is_refused_with_nothing_loaded() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship", false)]);
+
+        assert!(!state.filter_set_prompt_delete());
+        assert!(state.filter_set_prompt().is_none());
+
+        state.filter_set_bind("Mine");
+        assert!(state.filter_set_prompt_delete());
+        assert!(matches!(
+            state.filter_set_prompt(),
+            Some(super::SidebarPrompt::ConfirmDelete { name }) if name == "Mine"
+        ));
+    }
+
+    #[test]
+    fn the_save_prompt_opens_the_sidebar_and_prefills_the_loaded_name() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship", false)]);
+        state.filter_set_bind("Mine");
+
+        state.filter_set_prompt_save();
+
+        assert!(state.filter_sets_sidebar_visible(), "the prompt needs a border to ride");
+        assert_eq!(state.filter_set_prompt_text(), Some("Mine"));
+
+        // The caret starts at the end, and typing and deleting act on it.
+        state.filter_set_prompt_push_char('r');
+        assert_eq!(state.filter_set_prompt_text(), Some("Miner"));
+        state.filter_set_prompt_move_caret(-2);
+        state.filter_set_prompt_push_char('X');
+        assert_eq!(state.filter_set_prompt_text(), Some("MinXer"));
+        state.filter_set_prompt_pop_char();
+        assert_eq!(state.filter_set_prompt_text(), Some("Miner"));
     }
 
     #[test]

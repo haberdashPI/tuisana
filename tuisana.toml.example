@@ -282,6 +282,93 @@ key = "ctrl-t"
 mode = "filter_edit"
 command = "filter_negate_set"
 
+# Named filter sets. `b` shows the `Sets` sidebar, `1`-`9` load the entry at
+# that position in its visible window, and `<`/`>` page the window when there
+# are more entries than fit. `w` saves the panel under a name and binds to it:
+# from then on every edit writes through to that entry. `y` detaches, keeping
+# what is on screen; `d` deletes the loaded entry after a confirmation.
+#
+# The input layer lowercases letters, so a shifted *letter* is unreachable —
+# but shifted punctuation arrives as its own character, which is what makes
+# `<` and `>` available here. `0` is left alone: it restores the top pane.
+
+[[bind]]
+key = "b"
+mode = "filter"
+command = "filter_sets_toggle"
+
+[[bind]]
+key = "w"
+mode = "filter"
+command = "filter_set_save"
+
+[[bind]]
+key = "y"
+mode = "filter"
+command = "filter_set_detach"
+
+[[bind]]
+key = "d"
+mode = "filter"
+command = "filter_set_delete"
+
+[[bind]]
+key = "<"
+mode = "filter"
+command = "filter_sets_page_back"
+
+[[bind]]
+key = ">"
+mode = "filter"
+command = "filter_sets_page_forward"
+
+# All nine spelled out, so any of them can be rebound on its own.
+
+[[bind]]
+key = "1"
+mode = "filter"
+command = "filter_set_load_1"
+
+[[bind]]
+key = "2"
+mode = "filter"
+command = "filter_set_load_2"
+
+[[bind]]
+key = "3"
+mode = "filter"
+command = "filter_set_load_3"
+
+[[bind]]
+key = "4"
+mode = "filter"
+command = "filter_set_load_4"
+
+[[bind]]
+key = "5"
+mode = "filter"
+command = "filter_set_load_5"
+
+[[bind]]
+key = "6"
+mode = "filter"
+command = "filter_set_load_6"
+
+[[bind]]
+key = "7"
+mode = "filter"
+command = "filter_set_load_7"
+
+[[bind]]
+key = "8"
+mode = "filter"
+command = "filter_set_load_8"
+
+[[bind]]
+key = "9"
+mode = "filter"
+command = "filter_set_load_9"
+
 [[bind]]
 key = "["
 mode = "task"
@@ -388,3 +475,26 @@ command = "calendar_jump_to_end"
 gid = "project-gid-here"
 starred = true
 hidden = false
+
+# Filter panels saved under a name. Normally written by the app — `w` in the
+# filter panel, and then every edit while the entry is loaded — but writable
+# by hand and read back exactly as written. Anything at its default is left
+# out, which is why this one names no match mode and no negation.
+#
+# `key` is the panel's own row key: title, assignee, due, start, state,
+# projects, or custom:<Name>. Custom fields are keyed by name so an entry
+# survives a reload that brings different Asana ids, and a key matching no
+# loaded row is kept rather than dropped.
+
+[[filter_set]]
+name = "Overdue mine"
+
+  [[filter_set.set]]
+
+    [[filter_set.set.field]]
+    key = "assignee"
+    query = "alex"
+
+    [[filter_set.set.field]]
+    key = "due"
+    query = "..today"

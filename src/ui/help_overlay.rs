@@ -56,7 +56,7 @@ pub fn groups_for(mode: Mode) -> Vec<HelpGroup> {
         Mode::Task => task_groups(),
         Mode::Gantt => gantt_groups(),
         Mode::GanttOrder => gantt_order_groups(),
-        Mode::Filter | Mode::FilterEdit => filter_groups(),
+        Mode::Filter | Mode::FilterEdit | Mode::FilterSetName => filter_groups(),
         Mode::Calendar => calendar_groups(),
         Mode::Project | Mode::ProjectSearch | Mode::Any => project_groups(),
     };
@@ -236,6 +236,21 @@ fn filter_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::FilterNegateSet], "negate this set (NOT)"),
                 Hint::literal("within a set", "fields narrow (AND)"),
                 Hint::literal("between sets", "results combine (OR)"),
+            ],
+        ),
+        HelpGroup::new(
+            "Named sets",
+            vec![
+                Hint::new(&[Action::FilterSetsToggle], "show the sidebar"),
+                Hint::literal("1-9", "load that entry"),
+                Hint::new(&[Action::FilterSetSave], "save under a name"),
+                Hint::new(&[Action::FilterSetDetach], "detach, keeping the panel"),
+                Hint::new(&[Action::FilterSetDelete], "delete the loaded one"),
+                Hint::new(
+                    &[Action::FilterSetsPageBack, Action::FilterSetsPageForward],
+                    "page the list",
+                ),
+                Hint::literal("loaded", "edits write through"),
             ],
         ),
         HelpGroup::new(
@@ -575,6 +590,46 @@ mod tests {
             assert_eq!(groups.first().expect("a group").title, first);
             assert_eq!(groups.last().expect("a group").title, "App");
         }
+    }
+
+    #[test]
+    fn the_filter_help_lists_the_named_set_keys() {
+        let theme = Theme::default();
+        let resolved = resolve(groups_for(Mode::Filter), &keymap(), Mode::Filter, &theme);
+
+        let (_, entries) = resolved
+            .iter()
+            .find(|(title, _)| *title == "Named sets")
+            .expect("the group is there");
+        let labels = entries
+            .iter()
+            .map(|(_, label)| *label)
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"show the sidebar"));
+        assert!(labels.contains(&"save under a name"));
+        assert!(labels.contains(&"delete the loaded one"));
+        // And the keys come from the live keymap rather than being spelled
+        // out, so a rebound `w` follows.
+        assert!(entries.iter().any(|(keys, label)| *label
+            == "save under a name"
+            && keys == "w"));
+    }
+
+    /// The prompt has no bindings of its own, so it borrows filter mode's
+    /// help rather than showing nothing.
+    #[test]
+    fn the_set_name_prompt_gets_the_filter_groups() {
+        assert_eq!(
+            groups_for(Mode::FilterSetName)
+                .iter()
+                .map(|group| group.title)
+                .collect::<Vec<_>>(),
+            groups_for(Mode::Filter)
+                .iter()
+                .map(|group| group.title)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

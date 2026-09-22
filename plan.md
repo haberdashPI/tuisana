@@ -124,6 +124,7 @@ along the way.
 | 11.75 | [Date selection](plan/11.75-date-selection.md) | ✓ |
 | 12 | [Gantt chart view](plan/12-gantt-chart-view.md) | ✓ |
 | 13 | [Filter sets](plan/13-filter-sets.md) | ✓ |
+| 13.5 | [Named filter sets](plan/13.5-named-filter-sets.md) | ✓ |
 | 14 | [Edit tasks](plan/14-edit-tasks.md) |  |
 | 15 | [Hardening and polish](plan/15-hardening-and-polish.md) |  |
 

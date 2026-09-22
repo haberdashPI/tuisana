@@ -178,6 +178,24 @@ pub enum Action {
     FilterRequireEmpty,
     FilterNegateField,
     FilterNegateSet,
+    /// Show or hide the named-filter-set sidebar.
+    FilterSetsToggle,
+    /// Load the saved entry at this position in the sidebar's visible window.
+    ///
+    /// The position rather than nine variants: `from_command` parses the
+    /// suffix and `Display` writes it back, and a `u8` payload costs nothing
+    /// on an enum that already derives `Clone, Debug, PartialEq, Eq, Hash`.
+    FilterSetLoad(u8),
+    /// Show the previous window of saved entries.
+    FilterSetsPageBack,
+    /// Show the next window of saved entries.
+    FilterSetsPageForward,
+    /// Save the panel under a name.
+    FilterSetSave,
+    /// Keep what is on screen, stop being the named entry.
+    FilterSetDetach,
+    /// Delete the loaded entry.
+    FilterSetDelete,
     /// Move the calendar's highlighted day back one day.
     CalendarPrevDay,
     /// Move the calendar's highlighted day forward one day.
@@ -316,6 +334,12 @@ impl Action {
             "filter_require_empty" => Ok(Self::FilterRequireEmpty),
             "filter_negate_field" => Ok(Self::FilterNegateField),
             "filter_negate_set" => Ok(Self::FilterNegateSet),
+            "filter_sets_toggle" => Ok(Self::FilterSetsToggle),
+            "filter_sets_page_back" => Ok(Self::FilterSetsPageBack),
+            "filter_sets_page_forward" => Ok(Self::FilterSetsPageForward),
+            "filter_set_save" => Ok(Self::FilterSetSave),
+            "filter_set_detach" => Ok(Self::FilterSetDetach),
+            "filter_set_delete" => Ok(Self::FilterSetDelete),
             "calendar_prev_day" => Ok(Self::CalendarPrevDay),
             "calendar_next_day" => Ok(Self::CalendarNextDay),
             "calendar_prev_month" => Ok(Self::CalendarPrevMonth),
@@ -352,7 +376,15 @@ impl Action {
             "gantt_order_move_bottom" => Ok(Self::GanttOrderMoveBottom),
             "gantt_order_commit" => Ok(Self::GanttOrderCommit),
             "gantt_order_cancel" => Ok(Self::GanttOrderCancel),
-            other => Err(Error::Backend(format!("unsupported command: {other}"))),
+            // The one piece of string handling in the action layer: nine
+            // load commands would otherwise be nine variants that differ only
+            // by a number.
+            other => other
+                .strip_prefix("filter_set_load_")
+                .and_then(|position| position.parse::<u8>().ok())
+                .filter(|position| (1..=9).contains(position))
+                .map(Self::FilterSetLoad)
+                .ok_or_else(|| Error::Backend(format!("unsupported command: {other}"))),
         }
     }
 
@@ -419,6 +451,12 @@ impl Action {
 
 impl Display for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The one variant with a payload, so the one that cannot be a
+        // borrowed name.
+        if let Action::FilterSetLoad(position) = self {
+            return write!(f, "filter_set_load_{position}");
+        }
+
         let name = match self {
             Action::Quit => "quit",
             Action::MoveUp => "move_up",
@@ -486,6 +524,14 @@ impl Display for Action {
             Action::FilterRequireEmpty => "filter_require_empty",
             Action::FilterNegateField => "filter_negate_field",
             Action::FilterNegateSet => "filter_negate_set",
+            Action::FilterSetsToggle => "filter_sets_toggle",
+            Action::FilterSetsPageBack => "filter_sets_page_back",
+            Action::FilterSetsPageForward => "filter_sets_page_forward",
+            Action::FilterSetSave => "filter_set_save",
+            Action::FilterSetDetach => "filter_set_detach",
+            Action::FilterSetDelete => "filter_set_delete",
+            // Handled above: it carries a position rather than a fixed name.
+            Action::FilterSetLoad(_) => unreachable!("handled before the match"),
             Action::CalendarPrevDay => "calendar_prev_day",
             Action::CalendarNextDay => "calendar_next_day",
             Action::CalendarPrevMonth => "calendar_prev_month",
@@ -633,6 +679,40 @@ mod tests {
                 action
             );
         }
+    }
+
+    /// The parsed suffix is the one piece of string handling in the action
+    /// layer, so it gets a round trip of its own.
+    #[test]
+    fn every_named_set_command_round_trips_through_its_name() {
+        let mut actions = vec![
+            Action::FilterSetsToggle,
+            Action::FilterSetsPageBack,
+            Action::FilterSetsPageForward,
+            Action::FilterSetSave,
+            Action::FilterSetDetach,
+            Action::FilterSetDelete,
+        ];
+        actions.extend((1..=9u8).map(Action::FilterSetLoad));
+
+        for action in actions {
+            assert_eq!(
+                Action::from_command(&action.to_string()).expect("parses"),
+                action,
+                "{action} did not round trip"
+            );
+        }
+
+        assert_eq!(
+            Action::FilterSetLoad(4).to_string(),
+            "filter_set_load_4"
+        );
+        // Out of range and unparseable suffixes are errors, not silent
+        // fallbacks to position zero.
+        assert!(Action::from_command("filter_set_load_0").is_err());
+        assert!(Action::from_command("filter_set_load_10").is_err());
+        assert!(Action::from_command("filter_set_load_x").is_err());
+        assert!(Action::from_command("filter_set_load_").is_err());
     }
 
     #[test]

@@ -236,6 +236,13 @@ All bindable commands:
 - `filter_set_remove`
 - `filter_set_next`
 - `filter_set_prev`
+- `filter_sets_toggle`
+- `filter_set_load_1` ... `filter_set_load_9`
+- `filter_sets_page_back`
+- `filter_sets_page_forward`
+- `filter_set_save`
+- `filter_set_detach`
+- `filter_set_delete`
 
 **Calendar mode** (the date picker)
 
@@ -355,6 +362,9 @@ The top window is shared between the project list and the filter view. When the 
 - `e` to require the field to be empty
 - `a` to add a filter set, `x` to remove the current one, `h`/`l` to move between
 - `!` to negate the selected field, `~` to negate the whole set
+- `b` to show or hide the named-set sidebar
+- `1`-`9` to load a named set, `<`/`>` to page the list
+- `w` to save the panel under a name, `y` to detach from it, `d` to delete it
 - `ctrl-l` to clear the search string
 - `ctrl-z`, `ctrl-s`, `ctrl-r` to switch search mode
 
@@ -385,6 +395,48 @@ calendar, `today..2026-09-28` picks the next week, `enter` commits, `a` adds a
 second set, `enter` opens its `Due` — the field cursor is shared, so you are
 already on the same row — `2027-01` picks four months out, `enter`. The table
 now holds both groups and nothing in between.
+
+**Named filter sets.** A filter you built once can be recalled by pressing a
+digit. A **named filter set** is the whole panel — every tab, each tab's
+negation, and each field's query, match mode, require-empty flag, and negation
+— saved under one name.
+
+It is deliberately *not* the sort, the grouping, the completed filter, subtask
+visibility, or the project selection. Those are the other half of the screen:
+a saved filter is a question about tasks, not about which projects it is asked
+of.
+
+- `b` opens a `Sets` pane down the left of the filter view. It is **never
+  focused** — `j` and `k` keep walking the filter fields, and its thin border
+  is what says so. On a narrow terminal it gives way rather than squeezing the
+  filter rows.
+- Pinned at the top is the live panel: its name, or `unnamed`, with how many
+  sets and how many active filters it holds. Below the rule are the saved
+  entries in name order, numbered from the top of the visible window.
+- `1`-`9` load the entry at that position. `<` and `>` page the window when
+  there are more entries than fit.
+- `w` opens a one-line prompt on the sidebar's border, pre-filled with the
+  loaded name. `enter` commits, `esc` cancels. An existing name is
+  overwritten; a new one is created. A blank name is refused.
+- `d` deletes the **loaded** entry after a `y`/`n` confirmation, and detaches
+  the panel. It is refused when nothing is loaded.
+
+**Loading binds the panel to the name.** From then on the entry is a live view
+rather than a snapshot: type into a field, add a tab, negate a set, and the
+named entry changes with it, on disk. A named set behaves like a file you have
+open, not like a clipboard — the alternative, a snapshot you have to remember
+to re-save, is the one that loses work. The write happens once per settled
+burst of typing, not once per keystroke.
+
+Two escapes: `y` **detaches**, keeping exactly what is on screen while the
+entry keeps whatever was last written to it — this is how you take a saved
+filter as a starting point and go somewhere else with it. `w` saves under a
+new name, which rebinds to that one.
+
+A filter naming a custom field from a project you have not loaded is *kept*,
+not dropped: it is re-resolved each time a project's fields arrive, and
+written back out meanwhile. Loading a set with the wrong projects selected
+cannot quietly erase half of it.
 
 **Requiring an empty field.** An empty filter field means "do not filter", so
 there is a separate key for "has no value": `e` on a filter row, or `ctrl-e`
@@ -594,6 +646,52 @@ assignee = ["Alex Chen", "Morgan Ellis"]
 - The chart's visibility, column count, and timeline window are not saved. They
   are view state like sort and grouping; `visible` and `columns` only set where a
   session starts.
+
+### Named filter sets
+
+The repeated `[[filter_set]]` section holds filter panels saved under a name.
+It is normally written by the app — `w` in the filter panel, and then every
+edit while the entry is loaded — but the file is writable by hand and is read
+back exactly as written. Anything at its default is left out, so a simple
+entry stays short.
+
+```toml
+[[filter_set]]
+name = "Sprint triage"
+
+  [[filter_set.set]]
+
+    [[filter_set.set.field]]
+    key = "assignee"
+    query = "alex"
+    match = "fuzzy"
+
+    [[filter_set.set.field]]
+    key = "due"
+    query = "..today"
+
+  [[filter_set.set]]
+  negated = true
+
+    [[filter_set.set.field]]
+    key = "custom:Priority"
+    query = "Low"
+```
+
+- `name` must be non-empty, and no two entries may have names that differ only
+  in case: the sidebar lists them by number, and two rows reading the same is
+  a trap.
+- Each `[[filter_set.set]]` is one tab. Fields AND within a tab; tabs OR
+  between them. `negated` inverts the whole tab, after its fields have ANDed.
+- `key` is the panel's own row key: `title`, `assignee`, `due`, `start`,
+  `state`, `projects`, or `custom:<Name>`. Custom fields are keyed by *name*
+  so an entry survives a reload that brings different Asana ids. A key that
+  matches no row in the loaded data is kept rather than rejected.
+- `match` is `fuzzy`, `contains`, or `regex`, and only applies to text rows.
+  It is omitted when it is the row's own default.
+- `empty = true` is "has no value", the same filter `e` sets. It is ignored on
+  a row that cannot be empty, such as `state`.
+- `negated = true` on a field inverts that row's verdict alone.
 
 ### Project visibility
 

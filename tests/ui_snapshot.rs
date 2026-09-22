@@ -25,7 +25,10 @@ use tuisana::{
         fake::FakeAsanaClient,
         AsanaClient,
     },
-    config::{Config, ProjectVisibilityConfig, ThemeConfig, ThemeGlyphs, ThemeVariant},
+    config::{
+        Config, NamedFilterSet, ProjectVisibilityConfig, SavedFilterField, SavedFilterSet,
+        ThemeConfig, ThemeGlyphs, ThemeVariant,
+    },
     domain::Project,
     ui::runtime::{run_session, InputEvent, KeySource},
 };
@@ -627,6 +630,63 @@ fn filter_mode_with_negations() {
             vec![key('!'), key('~'), key('a'), key('h')],
         ]
     });
+}
+
+/// A config carrying four saved filter sets, for the sidebar scenarios.
+///
+/// Written into the config the harness builds rather than typed at the
+/// prompt: four `w` cycles would be forty keystrokes of setup for a picture
+/// of the result.
+fn named_sets_config() -> Config {
+    fn entry(name: &str, key: &str, query: &str) -> NamedFilterSet {
+        NamedFilterSet {
+            name: name.to_string(),
+            sets: vec![SavedFilterSet {
+                negated: false,
+                fields: vec![SavedFilterField {
+                    key: key.to_string(),
+                    query: query.to_string(),
+                    ..SavedFilterField::default()
+                }],
+            }],
+        }
+    }
+
+    let mut config = config();
+    config.filter_sets = vec![
+        entry("Blocked", "custom:Priority", "High"),
+        entry("Overdue mine", "assignee", "alex"),
+        entry("Sprint triage", "title", "ship"),
+        entry("Waiting on", "assignee", "jo"),
+    ];
+    config
+}
+
+/// Four saved entries with the third loaded and the sidebar open, so the
+/// `current` row, the rule, the numbering, the loaded marker, and the sidebar
+/// giving way at 80 columns are all pinned.
+#[test]
+fn filter_mode_with_the_named_set_sidebar() {
+    assert_snapshot_with(named_sets_config(), WIDTHS.to_vec(), "filter-sets-named", || {
+        vec![enter_task_mode(), vec![key('f'), key('b'), key('3')]]
+    });
+}
+
+/// Mid-`w`, with text typed, so the border-mounted prompt is pinned.
+#[test]
+fn filter_mode_naming_a_set() {
+    assert_snapshot_with(
+        named_sets_config(),
+        WIDTHS.to_vec(),
+        "filter-sets-save-prompt",
+        || {
+            vec![
+                enter_task_mode(),
+                vec![key('f'), key('b'), key('w')],
+                "sprint".chars().map(key).collect(),
+            ]
+        },
+    );
 }
 
 /// A require-empty on `Due`, so `(none)` is drawn next to the `—` of the

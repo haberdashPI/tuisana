@@ -57,6 +57,12 @@ a convention.
   mid-load. A `due` filter is pushed down to Asana, so `due_date_range_for_query`
   has to send the *union* of the sets' windows or the cache records a window as
   covered that was never fetched.
+- The panel can be **bound** to a named entry in `tuisana.toml`, and while it
+  is, every change writes through to that entry — once per settled burst of
+  typing, from `App::handle_key_event`, which is the one place that runs after
+  every key including the ones read outside the keymap. `TaskFilterSet`'s
+  `unresolved` is what keeps a filter naming a not-yet-loaded custom field
+  from being erased by that write-through.
 - `Action` is the shared input vocabulary.
 - `KeyMap` is built from config bindings and resolves keys to actions. A binding
   with a `mode` shadows the global one, which is how `c`, `t`, and `h`/`l` mean
@@ -73,6 +79,9 @@ a convention.
 - To add or rename a shortcut, update `src/input/mod.rs`, `src/config/mod.rs`, and any help text that mentions the key.
 - To change project-list behavior, update `src/app/project_list.rs` and the project list renderer in `src/ui/project_list.rs`.
 - To change task-review behavior, update `src/app/task.rs` and the task table renderer in `src/ui/task_table.rs`.
+- To change the named-set sidebar, start in `src/ui/filter_sets.rs`. Its split
+  from the filter panel lives there too, in `split_sidebar`, not in `layout`:
+  the sidebar belongs to the panel rather than to the frame.
 - To change the Gantt chart, start in `src/domain/gantt.rs` for anything about
   dates or colour assignment, and `src/ui/gantt.rs` for how it is drawn. The
   split between the table columns and the chart lives in `split_pane` in

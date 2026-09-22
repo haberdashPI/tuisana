@@ -73,6 +73,14 @@ pub struct HintContext {
     /// The filter panel holds more than one set, so there are tabs to move
     /// between and one that can be removed.
     pub many_filter_sets: bool,
+    /// The `Sets` sidebar is open, so its keys can do something.
+    pub filter_sets_sidebar: bool,
+    /// How many named filter sets are saved, which is what decides whether
+    /// there is a second page to move to.
+    pub saved_filter_sets: usize,
+    /// The panel is bound to a named entry, so there is something to detach
+    /// from and something to delete.
+    pub filter_set_loaded: bool,
 }
 
 /// Hints shown on the right of the bar in every mode.
@@ -115,11 +123,33 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
                 // is a second set for it to be the complement of.
                 hints.push(Hint::new(&[Action::FilterNegateSet], "negate set"));
             }
+            // Always, so the feature is discoverable; the rest only once the
+            // sidebar is open and they have somewhere to act.
+            hints.push(Hint::new(&[Action::FilterSetsToggle], "sets"));
+            if context.filter_sets_sidebar {
+                hints.push(Hint::literal("1-9", "load"));
+                hints.push(Hint::new(&[Action::FilterSetSave], "save"));
+                if context.filter_set_loaded {
+                    hints.push(Hint::new(&[Action::FilterSetDetach], "detach"));
+                    hints.push(Hint::new(&[Action::FilterSetDelete], "delete"));
+                }
+                if context.saved_filter_sets > crate::app::task::MAX_SIDEBAR_ROWS {
+                    hints.push(Hint::new(
+                        &[Action::FilterSetsPageBack, Action::FilterSetsPageForward],
+                        "page",
+                    ));
+                }
+            }
             hints.push(Hint::new(&[Action::ToggleTaskFilters], "close"));
             hints.push(Hint::new(&[Action::ToggleHelpDetails], "help"));
             hints
         }
         Mode::FilterEdit => filter_edit_hints(context),
+        // Read outside the keymap, so both keys are literals.
+        Mode::FilterSetName => vec![
+            Hint::literal("enter", "save"),
+            Hint::literal("esc", "cancel"),
+        ],
         Mode::Calendar => {
             let mut hints = vec![
                 Hint::new(&[Action::CalendarPrevDay, Action::CalendarNextDay], "day"),
@@ -462,6 +492,87 @@ mod tests {
     }
 
     #[test]
+    fn the_sidebar_key_is_always_offered_and_the_rest_wait_for_it() {
+        let closed = hints_for(Mode::Filter, HintContext::default());
+        let open = hints_for(
+            Mode::Filter,
+            HintContext {
+                filter_sets_sidebar: true,
+                ..HintContext::default()
+            },
+        );
+
+        assert!(
+            closed.iter().any(|hint| hint.label == "sets"),
+            "`sets` is how the feature is discovered, so it always shows"
+        );
+        assert!(!closed.iter().any(|hint| hint.label == "load"));
+        assert!(open.iter().any(|hint| hint.label == "load"));
+        assert!(open.iter().any(|hint| hint.label == "save"));
+    }
+
+    #[test]
+    fn detach_and_delete_appear_only_once_the_panel_is_bound() {
+        let unbound = hints_for(
+            Mode::Filter,
+            HintContext {
+                filter_sets_sidebar: true,
+                ..HintContext::default()
+            },
+        );
+        let bound = hints_for(
+            Mode::Filter,
+            HintContext {
+                filter_sets_sidebar: true,
+                filter_set_loaded: true,
+                ..HintContext::default()
+            },
+        );
+
+        assert!(!unbound.iter().any(|hint| hint.label == "detach"));
+        assert!(!unbound.iter().any(|hint| hint.label == "delete"));
+        assert!(bound.iter().any(|hint| hint.label == "detach"));
+        assert!(bound.iter().any(|hint| hint.label == "delete"));
+    }
+
+    #[test]
+    fn the_paging_hint_appears_only_once_there_is_a_second_page() {
+        let page = |saved| {
+            hints_for(
+                Mode::Filter,
+                HintContext {
+                    filter_sets_sidebar: true,
+                    saved_filter_sets: saved,
+                    ..HintContext::default()
+                },
+            )
+            .iter()
+            .any(|hint| hint.label == "page")
+        };
+
+        assert!(!page(9), "nine entries are one window");
+        assert!(page(10));
+    }
+
+    #[test]
+    fn the_prompt_advertises_the_keys_it_reads_outside_the_keymap() {
+        let keymap = keymap();
+        let theme = Theme::default();
+
+        let line = hint_line(
+            &hints_for(Mode::FilterSetName, HintContext::default()),
+            &keymap,
+            Mode::FilterSetName,
+            &theme,
+            120,
+        )
+        .to_string();
+
+        assert!(line.contains("enter save"), "{line}");
+        assert!(line.contains("esc cancel"), "{line}");
+    }
+
+    #[test]
     fn resolves_hint_keys_from_the_keymap() {
         let keymap = keymap();
         let theme = Theme::default();
@@ -531,6 +642,7 @@ mod tests {
                 Mode::ProjectSearch,
                 Mode::Filter,
                 Mode::FilterEdit,
+                Mode::FilterSetName,
                 Mode::Task,
             ] {
                 let hints = hints_for(mode, HintContext::default());
