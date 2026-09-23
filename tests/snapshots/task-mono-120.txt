@@ -36,5 +36,5 @@
 #                                                                                                                      #
 #                                                                                                                      #
 +======================================================================================================================+
-j/k move   enter open   space select   f filters   s sort   left/right columns   g gantt              r refresh   q quit
+j/k move   space select   e edit   d done   h/l column   enter open   f filters   s sort              r refresh   q quit
  TASK

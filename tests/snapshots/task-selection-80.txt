@@ -36,5 +36,5 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ⏎ open   ␣ select   f filters   s sort             r refresh   q quit
+j/k move   ␣ select   y copy   e edit   d done   h/l column   r refresh   q quit
  TASK

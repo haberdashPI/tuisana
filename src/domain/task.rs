@@ -33,10 +33,75 @@ pub struct CustomFieldDefinition {
     pub gid: String,
     /// The display name shown in the task table header.
     pub name: String,
+    /// The project whose settings declared this field.
+    ///
+    /// One field name usually exists once per project, with a different gid in
+    /// each. Reading merges them by name; a write has to choose, and the only
+    /// correct choice is the gid belonging to the task's own project.
+    pub project_gid: String,
+    /// What the field holds, as Asana declares it.
+    pub kind: CustomFieldKind,
 }
 
 impl CustomFieldDefinition {
-    /// Constructs a custom-field definition.
+    /// Constructs a custom-field definition with no project and a text kind.
+    ///
+    /// The two-argument shape is kept for the many fixtures that only care
+    /// about the name a column is labelled with; [`Self::with_kind`] and
+    /// [`Self::in_project`] carry the rest.
+    pub fn new(gid: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            gid: gid.into(),
+            name: name.into(),
+            project_gid: String::new(),
+            kind: CustomFieldKind::Text,
+        }
+    }
+
+    /// The same definition, declaring `kind`.
+    pub fn with_kind(mut self, kind: CustomFieldKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// The same definition, belonging to `project_gid`.
+    pub fn in_project(mut self, project_gid: impl Into<String>) -> Self {
+        self.project_gid = project_gid.into();
+        self
+    }
+
+    /// This field's declared enum options, empty for every other kind.
+    pub fn enum_options(&self) -> &[EnumOption] {
+        match &self.kind {
+            CustomFieldKind::Enum { options } => options,
+            _ => &[],
+        }
+    }
+}
+
+/// What a custom field holds, as Asana declares it.
+///
+/// Declared rather than inferred. The filter panel guesses a field's kind from
+/// the values it has seen, which is right for filtering and wrong for editing:
+/// a picker built from observed values can never offer the option no task has
+/// yet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CustomFieldKind {
+    Text,
+    Number,
+    Enum { options: Vec<EnumOption> },
+    /// Everything else, which this milestone refuses to edit.
+    Unsupported(String),
+}
+
+/// One declared option of an enum custom field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnumOption {
+    pub gid: String,
+    pub name: String,
+}
+
+impl EnumOption {
     pub fn new(gid: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             gid: gid.into(),
@@ -102,6 +167,11 @@ pub struct TaskRecord {
     pub modified_at: Option<String>,
     /// The assignee name or id used for display and filtering.
     pub assignee: Option<String>,
+    /// The assignee's Asana gid, which is what a write has to send.
+    ///
+    /// The display name is the one thing the API will not take, so the record
+    /// keeps the gid beside it rather than throwing it away at load time.
+    pub assignee_gid: Option<String>,
     /// The due date in display-friendly form.
     pub due_date: Option<String>,
     /// The start date in display-friendly form.
@@ -133,6 +203,7 @@ impl TaskRecord {
             completed: false,
             modified_at: None,
             assignee: None,
+            assignee_gid: None,
             due_date: None,
             start_date: None,
             parent_gid: None,
@@ -295,8 +366,18 @@ impl TaskRow {
 /// emits them in a fixed order and appends custom fields after them. Matching
 /// on the label would misfire on a custom field of the same name.
 pub const ASSIGNEE_COLUMN: usize = 1;
+/// Cell index of the title column.
+pub const TITLE_COLUMN: usize = 0;
+/// Cell index of the due-date column.
+pub const DUE_COLUMN: usize = 2;
+/// Cell index of the start-date column.
+pub const START_COLUMN: usize = 3;
 /// Cell index of the completion-state column.
 pub const STATE_COLUMN: usize = 4;
+/// Cell index of the project-membership column.
+pub const PROJECTS_COLUMN: usize = 5;
+/// Cell index of the first custom-field column.
+pub const FIRST_CUSTOM_COLUMN: usize = 6;
 
 /// The fully assembled task table used by the renderer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -841,6 +922,7 @@ pub fn merge_task_record(existing: &mut TaskRecord, record: TaskRecord) {
     if incoming_is_newer || existing.assignee.is_none() {
         if record.assignee.is_some() {
             existing.assignee = record.assignee.clone();
+            existing.assignee_gid = record.assignee_gid.clone();
         }
     }
     if incoming_is_newer || existing.due_date.is_none() {

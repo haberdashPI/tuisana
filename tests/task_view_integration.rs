@@ -100,6 +100,8 @@ fn pressing_m_displays_the_task_view() {
                 custom_field: CustomFieldDto {
                     gid: "custom-1".to_string(),
                     name: "Priority".to_string(),
+                    resource_subtype: None,
+                    enum_options: Vec::new(),
                 },
             }],
         )
@@ -331,7 +333,7 @@ fn picking_a_date_on_the_calendar_filters_the_task_table() {
     wait_for_task_data(&mut app);
 
     assert_eq!(app.mode(), tuisana::config::Mode::Filter, "committing leaves the picker");
-    assert!(!app.tasks.filter_calendar_open());
+    assert!(!app.tasks.calendar_open());
     assert_eq!(
         app.tasks.table().task_count(),
         0,
@@ -415,9 +417,9 @@ fn the_calendar_edits_the_filter_field_directly() {
     run_session(&mut app, &mut source, &mut terminal).expect("session runs");
     wait_for_task_data(&mut app);
 
-    assert!(app.tasks.filter_calendar_open());
+    assert!(app.tasks.calendar_open());
     assert!(
-        app.tasks.filter_calendar_is_range(),
+        app.tasks.calendar_is_range(),
         "the query is a range, so both ends can be moved between"
     );
     assert_eq!(
@@ -462,7 +464,7 @@ fn the_calendar_edits_the_filter_field_directly() {
     run_session(&mut app, &mut source, &mut terminal).expect("session runs");
     wait_for_task_data(&mut app);
 
-    assert!(!app.tasks.filter_calendar_open(), "esc closes the picker");
+    assert!(!app.tasks.calendar_open(), "esc closes the picker");
     assert_eq!(
         app.tasks.table().task_count(),
         0,

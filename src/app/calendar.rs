@@ -126,6 +126,16 @@ impl CalendarState {
             || crate::domain::DateQuery::parse(&self.query, self.today).is_some()
     }
 
+    /// Empties the query, leaving the visible month where it is.
+    ///
+    /// The grid deliberately stays put: clearing a date is usually the first
+    /// half of picking a different one, and jumping back to today would throw
+    /// away the month the user had already navigated to.
+    pub fn clear(&mut self) {
+        self.query.clear();
+        self.caret = 0;
+    }
+
     /// Moves the highlight by whole days, rewriting the active end.
     ///
     /// Stepping off the end of a month lands on the first of the next one, since

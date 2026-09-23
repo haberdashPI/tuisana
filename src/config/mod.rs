@@ -483,6 +483,8 @@ pub enum Mode {
     FilterSetName,
     Calendar,
     Task,
+    /// A task table cell is open for editing.
+    TaskEdit,
     Gantt,
     GanttOrder,
 }
@@ -501,7 +503,13 @@ impl Mode {
     pub fn allows_any_fallback(&self) -> bool {
         !matches!(
             self,
-            Self::ProjectSearch | Self::FilterEdit | Self::FilterSetName | Self::Calendar
+            Self::ProjectSearch
+                | Self::FilterEdit
+                | Self::FilterSetName
+                | Self::Calendar
+                // An unbound letter has to type into the cell rather than
+                // fire the global binding that letter carries.
+                | Self::TaskEdit
         )
     }
 
@@ -515,6 +523,7 @@ impl Mode {
             Self::FilterSetName => "set name",
             Self::Calendar => "calendar",
             Self::Task => "task",
+            Self::TaskEdit => "task edit",
             Self::Gantt => "gantt",
             Self::GanttOrder => "colors",
         }
@@ -719,7 +728,10 @@ fn default_bindings() -> Vec<Bind> {
         // is already "jump to the end of a range", which is why the date
         // fields' require-empty is set from filter-browse mode, before the
         // picker opens.
-        Bind::with_mode("ctrl-e", Mode::FilterEdit, "filter_require_empty"),
+        // `ctrl-e` is "end of line" everywhere text is edited, so the
+        // require-empty toggle moved to `ctrl-q` rather than keep the emacs
+        // key for a filter-only concept.
+        Bind::with_mode("ctrl-q", Mode::FilterEdit, "filter_require_empty"),
         // `!` and `~` are ordinary characters in a query, so the negations need
         // ctrl- pairs here for the same reason require-empty does.
         Bind::with_mode("ctrl-n", Mode::FilterEdit, "filter_negate_field"),
@@ -743,6 +755,13 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("right", Mode::FilterEdit, "filter_caret_right"),
         Bind::with_mode("ctrl-b", Mode::FilterEdit, "filter_caret_left"),
         Bind::with_mode("ctrl-f", Mode::FilterEdit, "filter_caret_right"),
+        // The emacs motions, shared with task-edit mode so a text field
+        // behaves the same wherever it is. `alt-` needs the terminal to send
+        // Option as a modifier; see the README.
+        Bind::with_mode("alt-b", Mode::FilterEdit, "text_caret_word_back"),
+        Bind::with_mode("alt-f", Mode::FilterEdit, "text_caret_word_forward"),
+        Bind::with_mode("ctrl-a", Mode::FilterEdit, "text_caret_start"),
+        Bind::with_mode("ctrl-e", Mode::FilterEdit, "text_caret_end"),
         Bind::with_mode("h", Mode::Calendar, "calendar_prev_day"),
         Bind::with_mode("l", Mode::Calendar, "calendar_next_day"),
         Bind::with_mode("k", Mode::Calendar, "calendar_prev_month"),
@@ -785,6 +804,28 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("ctrl-x", Mode::Task, "clear_hidden_task_selection"),
         Bind::with_mode("y", Mode::Task, "copy_tasks_to_clipboard"),
         Bind::with_mode("g", Mode::Task, "set_gantt_mode"),
+        // The column cursor and the cell editor. `h`, `l`, `e`, and `d` are
+        // all free in task mode, and `Mode::Any` binds none of them.
+        Bind::with_mode("h", Mode::Task, "task_column_prev"),
+        Bind::with_mode("l", Mode::Task, "task_column_next"),
+        Bind::with_mode("e", Mode::Task, "begin_task_edit"),
+        Bind::with_mode("d", Mode::Task, "toggle_task_completed"),
+        Bind::with_mode("enter", Mode::TaskEdit, "commit_task_edit"),
+        Bind::with_mode("esc", Mode::TaskEdit, "cancel_task_edit"),
+        // Letters type in this mode, so the value picker's keys are only
+        // reachable because a picker reads no text at all.
+        Bind::with_mode("j", Mode::TaskEdit, "task_edit_next_value"),
+        Bind::with_mode("k", Mode::TaskEdit, "task_edit_prev_value"),
+        Bind::with_mode("d", Mode::TaskEdit, "task_edit_clear"),
+        Bind::with_mode("ctrl-l", Mode::TaskEdit, "task_edit_clear"),
+        Bind::with_mode("left", Mode::TaskEdit, "filter_caret_left"),
+        Bind::with_mode("right", Mode::TaskEdit, "filter_caret_right"),
+        Bind::with_mode("ctrl-b", Mode::TaskEdit, "filter_caret_left"),
+        Bind::with_mode("ctrl-f", Mode::TaskEdit, "filter_caret_right"),
+        Bind::with_mode("alt-b", Mode::TaskEdit, "text_caret_word_back"),
+        Bind::with_mode("alt-f", Mode::TaskEdit, "text_caret_word_forward"),
+        Bind::with_mode("ctrl-a", Mode::TaskEdit, "text_caret_start"),
+        Bind::with_mode("ctrl-e", Mode::TaskEdit, "text_caret_end"),
         // Punctuation and ctrl- pairs throughout, because
         // KeyBinding::from_crossterm_event lowercases every char: `G` and `g`
         // are the same key, so shift+letter is not an available namespace.
@@ -1471,9 +1512,14 @@ name = "Mine"
             assert_eq!(keymap.action_for(&key, Mode::Filter), Some(&action));
         }
         assert_eq!(
-            keymap.action_for(&KeyBinding::Ctrl('e'), Mode::FilterEdit),
+            keymap.action_for(&KeyBinding::Ctrl('q'), Mode::FilterEdit),
             Some(&Action::FilterRequireEmpty),
             "letters type while editing, so require-empty needs a ctrl- pair"
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('e'), Mode::FilterEdit),
+            Some(&Action::TextCaretEnd),
+            "ctrl-e is end-of-line wherever text is edited, so require-empty moved"
         );
         // h/l keep their existing meanings in the modes that shadow them: you
         // switch sets from browse mode, not mid-edit.
@@ -1610,6 +1656,49 @@ name = "Mine"
             keymap.action_for(&KeyBinding::Char('.'), Mode::Task),
             Some(&Action::ToggleSectionGrouping)
         );
+        for (key, action) in [
+            (KeyBinding::Char('h'), Action::TaskColumnPrev),
+            (KeyBinding::Char('l'), Action::TaskColumnNext),
+            (KeyBinding::Char('e'), Action::BeginTaskEdit),
+            (KeyBinding::Char('d'), Action::ToggleTaskCompleted),
+        ] {
+            assert_eq!(keymap.action_for(&key, Mode::Task), Some(&action));
+        }
+    }
+
+    #[test]
+    fn default_bindings_include_task_edit_controls() {
+        let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
+            .expect("default bindings parse");
+
+        for (key, action) in [
+            (KeyBinding::Enter, Action::CommitTaskEdit),
+            (KeyBinding::Esc, Action::CancelTaskEdit),
+            (KeyBinding::Char('j'), Action::TaskEditCycleValue(1)),
+            (KeyBinding::Char('k'), Action::TaskEditCycleValue(-1)),
+            (KeyBinding::Char('d'), Action::TaskEditClear),
+            (KeyBinding::Alt('b'), Action::TextCaretWordBack),
+            (KeyBinding::Alt('f'), Action::TextCaretWordForward),
+            (KeyBinding::Ctrl('a'), Action::TextCaretStart),
+            (KeyBinding::Ctrl('e'), Action::TextCaretEnd),
+        ] {
+            assert_eq!(
+                keymap.action_for(&key, Mode::TaskEdit),
+                Some(&action),
+                "{key:?} in task-edit mode"
+            );
+        }
+    }
+
+    /// An unbound letter has to type into the cell rather than fire the
+    /// global binding that letter carries.
+    #[test]
+    fn task_edit_mode_does_not_fall_back_to_the_global_bindings() {
+        let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
+            .expect("default bindings parse");
+
+        assert!(!Mode::TaskEdit.allows_any_fallback());
+        assert_eq!(keymap.action_for(&KeyBinding::Char('q'), Mode::TaskEdit), None);
     }
 }
 

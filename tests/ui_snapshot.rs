@@ -19,7 +19,8 @@ use tuisana::{
     app::App,
     asana::{
         dto::{
-            CustomFieldDto, CustomFieldValueDto, ProjectCustomFieldSettingDto, SectionDto, TaskDto,
+            CustomFieldDto, CustomFieldValueDto, EnumOptionDto, ProjectCustomFieldSettingDto,
+            SectionDto, TaskDto,
             TaskMembershipDto, TaskMembershipProjectDto, TaskMembershipSectionDto, UserDto,
         },
         fake::FakeAsanaClient,
@@ -143,9 +144,24 @@ fn client() -> FakeAsanaClient {
         "project-1",
         vec![ProjectCustomFieldSettingDto {
             gid: "setting-1".to_string(),
+            // Declared as an enum, so the cell editor offers the options
+            // the field has rather than the ones these tasks happen to hold.
             custom_field: CustomFieldDto {
                 gid: "custom-1".to_string(),
                 name: "Priority".to_string(),
+                resource_subtype: Some("enum".to_string()),
+                enum_options: vec![
+                    EnumOptionDto {
+                        gid: "opt-high".to_string(),
+                        name: "High".to_string(),
+                        enabled: true,
+                    },
+                    EnumOptionDto {
+                        gid: "opt-low".to_string(),
+                        name: "Low".to_string(),
+                        enabled: true,
+                    },
+                ],
             },
         }],
     )
@@ -578,6 +594,43 @@ fn task_mode_showing_completed_tasks() {
     });
 }
 
+/// The column cursor on Due, with nothing being edited.
+///
+/// Pins the header accent and the cursor row's underline — and, by staying
+/// unchanged, that the Gantt snapshots never grew a cursor they cannot move.
+#[test]
+fn task_mode_with_the_column_cursor_moved() {
+    assert_snapshot("task-column-cursor", || {
+        vec![enter_task_mode(), vec![key('l'), key('l')]]
+    });
+}
+
+/// Mid-edit on a title longer than its column, caret at the end.
+#[test]
+fn task_mode_editing_a_long_title() {
+    assert_snapshot("task-edit-title", || {
+        let mut keys = vec![key('e')];
+        keys.extend(" and every word after the column runs out".chars().map(key));
+        vec![enter_task_mode(), keys]
+    });
+}
+
+/// The Priority picker open with two tasks selected.
+///
+/// Pins the option display and the `editing 2` chip, which is the only thing
+/// on screen that says how wide the commit reaches.
+#[test]
+fn task_mode_editing_a_value_picker() {
+    assert_snapshot("task-edit-options", || {
+        vec![
+            enter_task_mode(),
+            vec![key(' '), key(' ')],
+            vec![key('l'), key('l'), key('l'), key('l'), key('l'), key('l')],
+            vec![key('e'), key('j')],
+        ]
+    });
+}
+
 #[test]
 fn filter_mode() {
     assert_snapshot("filter-mode", || vec![enter_task_mode(), vec![key('f')]]);
@@ -861,7 +914,7 @@ fn the_monochrome_theme_emits_no_color() {
         .expect("session redraws");
 
     assert!(
-        app.tasks.filter_calendar_open(),
+        app.tasks.calendar_open(),
         "the calendar is what this pass is checking"
     );
     assert!(

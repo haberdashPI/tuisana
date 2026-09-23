@@ -1,13 +1,13 @@
 use crate::{
-    asana::{AsanaClient, TaskQuery, TaskTarget},
+    asana::{dto::TaskDto, AsanaClient, TaskQuery, TaskTarget},
     config::{Config, Mode, NamedFilterSet},
-    domain::{Project, ProjectKind},
+    domain::{Project, ProjectKind, TaskEdit},
     error::Result,
     input::{Action, AppCommand, KeyBinding, KeyMap},
 };
 
 use std::{
-    sync::mpsc::{self, Receiver},
+    sync::mpsc::{self, Receiver, Sender},
     thread,
 };
 
@@ -15,6 +15,8 @@ pub mod calendar;
 pub mod gantt;
 pub mod project_list;
 pub mod task;
+pub mod task_edit;
+pub mod text_edit;
 
 use self::gantt::MoveTo;
 use self::project_list::ProjectListState;
@@ -135,6 +137,40 @@ pub struct App<C> {
     /// The app keeps the receiver here so the main loop can poll for partial
     /// results, completion, or failure without blocking the UI.
     task_data_receiver: Option<Receiver<TaskDataMessage>>,
+    /// Results from in-flight task writes.
+    ///
+    /// A permanent pair rather than one receiver per batch: `d` on twelve
+    /// tasks is twelve requests, and the next edit must not have to wait for
+    /// them. Each message names its task, so no generation counter is needed —
+    /// a late reply to a superseded edit is reconciled by gid, not discarded.
+    task_edit_events: (Sender<TaskEditMessage>, Receiver<TaskEditMessage>),
+    /// Writes sent, still outstanding, and failed in the current burst.
+    ///
+    /// Counted rather than reported one by one: twelve failures is one border
+    /// chip, `could not update 3 of 12: …`, not three that overwrite each
+    /// other. Reset once the last reply of a burst has landed.
+    task_edits_sent: usize,
+    task_edits_outstanding: usize,
+    task_edit_failures: usize,
+    /// The last write error, which is what the chip quotes.
+    task_edit_error: Option<String>,
+    /// The logged-in user's gid, for resolving `me` in an assignee edit.
+    current_user_gid: Option<String>,
+}
+
+/// One finished write, on its way back to the main thread.
+struct TaskEditMessage {
+    edit: TaskEdit,
+    result: Result<TaskDto>,
+}
+
+/// One of the shared text motions, for [`App::move_text_caret`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextMotion {
+    WordBack,
+    WordForward,
+    Start,
+    End,
 }
 
 /// Internal message sent back from the task-data worker thread.
@@ -162,6 +198,12 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             client,
             task_data_generation: 0,
             task_data_receiver: None,
+            task_edit_events: mpsc::channel(),
+            task_edits_sent: 0,
+            task_edits_outstanding: 0,
+            task_edit_failures: 0,
+            task_edit_error: None,
+            current_user_gid: None,
         }
     }
 
@@ -173,7 +215,10 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         // has no fake user configured), just omit the row instead of failing
         // project loading entirely.
         let assigned_to_me = match self.client.current_user_gid() {
-            Ok(gid) => Some(Project::assigned_to_me(gid)),
+            Ok(gid) => {
+                self.current_user_gid = Some(gid.clone());
+                Some(Project::assigned_to_me(gid))
+            }
             Err(err) => {
                 debug_log(&format!("current_user_gid unavailable: {err}"));
                 None
@@ -299,6 +344,17 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         }
     }
 
+    /// Enters the mode the open cell editor reads its keys in.
+    ///
+    /// A date cell is edited on the calendar, which already owns a mode and a
+    /// full set of keys; everything else types.
+    fn set_task_edit_mode(&mut self) {
+        self.mode = match self.tasks.cell_edit_owns_calendar() {
+            true => Mode::Calendar,
+            false => Mode::TaskEdit,
+        };
+    }
+
     fn set_task_mode(&mut self) {
         if self.projects.search_active() {
             self.projects.end_search();
@@ -414,16 +470,75 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         Ok(false)
     }
 
+    /// Handle typed characters while a task cell is being edited.
+    ///
+    /// Modelled on `handle_filter_field_input`, and tried before it: the cell
+    /// editor owns every key the keymap did not claim, so an unbound letter
+    /// types rather than falling through to a task-mode binding.
+    fn handle_task_edit_input(&mut self, event: crossterm::event::KeyEvent) -> Result<bool> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        if !self.tasks.cell_edit_open() {
+            return Ok(false);
+        }
+        // A value picker holds no text, so there is nothing for a character
+        // to go into.
+        if self.tasks.cell_edit_is_options() {
+            return Ok(false);
+        }
+
+        match event.code {
+            KeyCode::Backspace => {
+                self.tasks.cell_edit_pop_char();
+                Ok(true)
+            }
+            KeyCode::Char(c)
+                if !event
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.tasks.cell_edit_push_char(c);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     /// Move the caret in whichever filter editor is active.
     ///
     /// A date field being picked keeps its caret in the calendar, since that is
     /// what decides which end of a range the navigation keys rewrite; every other
     /// field keeps its own.
     fn move_filter_caret(&mut self, delta: i64) {
-        if self.tasks.filter_calendar_open() {
+        if self.tasks.calendar_open() {
             self.tasks.filter_calendar_move_caret(delta);
+        } else if self.tasks.cell_edit_open() {
+            self.tasks.cell_edit_move_caret(delta);
         } else {
             self.tasks.filter_move_caret(delta);
+        }
+    }
+
+    /// Runs one of the shared text motions on whichever buffer is being typed
+    /// into.
+    ///
+    /// One implementation for both panes, because there is one buffer type
+    /// behind them.
+    fn move_text_caret(&mut self, motion: TextMotion) {
+        if self.tasks.cell_edit_open() {
+            match motion {
+                TextMotion::WordBack => self.tasks.cell_edit_move_word(-1),
+                TextMotion::WordForward => self.tasks.cell_edit_move_word(1),
+                TextMotion::Start => self.tasks.cell_edit_jump_start(),
+                TextMotion::End => self.tasks.cell_edit_jump_end(),
+            }
+            return;
+        }
+        match motion {
+            TextMotion::WordBack => self.tasks.filter_move_word(-1),
+            TextMotion::WordForward => self.tasks.filter_move_word(1),
+            TextMotion::Start => self.tasks.filter_caret_to_start(),
+            TextMotion::End => self.tasks.filter_caret_to_end(),
         }
     }
 
@@ -434,7 +549,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     /// keys the keymap did not claim reach here, so the navigation letters stay
     /// navigation.
     fn handle_calendar_input(&mut self, event: crossterm::event::KeyEvent) -> Result<bool> {
-        if !self.tasks.filter_calendar_open() {
+        if !self.tasks.calendar_open() {
             return Ok(false);
         }
 
@@ -534,6 +649,21 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                     _ => Ok(false),
                 }
             }
+        }
+    }
+
+    /// Commits the open cell editor, or says why it cannot be committed.
+    ///
+    /// A refusal leaves the editor open: the value that could not be resolved
+    /// is still on screen, and still the one to fix.
+    fn commit_open_cell_edit(&mut self) {
+        let context = self.edit_context();
+        match self.tasks.commit_cell_edit(&context) {
+            Ok(edits) => {
+                self.dispatch_task_edits(edits);
+                self.set_task_mode();
+            }
+            Err(message) => self.tasks.set_edit_notice(message),
         }
     }
 
@@ -756,12 +886,24 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 return Ok(None);
             }
             Action::CalendarCommit => {
+                // A task date picked on the calendar commits the cell, not a
+                // filter: the same key, one layer over.
+                if self.tasks.cell_edit_owns_calendar() {
+                    self.tasks.calendar_normalize();
+                    self.commit_open_cell_edit();
+                    return Ok(None);
+                }
                 self.tasks.filter_calendar_commit();
                 self.set_filter_mode();
                 self.ensure_task_data();
                 return Ok(None);
             }
             Action::CalendarClose => {
+                if self.tasks.cell_edit_owns_calendar() {
+                    self.tasks.cancel_cell_edit();
+                    self.set_task_mode();
+                    return Ok(None);
+                }
                 self.tasks.filter_calendar_close();
                 self.set_filter_mode();
                 self.ensure_task_data();
@@ -784,6 +926,13 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 return Ok(None);
             }
             Action::CalendarClear => {
+                // The picker stays open on a task date: `d` empties the value
+                // and `enter` is still what sends it, so clearing a date is
+                // one key-path rather than two.
+                if self.tasks.cell_edit_owns_calendar() {
+                    self.tasks.calendar_clear_text();
+                    return Ok(None);
+                }
                 self.tasks.filter_calendar_clear();
                 self.set_filter_mode();
                 self.ensure_task_data();
@@ -981,6 +1130,53 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 self.mode = Mode::Gantt;
                 return Ok(None);
             }
+            Action::BeginTaskEdit => {
+                let context = self.edit_context();
+                match self.tasks.begin_cell_edit(&context) {
+                    Ok(()) => self.set_task_edit_mode(),
+                    Err(message) => self.tasks.set_edit_notice(message),
+                }
+                return Ok(None);
+            }
+            Action::CancelTaskEdit => {
+                self.tasks.cancel_cell_edit();
+                self.set_task_mode();
+                return Ok(None);
+            }
+            Action::TaskEditCycleValue(delta) => {
+                self.tasks.cell_edit_cycle_value(*delta);
+                return Ok(None);
+            }
+            Action::TaskEditClear => {
+                self.tasks.cell_edit_clear();
+                return Ok(None);
+            }
+            Action::TextCaretWordBack => {
+                self.move_text_caret(TextMotion::WordBack);
+                return Ok(None);
+            }
+            Action::TextCaretWordForward => {
+                self.move_text_caret(TextMotion::WordForward);
+                return Ok(None);
+            }
+            Action::TextCaretStart => {
+                self.move_text_caret(TextMotion::Start);
+                return Ok(None);
+            }
+            Action::TextCaretEnd => {
+                self.move_text_caret(TextMotion::End);
+                return Ok(None);
+            }
+            // Deliberately not early returns: both send a write, and the tail
+            // is what keeps the fetch decision running after an action, for
+            // the same reason `FilterSetLoad` falls through to it.
+            Action::CommitTaskEdit => {
+                self.commit_open_cell_edit();
+            }
+            Action::ToggleTaskCompleted if self.tasks.visible() => {
+                let edits = self.tasks.toggle_completed_edits();
+                self.dispatch_task_edits(edits);
+            }
             // The dialog is a list of its own, so the cursor keys drive it
             // rather than the task rows underneath. Same shape as the filter
             // panel's interception of the same two actions.
@@ -1147,6 +1343,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         }
 
         self.poll_task_data();
+        self.poll_task_edits();
 
         debug_log(&format!(
             "key event: {:?} {:?}",
@@ -1165,6 +1362,21 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             debug_log(&format!("resolved binding: {binding:?}"));
             if let Some(action) = keymap.action_for(&binding, self.mode).cloned() {
                 debug_log(&format!("resolved action: {action}"));
+                // `j`, `k`, and `d` drive a value picker and type into
+                // anything else, the same way the filter panel's label keys
+                // are context-sensitive. Only a plain character is ambiguous:
+                // `ctrl-l` clears whatever the editor holds.
+                if action.is_task_edit_value_action()
+                    && matches!(self.mode, Mode::TaskEdit)
+                    && !self.tasks.cell_edit_is_options()
+                    && !event
+                        .modifiers
+                        .intersects(crossterm::event::KeyModifiers::CONTROL
+                            | crossterm::event::KeyModifiers::ALT)
+                {
+                    self.handle_task_edit_input(event)?;
+                    return Ok(None);
+                }
                 if action.is_label_filter_action() {
                     // Context-sensitive: navigate labels when a labels field is selected,
                     // otherwise fall back to pushing the character.
@@ -1177,6 +1389,10 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         }
 
         if self.handle_calendar_input(event)? {
+            return Ok(None);
+        }
+
+        if self.handle_task_edit_input(event)? {
             return Ok(None);
         }
 
@@ -1193,6 +1409,106 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         }
 
         Ok(None)
+    }
+
+    /// What resolving an edit needs that the task pane does not own.
+    fn edit_context(&self) -> crate::app::task_edit::EditContext {
+        crate::app::task_edit::EditContext {
+            today: Some(crate::domain::today()),
+            current_user_gid: self.current_user_gid.clone(),
+        }
+    }
+
+    /// Applies a batch of edits locally, then sends each one in the background.
+    ///
+    /// One thread per edit, following `start_task_data_fetch`: the table does
+    /// not freeze while twelve tasks are marked done.
+    fn dispatch_task_edits(&mut self, edits: Vec<TaskEdit>) {
+        if edits.is_empty() {
+            return;
+        }
+
+        self.tasks.clear_edit_notice();
+        self.tasks.apply_edits_locally(&edits);
+        self.task_edits_sent += edits.len();
+        self.task_edits_outstanding += edits.len();
+
+        for edit in edits {
+            let client = self.client.clone();
+            let sender = self.task_edit_events.0.clone();
+            thread::spawn(move || {
+                let result = client.update_task(&edit.gid, &edit.field);
+                let _ = sender.send(TaskEditMessage { edit, result });
+            });
+        }
+    }
+
+    /// Reconciles whatever writes have come back.
+    ///
+    /// A success takes the server's `modified_at`; a failure puts the field
+    /// back the way it was. Both are keyed by gid, so replies arriving out of
+    /// order — or belonging to different batches — need no bookkeeping.
+    pub fn poll_task_edits(&mut self) {
+        loop {
+            match self.task_edit_events.1.try_recv() {
+                Ok(message) => self.reconcile_task_edit(message),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+    }
+
+    /// Waits for every in-flight write to be reconciled.
+    ///
+    /// The event loop never calls this; it polls. Tests and a shutdown that
+    /// wants its writes accounted for do.
+    pub fn settle_task_edits(&mut self) {
+        while self.task_edits_outstanding > 0 {
+            let Ok(message) = self.task_edit_events.1.recv() else {
+                break;
+            };
+            self.reconcile_task_edit(message);
+        }
+    }
+
+    fn reconcile_task_edit(&mut self, message: TaskEditMessage) {
+        self.task_edits_outstanding = self.task_edits_outstanding.saturating_sub(1);
+
+        match message.result {
+            Ok(task) => self.tasks.confirm_edit(&message.edit.gid, task.modified_at),
+            Err(err) => {
+                debug_log(&format!("task write failed: {err}"));
+                self.task_edit_failures += 1;
+                self.task_edit_error = Some(err.to_string());
+                // Optimism is worth it — nearly every write succeeds — but an
+                // optimistic update that quietly diverges from the server is
+                // worse than either, so the rollback is not optional.
+                let rollback = TaskEdit {
+                    gid: message.edit.gid.clone(),
+                    field: message.edit.previous.clone(),
+                    previous: message.edit.field.clone(),
+                };
+                self.tasks.apply_edit_locally(&rollback);
+            }
+        }
+
+        if self.task_edits_outstanding > 0 {
+            return;
+        }
+
+        if self.task_edit_failures > 0 {
+            let error = self
+                .task_edit_error
+                .clone()
+                .unwrap_or_else(|| "unknown error".to_string());
+            self.tasks.set_edit_notice(format!(
+                "could not update {} of {}: {error}",
+                self.task_edit_failures, self.task_edits_sent
+            ));
+        }
+        self.task_edits_sent = 0;
+        self.task_edit_failures = 0;
+        self.task_edit_error = None;
     }
 
     pub fn poll_task_data(&mut self) {
@@ -2572,6 +2888,8 @@ mod tests {
                     custom_field: CustomFieldDto {
                         gid: "cf1".to_string(),
                         name: "Priority".to_string(),
+                        resource_subtype: None,
+                        enum_options: Vec::new(),
                     },
                 }],
             )

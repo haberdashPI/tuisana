@@ -16,6 +16,10 @@ This file is the quickest way to understand the codebase without reading everyth
 10. `src/app/task.rs` manages task state, filters, sorting, and task-table data.
 11. `src/domain/gantt.rs` maps dates to chart columns and values to colours.
 12. `src/app/gantt.rs` owns the chart's session state and the colour dialog.
+13. `src/domain/task_edit.rs` is the write model: one field of one task, plus
+    the parsing that turns a typed cell into it.
+14. `src/app/task_edit.rs` owns the open cell edit; `src/app/text_edit.rs` is
+    the one-line text buffer every editable field runs on.
 
 The async task-data path is split across two modules:
 
@@ -72,6 +76,19 @@ a convention.
   keys. Both allow the `Any` fallback, so `j`/`k`, `q`, and `?` keep working.
 - `GanttViewState` is the chart's session state; only its colour order is ever
   written back to config.
+- An edit is **optimistic**. `dispatch_task_edits` writes it onto the cached
+  record and the visible dataset at once, then sends one request per task on a
+  worker thread; `poll_task_edits` takes the server's `modified_at` on success
+  and puts the old value back on failure. The local write deliberately bypasses
+  `TaskCache::upsert_record`: `merge_task_record` is monotone — `completed |=
+  incoming`, and a `None` never overwrites a `Some` — so un-completing a task
+  or clearing a date through it is a silent no-op. `confirm_edit` exists for
+  the other half of the same problem: without the server's timestamp, a fetch
+  that started before the edit comes back looking newer and wins.
+- Reading merges what writing must keep apart. One custom-field *name* usually
+  exists once per project, with a different gid in each, and the table shows
+  one column for it — so a write resolves the gid from the task's own project,
+  per task, at commit time.
 - `FakeAsanaClient` is the test backend for deterministic state transitions.
 
 ## Common Change Paths
@@ -79,6 +96,12 @@ a convention.
 - To add or rename a shortcut, update `src/input/mod.rs`, `src/config/mod.rs`, and any help text that mentions the key.
 - To change project-list behavior, update `src/app/project_list.rs` and the project list renderer in `src/ui/project_list.rs`.
 - To change task-review behavior, update `src/app/task.rs` and the task table renderer in `src/ui/task_table.rs`.
+- To change how a cell is edited, start at `TaskState::begin_cell_edit` in
+  `src/app/task.rs`: it picks the editor from the column and is where every
+  refusal lives. The editors themselves are in `src/app/task_edit.rs`, the
+  parsing in `src/domain/task_edit.rs`, the keys in `App::handle_action`
+  (`Mode::TaskEdit`), and the drawing in `cell_spans` in
+  `src/ui/task_table.rs`.
 - To change the named-set sidebar, start in `src/ui/filter_sets.rs`. Its split
   from the filter panel lives there too, in `split_sidebar`, not in `layout`:
   the sidebar belongs to the panel rather than to the frame.

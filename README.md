@@ -157,7 +157,7 @@ The `[[bind]]` section maps keyboard input to command names.
 If you omit a command from your config, the built-in default binding for that command still applies.
 
 Each binding may include an optional `mode` field to restrict it to a specific UI context.
-Available modes are `any` (default), `project`, `project_search`, `filter`, `filter_edit`, `calendar`, `task`, `gantt`, and `gantt_order`.
+Available modes are `any` (default), `project`, `project_search`, `filter`, `filter_edit`, `calendar`, `task`, `task_edit`, `gantt`, and `gantt_order`.
 
 Example:
 
@@ -171,6 +171,18 @@ key = "ctrl-j"
 mode = "filter_edit"
 command = "filter_done_editing"
 ```
+
+**Key names.** A single character is itself (`j`, `?`, `<`). Named keys are
+`enter`, `esc`, `backspace`, `space`, `home`, `end`, `left`, `right`, `up`,
+`down`, `pageup`, and `pagedown`. A modifier is a prefix: `ctrl-x` for Control
+and `alt-x` for Option/Alt.
+
+`alt-` needs your terminal to send Option as a **modifier** rather than as an
+escape prefix — in macOS Terminal, Profiles → Keyboard → "Use Option as Meta
+key"; in iTerm2, Profiles → Keys → Left/Right Option key → Esc+. The
+escape-prefix form is not supported: a lone `ESC` is `esc` here, and telling
+the two apart by timing is how editors get famously confused. Every binding
+that uses `alt-` is rebindable if your terminal cannot send it.
 
 All bindable commands:
 
@@ -270,11 +282,29 @@ All bindable commands:
 - `filter_delete_label`
 - `filter_caret_left`
 - `filter_caret_right`
+- `text_caret_word_back`
+- `text_caret_word_forward`
+- `text_caret_start`
+- `text_caret_end`
 - `filter_require_empty`
 - `clear_search`
 - `search_fuzzy`
 - `search_substring`
 - `search_regex`
+
+**Task edit mode** (a table cell is open for editing)
+
+- `commit_task_edit`
+- `cancel_task_edit`
+- `task_edit_next_value`
+- `task_edit_prev_value`
+- `task_edit_clear`
+- `filter_caret_left`
+- `filter_caret_right`
+- `text_caret_word_back`
+- `text_caret_word_forward`
+- `text_caret_start`
+- `text_caret_end`
 
 **Task mode**
 
@@ -288,6 +318,10 @@ All bindable commands:
 - `move_section_down`
 - `move_project_up`
 - `move_project_down`
+- `task_column_prev`
+- `task_column_next`
+- `begin_task_edit`
+- `toggle_task_completed`
 - `set_gantt_mode`
 
 **Gantt mode**
@@ -360,7 +394,7 @@ The top window is shared between the project list and the filter view. When the 
 - `esc` to close the panel and return to task mode
 - `f` to toggle the filter panel
 - `s` to cycle the string-match mode
-- `e` to require the field to be empty
+- `e` to require the field to be empty (`ctrl-q` while editing)
 - `a` to add a filter set, `x` to remove the current one, `h`/`l` to move between
 - `!` to negate the selected field, `~` to negate the whole set
 - `b` to show or hide the named-set sidebar
@@ -458,8 +492,9 @@ written back out meanwhile. Loading a set with the wrong projects selected
 cannot quietly erase half of it.
 
 **Requiring an empty field.** An empty filter field means "do not filter", so
-there is a separate key for "has no value": `e` on a filter row, or `ctrl-e`
-while editing one. The row's value shows as `(none)`, it counts towards the
+there is a separate key for "has no value": `e` on a filter row, or `ctrl-q`
+while editing one. (`ctrl-e` used to do this; it is now "end of line",
+which is what it means everywhere else text is edited.) The row's value shows as `(none)`, it counts towards the
 active-filter count, and the table narrows to tasks with nothing in that field.
 Pressing `e` again clears it; so does typing, because a value and a
 require-empty are mutually exclusive.
@@ -512,11 +547,13 @@ dropped or delayed keystroke.
 
 - Ordinary typing to edit a text field, inserted at the caret
 - `left`/`right`, or `ctrl-b`/`ctrl-f`, to move the caret through the value
+- `alt-b`/`alt-f` to move a word, `ctrl-a`/`ctrl-e` to jump to the ends
 - `backspace` to delete the character before the caret
 - `enter` to confirm the edit and return to filter browse mode
 - `esc` to discard the edit, close the panel, and return to task mode
 - `ctrl-z`, `ctrl-s`, `ctrl-r` to switch match mode, `ctrl-l` to clear
-- `ctrl-n` to negate the field, `ctrl-t` to negate the set
+- `ctrl-n` to negate the field, `ctrl-t` to negate the set, `ctrl-q` to
+  require it empty
 
 For fields include a fixed set of labels, the edit keys navigate instead of typing:
 
@@ -557,7 +594,82 @@ left alone.
 - `s` to cycle the task sort field, `^` to flip between ascending and descending
 - `[` and `]` to move by section
 - `{` and `}` to move by project
+- `h`/`l` to move the column cursor, `e` to edit the cell under it
+- `d` to mark the task — or the whole selection — done
 - `g` to draw the Gantt chart and switch to gantt mode
+
+### Editing tasks
+
+The task table is writable. `h` and `l` walk a **column cursor** left and right
+through `Task`, `Assignee`, `Due`, `Start`, `State`, `Projects`, and whatever
+custom fields the loaded projects carry. The column under it is picked out in
+the header, the cell under it on the cursor row is underlined, and moving onto
+a column that is off to the right scrolls the table to it.
+
+The cursor is only drawn in task and task-edit modes. In gantt mode `h` and `l`
+already scroll the timeline, and a cursor you cannot move is a cursor that lies
+about what the keys do.
+
+`e` opens the cell under the cursor. Which editor you get depends on the
+column, and each one is the filter panel's editor for that kind of field:
+
+| Column | Editor | Keys |
+| --- | --- | --- |
+| `Task`, `Assignee`, text and number custom fields | a text field with a caret | type, `backspace`, the motions above |
+| `Due`, `Start` | the date picker | `h`/`l` day, `j`/`k` month, `t` today, `d` clear |
+| `State`, enum custom fields | a value picker | `j`/`k` through the options, `d` for no value |
+
+`enter` commits and `esc` throws the edit away, exactly as in the filter panel.
+Two differences, both because a task holds a value where a filter holds a
+*query*: a date is one day rather than a range (`2026-09-01..2026-09-08` is
+refused), and a value picker holds one value rather than a list.
+
+A picker offers the options the custom field **declares**, not the values tasks
+happen to carry — the whole point may be to be the first task marked `Blocked`.
+
+An `Assignee` is typed as a name, an email address, or `me`. A name is matched
+against the people the loaded tasks name, case-insensitively; one that matches
+nobody, or two people, is refused with a message rather than guessed at. An
+email is sent as typed, which is how you assign someone who is not on screen.
+
+**`d` marks it done.** Completion is a field like any other, but it is also the
+most common edit in the app, so it gets a key of its own: `d` from anywhere in
+the row toggles between open and done.
+
+**An edit is an edit of everything selected.** With tasks selected it applies to
+all of them; with nothing selected it applies to the cursor row. The editor
+opens on the cursor row's value even when the selection holds several different
+ones, and the pane border says `editing 3` so the blast radius is on screen
+before you commit. The targets are fixed when the editor *opens*, so a table
+that rebuilds underneath you cannot widen what `enter` is about to change.
+
+On a selection, `d` is not a per-task toggle: every target is set to the
+opposite of the reference row's state, so a mixed selection ends up uniform and
+a second press puts it back.
+
+**Titles are the exception.** Setting three tasks to the same title is not a
+bulk edit, so `e` on the `Task` column with more than one task selected is
+refused, and says why.
+
+**What goes over the wire.** An edit is applied locally the moment you commit
+it and sent to Asana in the background, one request per task, so the table does
+not freeze while twelve tasks are marked done. If a request fails, that task's
+field is put back the way it was and the pane border says so:
+`could not update 1 of 12: backend error: 403`.
+
+Two consequences worth knowing before they surprise you:
+
+- **An edit can make a row vanish.** Re-assign a task while filtering to `alex`
+  and it leaves the table. That is the filter doing its job; the cursor lands
+  on the next row, as it does after any rebuild.
+- **An edit does not re-fetch.** Moving a due date outside the window pushed
+  down to Asana does not hide the task — it is already in the cache, and the
+  cache is what the table is built from.
+
+Not yet editable: creating and deleting tasks, project membership (the
+`Projects` column), subtask level and position in the list, and `date`,
+`multi_enum`, and `people` custom fields. Each says so rather than doing
+nothing.
 
 ### Gantt chart
 

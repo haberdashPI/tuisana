@@ -83,6 +83,10 @@ pub struct HintContext {
     pub filter_set_loaded: bool,
     /// The open sidebar prompt wants a `y`/`n` rather than typed text.
     pub filter_set_confirm: bool,
+    /// A task table cell is open for editing.
+    pub on_task_cell: bool,
+    /// The open cell editor is a value picker, which reads `j`/`k`.
+    pub task_edit_is_options: bool,
 }
 
 /// Hints shown on the right of the bar in every mode.
@@ -169,7 +173,8 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
                 Hint::new(&[Action::CalendarToday], "today"),
             ];
             // The range keys only mean anything once there are two ends, so they
-            // appear only when the query has a `..` in it.
+            // appear only when the query has a `..` in it — and a task date
+            // is one day, so it never has them.
             if context.on_date_range {
                 hints.push(Hint::new(
                     &[Action::CalendarJumpToStart, Action::CalendarJumpToEnd],
@@ -180,12 +185,20 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
                 &[Action::FilterCaretLeft, Action::FilterCaretRight],
                 "caret",
             ));
-            hints.push(Hint::new(&[Action::CalendarCommit], "pick"));
+            // The same keys, one layer over: on a task cell `enter` sends a
+            // write and `esc` throws the edit away, so they are not "pick"
+            // and "close".
+            let (commit, close) = match context.on_task_cell {
+                true => ("save", "cancel"),
+                false => ("pick", "close"),
+            };
+            hints.push(Hint::new(&[Action::CalendarCommit], commit));
             hints.push(Hint::new(&[Action::CalendarClear], "clear"));
-            hints.push(Hint::new(&[Action::CalendarClose], "close"));
+            hints.push(Hint::new(&[Action::CalendarClose], close));
             hints
         }
         Mode::Task => task_hints(context),
+        Mode::TaskEdit => task_edit_hints(context),
         Mode::Gantt => gantt_hints(context),
         Mode::GanttOrder => vec![
             Hint::new(&[Action::MoveDown, Action::MoveUp], "cursor"),
@@ -247,25 +260,65 @@ fn project_hints(context: HintContext) -> Vec<Hint> {
 fn task_hints(context: HintContext) -> Vec<Hint> {
     let mut hints = vec![
         Hint::new(&[Action::MoveDown, Action::MoveUp], "move"),
-        Hint::new(&[Action::Open], "open"),
         Hint::new(&[Action::ToggleTaskSelection], "select"),
-        Hint::new(&[Action::SetFilterMode], "filters"),
-        Hint::new(&[Action::CycleTaskSort], "sort"),
     ];
-    // Ranked above the filter toggles: when columns are off-screen, how to
+    // Next to `select`, because what a selection is *for* is the thing worth
+    // saying once there is one.
+    if context.has_selection {
+        hints.push(Hint::new(&[Action::CopyTasksToClipboard], "copy"));
+    }
+    hints.push(Hint::new(&[Action::BeginTaskEdit], "edit"));
+    hints.push(Hint::new(&[Action::ToggleTaskCompleted], "done"));
+    hints.push(Hint::new(
+        &[Action::TaskColumnPrev, Action::TaskColumnNext],
+        "column",
+    ));
+    hints.push(Hint::new(&[Action::Open], "open"));
+    hints.push(Hint::new(&[Action::SetFilterMode], "filters"));
+    hints.push(Hint::new(&[Action::CycleTaskSort], "sort"));
+    // Ranked above the view toggles: when columns are off-screen, how to
     // reach them is the most urgent thing the bar can say.
     if context.can_scroll {
         hints.push(Hint::new(
             &[Action::ScrollLeft, Action::ScrollRight],
-            "columns",
+            "scroll",
         ));
     }
     hints.push(Hint::new(&[Action::SetGanttMode], "gantt"));
     hints.push(Hint::new(&[Action::ToggleCompletedFilter], "completed"));
-    if context.has_selection {
-        hints.push(Hint::new(&[Action::CopyTasksToClipboard], "copy"));
-    }
     hints.push(Hint::new(&[Action::ToggleHelpDetails], "help"));
+    hints
+}
+
+/// The keys an open cell editor reads.
+///
+/// A value picker reads no text at all, so the caret motions are replaced by
+/// the two keys that actually do something there.
+fn task_edit_hints(context: HintContext) -> Vec<Hint> {
+    let mut hints = vec![
+        Hint::new(&[Action::CommitTaskEdit], "save"),
+        Hint::new(&[Action::CancelTaskEdit], "cancel"),
+    ];
+    if context.task_edit_is_options {
+        hints.push(Hint::new(
+            &[
+                Action::TaskEditCycleValue(1),
+                Action::TaskEditCycleValue(-1),
+            ],
+            "value",
+        ));
+        hints.push(Hint::new(&[Action::TaskEditClear], "clear"));
+        return hints;
+    }
+    hints.push(Hint::new(
+        &[Action::TextCaretWordBack, Action::TextCaretWordForward],
+        "word",
+    ));
+    hints.push(Hint::new(
+        &[Action::TextCaretStart, Action::TextCaretEnd],
+        "ends",
+    ));
+    hints.push(Hint::literal("bksp", "delete"));
     hints
 }
 
@@ -289,6 +342,10 @@ fn filter_edit_hints(context: HintContext) -> Vec<Hint> {
         hints.push(Hint::new(
             &[Action::FilterCaretLeft, Action::FilterCaretRight],
             "caret",
+        ));
+        hints.push(Hint::new(
+            &[Action::TextCaretWordBack, Action::TextCaretWordForward],
+            "word",
         ));
         hints.push(Hint::literal("bksp", "delete"));
         hints.push(Hint::new(&[Action::ClearSearch], "clear"));
@@ -413,6 +470,9 @@ pub fn key_text(key: &KeyBinding, glyphs: &GlyphSet) -> String {
         KeyBinding::Char(' ') => "space".to_string(),
         KeyBinding::Char(c) => c.to_string(),
         KeyBinding::Ctrl(c) => format!("^{c}"),
+        // `M-` rather than `⌥` or `alt-`: this is emacs' notation for the
+        // meta modifier, and these are emacs' motions.
+        KeyBinding::Alt(c) => format!("M-{c}"),
         KeyBinding::Enter if unicode => "⏎".to_string(),
         KeyBinding::Enter => "enter".to_string(),
         KeyBinding::Esc => "esc".to_string(),
@@ -741,6 +801,37 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The picker is shared, so the same keys have to name what they do in
+    /// whichever editor opened it.
+    #[test]
+    fn the_calendar_hints_say_save_and_cancel_on_a_task_cell() {
+        let filter = hints_for(Mode::Calendar, HintContext::default());
+        let cell = hints_for(
+            Mode::Calendar,
+            HintContext {
+                on_task_cell: true,
+                ..HintContext::default()
+            },
+        );
+
+        assert!(filter.iter().any(|hint| hint.label == "pick"));
+        assert!(cell.iter().any(|hint| hint.label == "save"));
+        assert!(cell.iter().any(|hint| hint.label == "cancel"));
+    }
+
+    #[test]
+    fn an_alt_binding_renders_as_the_emacs_meta_key() {
+        use super::key_text;
+        use crate::input::KeyBinding;
+        use crate::ui::theme::GlyphSet;
+
+        assert_eq!(
+            key_text(&KeyBinding::Alt('b'), &GlyphSet::UNICODE),
+            "M-b"
+        );
+        assert_eq!(key_text(&KeyBinding::Alt('f'), &GlyphSet::ASCII), "M-f");
     }
 
     #[test]

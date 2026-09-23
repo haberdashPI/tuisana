@@ -99,6 +99,19 @@ pub struct EnumOptionDto {
     pub gid: String,
     /// The option name.
     pub name: String,
+    /// Whether the option can still be chosen.
+    ///
+    /// Disabled options exist so old values keep rendering. Offering one in a
+    /// picker is offering a value Asana will reject, so they are dropped when
+    /// a definition is built. Defaults to enabled: the task-side payload does
+    /// not carry the flag, and an option a task already holds is not a
+    /// suggestion.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 /// A single task custom-field value.
@@ -163,6 +176,15 @@ pub struct CustomFieldDto {
     pub gid: String,
     /// The custom-field name.
     pub name: String,
+    /// What the field holds: `text`, `number`, `enum`, `date`, and so on.
+    ///
+    /// Declared by Asana rather than inferred from the values tasks carry,
+    /// which is what lets a picker offer an option no task has yet.
+    #[serde(default)]
+    pub resource_subtype: Option<String>,
+    /// The options an enum field declares, including disabled ones.
+    #[serde(default)]
+    pub enum_options: Vec<EnumOptionDto>,
 }
 
 /// The project-to-custom-field settings payload.

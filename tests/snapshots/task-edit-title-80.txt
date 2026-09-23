@@ -1,4 +1,4 @@
- TUISANA  ▸ 1 project ▸ 12 tasks
+ TUISANA  ▸ 1 project ▸ 11 tasks
 ┌ Projects ────────────────────────────────────────────── 3 shown · 1 selected ┐
 │  ● ★ Northwind BTX 4412                                                      │
 │▍   ★ Platform Infrastructure                                                 │
@@ -10,13 +10,13 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 12 tasks · row 12 · columns 0/41 ┓
+┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11 tasks · row 1 · columns 0/41 ┓
 ┃   Task                                          │ Assignee     │    Due▲ │  S┃
 ┃                                                                              ┃
 ┃▌Northwind BTX 4412 ──────────────────────────────────────────────────────────┃
 ┃                                                                              ┃
 ┃   Study Kit Design ··························································┃
-┃   Draft the assay validation protocol           │ Priya Raman  │ !Jul 10 │ Ju┃
+┃▍  …ol and every word after the column runs out  │ Priya Raman  │ !Jul 10 │ Ju┃
 ┃   Review shipment requirements doc              │ Morgan Ellis │ !Aug 19 │  A┃
 ┃   Ship release candidate to the study team      │ Alex Chen    │   Today │ Au┃
 ┃   Confirm carrier pickup window with the vendor │ —            │     Wed │ Au┃
@@ -29,12 +29,12 @@
 ┃   Reconcile the freight invoices                │ Robin Fox    │  Oct 30 │ Se┃
 ┃   Close out packaging vendor contract           │ Alex Chen    │  Nov 14 │  O┃
 ┃   Close the quarter's shipping report           │ Priya Raman  │  Dec 18 │  N┃
-┃▍  Archive the pilot batch records               │ Jo Park      │       — │   ┃
+┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ␣ select   e edit   d done   h/l column   ⏎ open   r refresh   q quit
- TASK                                                                open + done
+⏎ save   esc cancel   M-b/M-f word   ^a/^e ends   bksp delete
+ TASK EDIT

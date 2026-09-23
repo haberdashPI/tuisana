@@ -15,6 +15,13 @@ use crate::{
 pub enum KeyBinding {
     Char(char),
     Ctrl(char),
+    /// Option/Alt plus a letter, written `alt-x`.
+    ///
+    /// Needs the terminal to send Option as a modifier rather than as an
+    /// escape prefix. The prefix form is deliberately not supported: a lone
+    /// `ESC` is `esc` here, and telling the two apart by timing is how editors
+    /// get famously confused.
+    Alt(char),
     Enter,
     Esc,
     Backspace,
@@ -50,6 +57,9 @@ impl FromStr for KeyBinding {
             _ if normalized.starts_with("ctrl-") && normalized.len() == 6 => {
                 Ok(Self::Ctrl(normalized.chars().last().expect("len checked")))
             }
+            _ if normalized.starts_with("alt-") && normalized.len() == 5 => {
+                Ok(Self::Alt(normalized.chars().last().expect("len checked")))
+            }
             _ => Err(Error::Backend(format!("unsupported key binding: {s}"))),
         }
     }
@@ -78,6 +88,7 @@ impl KeyBinding {
             Self::PageUp => (5, 0),
             Self::PageDown => (5, 1),
             Self::Ctrl(c) => (6, *c as u32),
+            Self::Alt(c) => (7, *c as u32),
         }
     }
 
@@ -88,6 +99,11 @@ impl KeyBinding {
         match event.code {
             KeyCode::Char(c) if event.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(Self::Ctrl(c.to_ascii_lowercase()))
+            }
+            // Before the bare `Char` arm, or every Alt key arrives as a plain
+            // character and types itself into whatever is being edited.
+            KeyCode::Char(c) if event.modifiers.contains(KeyModifiers::ALT) => {
+                Some(Self::Alt(c.to_ascii_lowercase()))
             }
             KeyCode::Char(c) => Some(Self::Char(c.to_ascii_lowercase())),
             KeyCode::Enter => Some(Self::Enter),
@@ -267,6 +283,33 @@ pub enum Action {
     GanttOrderCommit,
     /// Restore the order the dialog opened with and close it.
     GanttOrderCancel,
+    /// Move the column cursor one column left.
+    TaskColumnPrev,
+    /// Move the column cursor one column right.
+    TaskColumnNext,
+    /// Open the editor for the cell under the column cursor.
+    BeginTaskEdit,
+    /// Set every target to the opposite of the cursor row's completion.
+    ToggleTaskCompleted,
+    /// Send the open cell edit.
+    CommitTaskEdit,
+    /// Throw the open cell edit away.
+    CancelTaskEdit,
+    /// Step a value picker, by `1` or `-1`.
+    ///
+    /// The direction is a payload rather than two variants, following
+    /// [`Action::FilterSetLoad`].
+    TaskEditCycleValue(i32),
+    /// Empty the cell being edited.
+    TaskEditClear,
+    /// Move the text caret back one word.
+    TextCaretWordBack,
+    /// Move the text caret forward one word.
+    TextCaretWordForward,
+    /// Move the text caret to the start of the line.
+    TextCaretStart,
+    /// Move the text caret to the end of the line.
+    TextCaretEnd,
 }
 
 impl Action {
@@ -382,6 +425,19 @@ impl Action {
             "gantt_order_move_bottom" => Ok(Self::GanttOrderMoveBottom),
             "gantt_order_commit" => Ok(Self::GanttOrderCommit),
             "gantt_order_cancel" => Ok(Self::GanttOrderCancel),
+            "task_column_prev" => Ok(Self::TaskColumnPrev),
+            "task_column_next" => Ok(Self::TaskColumnNext),
+            "begin_task_edit" => Ok(Self::BeginTaskEdit),
+            "toggle_task_completed" => Ok(Self::ToggleTaskCompleted),
+            "commit_task_edit" => Ok(Self::CommitTaskEdit),
+            "cancel_task_edit" => Ok(Self::CancelTaskEdit),
+            "task_edit_next_value" => Ok(Self::TaskEditCycleValue(1)),
+            "task_edit_prev_value" => Ok(Self::TaskEditCycleValue(-1)),
+            "task_edit_clear" => Ok(Self::TaskEditClear),
+            "text_caret_word_back" => Ok(Self::TextCaretWordBack),
+            "text_caret_word_forward" => Ok(Self::TextCaretWordForward),
+            "text_caret_start" => Ok(Self::TextCaretStart),
+            "text_caret_end" => Ok(Self::TextCaretEnd),
             // The one piece of string handling in the action layer: nine
             // load commands would otherwise be nine variants that differ only
             // by a number.
@@ -413,6 +469,19 @@ impl Action {
                 | Action::ToggleSectionGrouping
                 | Action::CycleTaskSort
                 | Action::ToggleTaskSortDirection
+        )
+    }
+
+    /// Returns `true` for the value-picker keys used in task-edit mode.
+    ///
+    /// Context-sensitive in the same way the label keys are: they step a
+    /// picker on a State or enum cell, and type their character on any cell
+    /// that holds text. They must be routed to `handle_task_edit_input`
+    /// rather than straight to `handle_action`.
+    pub fn is_task_edit_value_action(&self) -> bool {
+        matches!(
+            self,
+            Action::TaskEditCycleValue(_) | Action::TaskEditClear
         )
     }
 
@@ -461,6 +530,12 @@ impl Display for Action {
         // borrowed name.
         if let Action::FilterSetLoad(position) = self {
             return write!(f, "filter_set_load_{position}");
+        }
+        if let Action::TaskEditCycleValue(delta) = self {
+            return f.write_str(match *delta >= 0 {
+                true => "task_edit_next_value",
+                false => "task_edit_prev_value",
+            });
         }
 
         let name = match self {
@@ -538,7 +613,9 @@ impl Display for Action {
             Action::FilterSetNew => "filter_set_new",
             Action::FilterSetDelete => "filter_set_delete",
             // Handled above: it carries a position rather than a fixed name.
-            Action::FilterSetLoad(_) => unreachable!("handled before the match"),
+            Action::FilterSetLoad(_) | Action::TaskEditCycleValue(_) => {
+                unreachable!("handled before the match")
+            }
             Action::CalendarPrevDay => "calendar_prev_day",
             Action::CalendarNextDay => "calendar_next_day",
             Action::CalendarPrevMonth => "calendar_prev_month",
@@ -575,6 +652,17 @@ impl Display for Action {
             Action::GanttOrderMoveBottom => "gantt_order_move_bottom",
             Action::GanttOrderCommit => "gantt_order_commit",
             Action::GanttOrderCancel => "gantt_order_cancel",
+            Action::TaskColumnPrev => "task_column_prev",
+            Action::TaskColumnNext => "task_column_next",
+            Action::BeginTaskEdit => "begin_task_edit",
+            Action::ToggleTaskCompleted => "toggle_task_completed",
+            Action::CommitTaskEdit => "commit_task_edit",
+            Action::CancelTaskEdit => "cancel_task_edit",
+            Action::TaskEditClear => "task_edit_clear",
+            Action::TextCaretWordBack => "text_caret_word_back",
+            Action::TextCaretWordForward => "text_caret_word_forward",
+            Action::TextCaretStart => "text_caret_start",
+            Action::TextCaretEnd => "text_caret_end",
         };
         f.write_str(name)
     }
@@ -721,6 +809,67 @@ mod tests {
         assert!(Action::from_command("filter_set_load_10").is_err());
         assert!(Action::from_command("filter_set_load_x").is_err());
         assert!(Action::from_command("filter_set_load_").is_err());
+    }
+
+    /// The twelve commands this milestone added, through the same three
+    /// places every other one has to be added in.
+    #[test]
+    fn every_task_edit_command_round_trips_through_its_name() {
+        for action in [
+            Action::TaskColumnPrev,
+            Action::TaskColumnNext,
+            Action::BeginTaskEdit,
+            Action::ToggleTaskCompleted,
+            Action::CommitTaskEdit,
+            Action::CancelTaskEdit,
+            Action::TaskEditCycleValue(1),
+            Action::TaskEditCycleValue(-1),
+            Action::TaskEditClear,
+            Action::TextCaretWordBack,
+            Action::TextCaretWordForward,
+            Action::TextCaretStart,
+            Action::TextCaretEnd,
+        ] {
+            assert_eq!(
+                Action::from_command(&action.to_string()).expect("parses"),
+                action,
+                "{action} did not round trip"
+            );
+        }
+
+        // The direction is a payload, so it needs two names rather than one.
+        assert_eq!(
+            Action::TaskEditCycleValue(1).to_string(),
+            "task_edit_next_value"
+        );
+        assert_eq!(
+            Action::TaskEditCycleValue(-1).to_string(),
+            "task_edit_prev_value"
+        );
+    }
+
+    #[test]
+    fn alt_keys_parse_and_arrive_as_a_modifier() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        assert_eq!("alt-b".parse::<KeyBinding>().expect("parses"), KeyBinding::Alt('b'));
+        assert_eq!("ALT-F".parse::<KeyBinding>().expect("parses"), KeyBinding::Alt('f'));
+        assert!("alt-".parse::<KeyBinding>().is_err());
+
+        // Before the bare `Char` arm, or every Alt key would arrive as a
+        // plain character and type itself into whatever is being edited.
+        assert_eq!(
+            KeyBinding::from_crossterm_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT)),
+            Some(KeyBinding::Alt('b'))
+        );
+        // Ctrl still wins, so `ctrl-alt-b` is not silently an Alt binding.
+        assert_eq!(
+            KeyBinding::from_crossterm_event(KeyEvent::new(
+                KeyCode::Char('b'),
+                KeyModifiers::ALT | KeyModifiers::CONTROL
+            )),
+            Some(KeyBinding::Ctrl('b'))
+        );
     }
 
     #[test]

@@ -3,38 +3,38 @@
 │  ● ★ Northwind BTX 4412                                                      │
 │▍   ★ Platform Infrastructure                                                 │
 │    ☆ Backlog                                                                 │
-│                                                                              │
 │       ┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓       │
-│       ┃Tasks                            Move                         ┃       │
-│       ┃⏎           open in Asana        j/k         down / up        ┃       │
-│       ┃␣           select               ^d/^u       page down / up   ┃       │
-│       ┃a           select all           home/end    top / bottom     ┃       │
-└───────┃i           invert                                            ┃───────┘
-┏ Tasks ┃x           clear                Modes                        ┃s 0/41 ┓
-┃   Task┃^x          clear hidden         p           projects         ┃e▲ │  S┃
-┃       ┃y           copy links           f           filters          ┃       ┃
-┃▌Northw┃                                 t           tasks            ┃───────┃
-┃       ┃Group & sort                     m           toggle tasks     ┃       ┃
-┃   Stud┃[/]         jump section                                      ┃·······┃
-┃▍  Draf┃{/}         jump project         Panes                        ┃10 │ Ju┃
-┃   Revi┃,           group by project     0           restore          ┃19 │  A┃
-┃   Ship┃.           group by section                                  ┃ay │ Au┃
-┃   Conf┃s           cycle sort field     App                          ┃ed │ Au┃
-┃   Upda┃^           asc / desc           r           refresh          ┃ 4 │ Au┃
-┃   Qual┃                                 q ^c        quit             ┃12 │  J┃
-┃       ┃View                             ?           close this help  ┃       ┃
-┃   Ship┃g           gantt chart                                       ┃·······┃
-┃   Book┃f           filter panel                                      ┃15 │  S┃
-┃   Labe┃c           open / done / all                                 ┃ 9 │   ┃
-┃   Reco┃z           subtasks                                          ┃30 │ Se┃
-┃   Clos┃left/right  scroll columns                                    ┃14 │  O┃
-┃   Clos┃                                                              ┃18 │  N┃
+│       ┃Tasks                            View                         ┃       │
+│       ┃⏎           open in Asana        g           gantt chart      ┃       │
+│       ┃␣           select               f           filter panel     ┃       │
+│       ┃a           select all           c           open / done / all┃       │
+│       ┃i           invert               z           subtasks         ┃       │
+└───────┃x           clear                left/right  scroll columns   ┃───────┘
+┏ Tasks ┃^x          clear hidden                                      ┃s 0/41 ┓
+┃   Task┃y           copy links           Move                         ┃e▲ │  S┃
+┃       ┃                                 j/k         down / up        ┃       ┃
+┃▌Northw┃Group & sort                     ^d/^u       page down / up   ┃───────┃
+┃       ┃[/]         jump section         home/end    top / bottom     ┃       ┃
+┃   Stud┃{/}         jump project                                      ┃·······┃
+┃▍  Draf┃,           group by project     Modes                        ┃10 │ Ju┃
+┃   Revi┃.           group by section     p           projects         ┃19 │  A┃
+┃   Ship┃s           cycle sort field     f           filters          ┃ay │ Au┃
+┃   Conf┃^           asc / desc           t           tasks            ┃ed │ Au┃
+┃   Upda┃                                 m           toggle tasks     ┃ 4 │ Au┃
+┃   Qual┃Edit                                                          ┃12 │  J┃
+┃       ┃h/l         column cursor        Panes                        ┃       ┃
+┃   Ship┃e           edit the cell        0           restore          ┃·······┃
+┃   Book┃d           open / done                                       ┃15 │  S┃
+┃   Labe┃                                 App                          ┃ 9 │   ┃
+┃   Reco┃                                 r           refresh          ┃30 │ Se┃
+┃   Clos┃                                 q ^c        quit             ┃14 │  O┃
+┃   Clos┃                                 ?           close this help  ┃18 │  N┃
+┃       ┃                                                              ┃       ┃
 ┃       ┃                                                    ? to close┃       ┃
 ┃       ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛       ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
-┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ⏎ open   ␣ select   f filters   s sort             r refresh   q quit
+j/k move   ␣ select   e edit   d done   h/l column   ⏎ open   r refresh   q quit
  TASK

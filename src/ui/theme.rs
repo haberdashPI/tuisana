@@ -480,6 +480,8 @@ impl Theme {
             // field, so the color only needs to signal "you are typing".
             Mode::Calendar => Color::Yellow,
             Mode::Task => Color::Green,
+            // Yellow, like every other mode where something is being typed.
+            Mode::TaskEdit => Color::Yellow,
             Mode::Gantt => Color::Cyan,
             // Yellow, like the other modes where something is being edited.
             Mode::GanttOrder => Color::Yellow,

@@ -18,7 +18,8 @@ use crate::{
     ui::{
         chrome::{Chip, PaneMessage, Tone},
         text::{
-            clip_spans, pad_cell, slice_spans, spans_width, truncate_with_ellipsis, visible_width,
+            caret_spans, caret_window, clip_spans, pad_cell, slice_spans, spans_width,
+            truncate_with_ellipsis, visible_width,
         },
         theme::Theme,
     },
@@ -402,10 +403,18 @@ fn value_spans(
         FilterValue::Text(query) if query.is_empty() && row.caret.is_none() => {
             vec![Span::styled(glyphs.empty.to_string(), theme.muted)]
         }
-        FilterValue::Text(query) => {
-            let text = truncate_with_ellipsis(query, width, glyphs.ellipsis);
-            caret_spans(&text, row.caret, theme)
-        }
+        FilterValue::Text(query) => match row.caret {
+            // A caret past the column's width is a caret off the screen, so
+            // an edited value scrolls under it instead of truncating.
+            Some(caret) => {
+                let window = caret_window(query, caret, width, glyphs.ellipsis, 0);
+                caret_spans(&window.text, Some(window.caret), theme.text)
+            }
+            None => vec![Span::styled(
+                truncate_with_ellipsis(query, width, glyphs.ellipsis),
+                theme.text,
+            )],
+        },
         FilterValue::Labels { values, .. } if values.is_empty() => {
             vec![Span::styled(glyphs.empty.to_string(), theme.muted)]
         }
@@ -433,43 +442,6 @@ fn value_spans(
             spans
         }
     }
-}
-
-/// Splits a value around the caret so the caret can be drawn as a style.
-///
-/// The caret used to be a glyph spliced into the text, which pushed the
-/// characters after it along and read as a stray space that wandered as the
-/// caret moved. Reversing the character *under* the caret instead costs no
-/// columns, so the text stays put while the caret travels through it. Only at
-/// the very end, where there is no character to reverse, does a cell get added.
-fn caret_spans(text: &str, caret: Option<usize>, theme: &Theme) -> Vec<Span<'static>> {
-    let Some(caret) = caret else {
-        return vec![Span::styled(text.to_string(), theme.text)];
-    };
-
-    let chars = text.chars().collect::<Vec<_>>();
-    let at = caret.min(chars.len());
-    let head = chars[..at].iter().collect::<String>();
-    let under = chars.get(at).copied();
-    let tail = if at < chars.len() {
-        chars[at + 1..].iter().collect::<String>()
-    } else {
-        String::new()
-    };
-
-    let caret_style = theme.text.add_modifier(Modifier::REVERSED);
-    let mut spans = Vec::with_capacity(3);
-    if !head.is_empty() {
-        spans.push(Span::styled(head, theme.text));
-    }
-    spans.push(Span::styled(
-        under.map_or_else(|| " ".to_string(), |ch| ch.to_string()),
-        caret_style,
-    ));
-    if !tail.is_empty() {
-        spans.push(Span::styled(tail, theme.text));
-    }
-    spans
 }
 
 fn filter_row(entry: TaskFilterPanelEntry) -> FilterRow {
@@ -694,6 +666,30 @@ mod tests {
             .iter()
             .find(|span| span.style.add_modifier.contains(Modifier::REVERSED))
             .map(|span| span.content.to_string())
+    }
+
+    #[test]
+    fn a_long_filter_value_scrolls_under_the_caret_rather_than_truncating() {
+        // The value column has the same bug the table cell had: a caret past
+        // the cut is a caret nobody can see.
+        let theme = Theme::default();
+        let mut state = panel_state();
+        state.filter_edit_begin();
+        for ch in "a value far longer than the column can show".chars() {
+            state.filter_push_char(ch);
+        }
+
+        let view = render_filter_panel(&state).expect("panel is open");
+        let line = filter_panel_lines(&view, &theme, 40)[0].to_string();
+
+        assert!(
+            line.contains("show") || line.contains("can"),
+            "the tail the caret is in is on screen: {line}"
+        );
+        assert!(
+            line.contains(theme.glyphs.ellipsis),
+            "and the clipped side is marked: {line}"
+        );
     }
 
     #[test]

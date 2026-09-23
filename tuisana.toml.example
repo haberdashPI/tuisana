@@ -244,7 +244,8 @@ command = "filter_set_prev"
 # filter". Letters type while editing, so it needs a ctrl- pair in filter-edit
 # mode; in calendar mode ctrl-e already jumps to the end of a range, which is
 # why a date field's require-empty is set from browse mode, before the picker
-# opens.
+# opens. It used to be ctrl-e in filter-edit mode too; that key is now
+# "end of line", which is what it means everywhere else text is edited.
 
 [[bind]]
 key = "e"
@@ -252,7 +253,7 @@ mode = "filter"
 command = "filter_require_empty"
 
 [[bind]]
-key = "ctrl-e"
+key = "ctrl-q"
 mode = "filter_edit"
 command = "filter_require_empty"
 
@@ -424,6 +425,131 @@ command = "cycle_task_sort"
 key = "^"
 mode = "task"
 command = "toggle_task_sort_direction"
+
+# The column cursor and the cell editor. h, l, e, and d are all free in task
+# mode, and the global fallback binds none of them.
+
+[[bind]]
+key = "h"
+mode = "task"
+command = "task_column_prev"
+
+[[bind]]
+key = "l"
+mode = "task"
+command = "task_column_next"
+
+[[bind]]
+key = "e"
+mode = "task"
+command = "begin_task_edit"
+
+[[bind]]
+key = "d"
+mode = "task"
+command = "toggle_task_completed"
+
+# "task_edit" mode is a cell open for editing. Like filter-edit and calendar
+# mode it does not fall back to the global bindings, so an unbound letter
+# types into the cell rather than firing the command that letter carries.
+#
+# j, k, and d are context-sensitive: they step a value picker on a State or
+# enum cell, and type their own character on a cell that holds text. ctrl-l
+# clears whatever the editor holds either way.
+
+[[bind]]
+key = "enter"
+mode = "task_edit"
+command = "commit_task_edit"
+
+[[bind]]
+key = "esc"
+mode = "task_edit"
+command = "cancel_task_edit"
+
+[[bind]]
+key = "j"
+mode = "task_edit"
+command = "task_edit_next_value"
+
+[[bind]]
+key = "k"
+mode = "task_edit"
+command = "task_edit_prev_value"
+
+[[bind]]
+key = "d"
+mode = "task_edit"
+command = "task_edit_clear"
+
+[[bind]]
+key = "ctrl-l"
+mode = "task_edit"
+command = "task_edit_clear"
+
+# The emacs motions, shared by every field that takes text. `alt-` needs the
+# terminal to send Option as a modifier rather than as an escape prefix; see
+# the README. Rebind them if yours cannot.
+
+[[bind]]
+key = "left"
+mode = "task_edit"
+command = "filter_caret_left"
+
+[[bind]]
+key = "right"
+mode = "task_edit"
+command = "filter_caret_right"
+
+[[bind]]
+key = "ctrl-b"
+mode = "task_edit"
+command = "filter_caret_left"
+
+[[bind]]
+key = "ctrl-f"
+mode = "task_edit"
+command = "filter_caret_right"
+
+[[bind]]
+key = "alt-b"
+mode = "task_edit"
+command = "text_caret_word_back"
+
+[[bind]]
+key = "alt-f"
+mode = "task_edit"
+command = "text_caret_word_forward"
+
+[[bind]]
+key = "ctrl-a"
+mode = "task_edit"
+command = "text_caret_start"
+
+[[bind]]
+key = "ctrl-e"
+mode = "task_edit"
+command = "text_caret_end"
+
+[[bind]]
+key = "alt-b"
+mode = "filter_edit"
+command = "text_caret_word_back"
+
+[[bind]]
+key = "alt-f"
+mode = "filter_edit"
+command = "text_caret_word_forward"
+
+[[bind]]
+key = "ctrl-a"
+mode = "filter_edit"
+command = "text_caret_start"
+
+[[bind]]
+key = "ctrl-e"
+mode = "filter_edit"
+command = "text_caret_end"
 
 # Pressing enter on the Due or Start filter opens a calendar overlay. These are
 # its keys; "calendar" mode does not fall back to global bindings, so digits and

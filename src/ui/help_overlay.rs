@@ -54,6 +54,11 @@ impl HelpGroup {
 pub fn groups_for(mode: Mode) -> Vec<HelpGroup> {
     let mut groups = match mode {
         Mode::Task => task_groups(),
+        Mode::TaskEdit => {
+            let mut groups = task_groups();
+            groups.push(text_editing_group());
+            groups
+        }
         Mode::Gantt => gantt_groups(),
         Mode::GanttOrder => gantt_order_groups(),
         Mode::Filter | Mode::FilterEdit | Mode::FilterSetName => filter_groups(),
@@ -131,6 +136,24 @@ fn task_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::ToggleSectionGrouping], "group by section"),
                 Hint::new(&[Action::CycleTaskSort], "cycle sort field"),
                 Hint::new(&[Action::ToggleTaskSortDirection], "asc / desc"),
+            ],
+        ),
+        HelpGroup::new(
+            "Edit",
+            vec![
+                Hint::new(&[Action::TaskColumnPrev, Action::TaskColumnNext], "column cursor"),
+                Hint::new(&[Action::BeginTaskEdit], "edit the cell"),
+                Hint::new(&[Action::ToggleTaskCompleted], "open / done"),
+                Hint::new(&[Action::CommitTaskEdit], "save the edit"),
+                Hint::new(&[Action::CancelTaskEdit], "cancel the edit"),
+                Hint::new(
+                    &[
+                        Action::TaskEditCycleValue(1),
+                        Action::TaskEditCycleValue(-1),
+                    ],
+                    "pick a value",
+                ),
+                Hint::new(&[Action::TaskEditClear], "clear the value"),
             ],
         ),
         HelpGroup::new(
@@ -269,16 +292,7 @@ fn filter_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::FilterDeleteLabel], "remove value"),
             ],
         ),
-        HelpGroup::new(
-            "Text values",
-            vec![
-                Hint::new(
-                    &[Action::FilterCaretLeft, Action::FilterCaretRight],
-                    "move the caret",
-                ),
-                Hint::literal("bksp", "delete at the caret"),
-            ],
-        ),
+        text_editing_group(),
         HelpGroup::new(
             "Match modes",
             vec![
@@ -297,6 +311,31 @@ fn filter_groups() -> Vec<HelpGroup> {
             ],
         ),
     ]
+}
+
+/// The motions every text field shares.
+///
+/// One group rather than one per pane: the filter panel and the task table's
+/// cell editor run on the same buffer, so they read the same keys.
+fn text_editing_group() -> HelpGroup {
+    HelpGroup::new(
+        "Text editing",
+        vec![
+            Hint::new(
+                &[Action::FilterCaretLeft, Action::FilterCaretRight],
+                "move the caret",
+            ),
+            Hint::new(
+                &[Action::TextCaretWordBack, Action::TextCaretWordForward],
+                "move a word",
+            ),
+            Hint::new(
+                &[Action::TextCaretStart, Action::TextCaretEnd],
+                "start / end of line",
+            ),
+            Hint::literal("bksp", "delete at the caret"),
+        ],
+    )
 }
 
 fn calendar_groups() -> Vec<HelpGroup> {

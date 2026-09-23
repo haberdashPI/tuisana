@@ -3,7 +3,10 @@
 //! Every function here measures in *display cells* rather than bytes or chars,
 //! so wide CJK characters and multi-byte glyphs never break column alignment.
 
-use ratatui::text::Span;
+use ratatui::{
+    style::{Modifier, Style},
+    text::Span,
+};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// The display width of a string in terminal cells.
@@ -79,6 +82,170 @@ pub fn pad_cell_centered(value: &str, width: usize, ellipsis: &str) -> String {
         " ".repeat(left),
         " ".repeat(padding - left)
     )
+}
+
+/// A window of a value, sized to a column, with the caret inside it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaretWindow {
+    /// The text to draw, including any ellipsis.
+    pub text: String,
+    /// Where the caret sits in `text`, as a char index.
+    pub caret: usize,
+    /// Where the window starts in the original value, as a char index.
+    ///
+    /// Handed back so the caller can keep it and pass it in again: that is
+    /// what makes the window sticky rather than re-centred on every frame.
+    pub start: usize,
+}
+
+/// The `width` cells of `text` that contain the caret.
+///
+/// An ellipsis marks each clipped side, and costs a cell from the window, so
+/// the caret is never the character the ellipsis replaced. Measured in display
+/// cells like everything else in this module, so a CJK title scrolls by
+/// columns rather than by chars.
+///
+/// `start` is where the window sat last time. It is honoured unless the caret
+/// has left it, which is what keeps the text still while the caret travels
+/// through it — a window recomputed from scratch every frame slides under the
+/// reader on every keystroke.
+pub fn caret_window(
+    text: &str,
+    caret: usize,
+    width: usize,
+    ellipsis: &str,
+    start: usize,
+) -> CaretWindow {
+    let chars = text.chars().collect::<Vec<_>>();
+    let caret = caret.min(chars.len());
+    if width == 0 {
+        return CaretWindow {
+            text: String::new(),
+            caret: 0,
+            start: 0,
+        };
+    }
+
+    // The caret needs a cell of its own when it sits past the last character,
+    // which is where a value that only just fits stops fitting.
+    let natural = visible_width(text) + usize::from(caret == chars.len());
+    if natural <= width {
+        return CaretWindow {
+            text: text.to_string(),
+            caret,
+            start: 0,
+        };
+    }
+
+    let marker = visible_width(ellipsis).max(1);
+    let mut start = start.min(chars.len()).min(caret);
+
+    loop {
+        let (end, used, right_clipped) = window_end(&chars, start, width, marker);
+        let visible = match right_clipped {
+            // The last cell is the ellipsis, so the caret cannot sit on it.
+            true => caret < end,
+            // Past the last character the caret needs a cell of its own.
+            false => caret < end || used + marker_left(start, marker) < width,
+        };
+
+        if visible || start >= caret {
+            let mut window = String::new();
+            if start > 0 {
+                window.push_str(ellipsis);
+            }
+            window.extend(chars[start..end].iter());
+            if right_clipped {
+                window.push_str(ellipsis);
+            }
+            let caret_offset = marker_left(start, marker)
+                + visible_width(&chars[start..caret.min(end)].iter().collect::<String>());
+            return CaretWindow {
+                text: window,
+                caret: caret_offset,
+                start,
+            };
+        }
+
+        start += 1;
+    }
+}
+
+/// The cells the left-hand ellipsis costs, or zero when nothing is clipped.
+fn marker_left(start: usize, marker: usize) -> usize {
+    match start {
+        0 => 0,
+        _ => marker,
+    }
+}
+
+/// How far a window starting at `start` reaches, and whether it clips.
+fn window_end(
+    chars: &[char],
+    start: usize,
+    width: usize,
+    marker: usize,
+) -> (usize, usize, bool) {
+    let budget = width.saturating_sub(marker_left(start, marker));
+    let fill = |budget: usize| {
+        let mut end = start;
+        let mut used = 0usize;
+        while end < chars.len() {
+            let char_width = chars[end].width().unwrap_or(0);
+            if used + char_width > budget {
+                break;
+            }
+            used += char_width;
+            end += 1;
+        }
+        (end, used)
+    };
+
+    let (end, used) = fill(budget);
+    if end == chars.len() {
+        return (end, used, false);
+    }
+
+    // Something is left over, so the right-hand ellipsis has to be paid for.
+    let (end, used) = fill(budget.saturating_sub(marker));
+    (end, used, true)
+}
+
+/// Splits a value around the caret so the caret can be drawn as a style.
+///
+/// The caret used to be a glyph spliced into the text, which pushed the
+/// characters after it along and read as a stray space that wandered as the
+/// caret moved. Reversing the character *under* the caret instead costs no
+/// columns, so the text stays put while the caret travels through it. Only at
+/// the very end, where there is no character to reverse, does a cell get added.
+pub fn caret_spans(text: &str, caret: Option<usize>, style: Style) -> Vec<Span<'static>> {
+    let Some(caret) = caret else {
+        return vec![Span::styled(text.to_string(), style)];
+    };
+
+    let chars = text.chars().collect::<Vec<_>>();
+    let at = caret.min(chars.len());
+    let head = chars[..at].iter().collect::<String>();
+    let under = chars.get(at).copied();
+    let tail = if at < chars.len() {
+        chars[at + 1..].iter().collect::<String>()
+    } else {
+        String::new()
+    };
+
+    let caret_style = style.add_modifier(Modifier::REVERSED);
+    let mut spans = Vec::with_capacity(3);
+    if !head.is_empty() {
+        spans.push(Span::styled(head, style));
+    }
+    spans.push(Span::styled(
+        under.map_or_else(|| " ".to_string(), |ch| ch.to_string()),
+        caret_style,
+    ));
+    if !tail.is_empty() {
+        spans.push(Span::styled(tail, style));
+    }
+    spans
 }
 
 /// Repeats `glyph` until it fills `width` cells.
@@ -172,10 +339,79 @@ pub fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>>
 #[cfg(test)]
 mod tests {
     use super::{
-        clip_spans, fill, pad_cell, pad_cell_centered, pad_cell_right_aligned, pad_spans,
-        slice_spans, truncate_with_ellipsis, visible_width,
+        caret_window, clip_spans, fill, pad_cell, pad_cell_centered, pad_cell_right_aligned,
+        pad_spans, slice_spans, truncate_with_ellipsis, visible_width,
     };
     use ratatui::text::Span;
+
+    /// The caret has to land on a cell the window actually draws, and the
+    /// window has to fit the column: a caret past the cut is the whole bug
+    /// this replaces truncation to fix.
+    fn assert_window(text: &str, caret: usize, width: usize, start: usize) -> super::CaretWindow {
+        let window = caret_window(text, caret, width, "…", start);
+        assert!(
+            visible_width(&window.text) <= width,
+            "{:?} is wider than {width}",
+            window.text
+        );
+        assert!(
+            window.caret <= visible_width(&window.text),
+            "the caret at {} is outside {:?}",
+            window.caret,
+            window.text
+        );
+        // The caret past the last character needs a cell of its own, and it
+        // has to be a cell the column actually has.
+        assert!(window.caret < width, "the caret at {} needs a cell", window.caret);
+        window
+    }
+
+    #[test]
+    fn a_caret_window_keeps_the_caret_visible_at_both_ends() {
+        let text = "Ship the release before the summit";
+
+        let start = assert_window(text, 0, 12, 0);
+        assert_eq!(start.text, "Ship the re…");
+        assert_eq!(start.caret, 0);
+
+        let end = assert_window(text, text.chars().count(), 12, 0);
+        assert!(end.text.starts_with('…'), "{:?} marks the clipped left", end.text);
+        assert_eq!(
+            end.caret,
+            visible_width(&end.text),
+            "the caret sits in the blank past the last character"
+        );
+
+        let middle = assert_window(text, 20, 12, 0);
+        assert!(middle.text.ends_with('…'), "{:?} marks the clipped right", middle.text);
+    }
+
+    #[test]
+    fn a_value_that_fits_is_not_windowed_at_all() {
+        let window = assert_window("Ship", 4, 12, 0);
+
+        assert_eq!(window.text, "Ship");
+        assert_eq!(window.start, 0);
+    }
+
+    #[test]
+    fn a_window_only_moves_when_the_caret_would_leave_it() {
+        let text = "Ship the release before the summit";
+        let scrolled = caret_window(text, 30, 12, "…", 0).start;
+
+        // The caret steps back one; the window it was already in still holds
+        // it, so the text does not slide.
+        let held = caret_window(text, 29, 12, "…", scrolled).start;
+
+        assert_eq!(held, scrolled);
+    }
+
+    #[test]
+    fn a_caret_window_counts_a_wide_character_as_two_cells() {
+        let window = assert_window("日本語のタスク", 6, 9, 0);
+
+        assert!(visible_width(&window.text) <= 9);
+    }
 
     #[test]
     fn truncates_with_an_ellipsis_and_never_exceeds_the_width() {

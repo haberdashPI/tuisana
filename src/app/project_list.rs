@@ -828,6 +828,14 @@ mod tests {
             Err(Error::Backend("backend unavailable".to_string()))
         }
 
+        fn update_task(
+            &self,
+            _task_gid: &str,
+            _edit: &crate::domain::TaskFieldEdit,
+        ) -> Result<crate::asana::dto::TaskDto> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
         fn current_user_gid(&self) -> Result<String> {
             Err(Error::Backend("backend unavailable".to_string()))
         }

@@ -1,15 +1,28 @@
 //! In-memory Asana client used by tests.
 
-use std::{cell::RefCell, collections::HashMap};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     asana::{
-        dto::{ProjectCustomFieldSettingDto, SectionDto, TaskDto},
+        dto::{
+            CustomFieldValueDto, EnumOptionDto, ProjectCustomFieldSettingDto, SectionDto, TaskDto,
+            UserDto,
+        },
         AsanaClient, TaskLoadScope, TaskQuery, TaskTarget,
     },
-    domain::Project,
+    domain::{CustomFieldValue, Project, TaskFieldEdit},
     error::{Error, Result},
 };
+
+/// The `modified_at` the fake stamps on a task it has just updated.
+///
+/// Later than any timestamp a fixture is going to carry, which is what makes
+/// "a stale fetch does not undo a confirmed edit" testable at all.
+pub const FAKE_EDIT_MODIFIED_AT: &str = "9999-01-01T00:00:00.000Z";
 
 /// A simple in-memory `AsanaClient` implementation for tests.
 #[derive(Clone, Debug, Default)]
@@ -23,6 +36,16 @@ pub struct FakeAsanaClient {
     custom_field_settings_by_project: HashMap<String, Vec<ProjectCustomFieldSettingDto>>,
     standalone_tasks: HashMap<String, TaskDto>,
     get_task_calls: RefCell<Vec<String>>,
+    /// Every `update_task` call, in order.
+    ///
+    /// Shared across clones rather than owned per clone: the app hands each
+    /// write to a worker thread with a *clone* of the client, so a per-clone
+    /// log would record the calls somewhere the test cannot see them.
+    update_calls: Arc<Mutex<Vec<(String, TaskFieldEdit)>>>,
+    /// The edits applied so far, per task, so a later read sees them.
+    applied_edits: Arc<Mutex<HashMap<String, Vec<TaskFieldEdit>>>>,
+    /// Task gids whose updates fail, for the rollback tests.
+    update_failures: HashSet<String>,
 }
 
 impl FakeAsanaClient {
@@ -77,6 +100,39 @@ impl FakeAsanaClient {
     /// The gids `get_task` has been called with, in order.
     pub fn get_task_calls(&self) -> Vec<String> {
         self.get_task_calls.borrow().clone()
+    }
+
+    /// Makes `update_task` fail for one task, for the rollback tests.
+    pub fn with_update_failure(mut self, task_gid: impl Into<String>) -> Self {
+        self.update_failures.insert(task_gid.into());
+        self
+    }
+
+    /// The `(task gid, change)` pairs `update_task` has been called with.
+    pub fn update_calls(&self) -> Vec<(String, TaskFieldEdit)> {
+        self.update_calls
+            .lock()
+            .expect("update calls are not poisoned")
+            .clone()
+    }
+
+    /// Replays the edits this task has taken onto a stored fixture.
+    ///
+    /// The fixtures are plain maps, so an edit is remembered beside them and
+    /// applied on the way out. That is enough for "a later `list_tasks` sees
+    /// the change" without making every builder method thread-shared.
+    fn with_applied_edits(&self, mut task: TaskDto) -> TaskDto {
+        let applied = self
+            .applied_edits
+            .lock()
+            .expect("applied edits are not poisoned");
+        let Some(edits) = applied.get(&task.gid) else {
+            return task;
+        };
+        for edit in edits {
+            apply_to_dto(&mut task, edit);
+        }
+        task
     }
 
     /// Adds section fixtures for a project.
@@ -142,7 +198,7 @@ impl AsanaClient for FakeAsanaClient {
                 if let Some(subtasks) = self.subtasks_by_task.get(&task.gid) {
                     task.num_subtasks = subtasks.len();
                 }
-                task
+                self.with_applied_edits(task)
             })
             .collect())
     }
@@ -160,7 +216,7 @@ impl AsanaClient for FakeAsanaClient {
                 if let Some(subtasks) = self.subtasks_by_task.get(&task.gid) {
                     task.num_subtasks = subtasks.len();
                 }
-                task
+                self.with_applied_edits(task)
             })
             .collect())
     }
@@ -179,7 +235,30 @@ impl AsanaClient for FakeAsanaClient {
                     .find(|task| task.gid == task_gid)
                     .cloned()
             })
+            .map(|task| self.with_applied_edits(task))
             .ok_or_else(|| Error::Backend(format!("no fake task {task_gid}")))
+    }
+
+    fn update_task(&self, task_gid: &str, edit: &TaskFieldEdit) -> Result<TaskDto> {
+        self.update_calls
+            .lock()
+            .expect("update calls are not poisoned")
+            .push((task_gid.to_string(), edit.clone()));
+
+        if self.update_failures.contains(task_gid) {
+            return Err(Error::Backend("403".to_string()));
+        }
+
+        self.applied_edits
+            .lock()
+            .expect("applied edits are not poisoned")
+            .entry(task_gid.to_string())
+            .or_default()
+            .push(edit.clone());
+
+        let mut task = self.get_task(task_gid)?;
+        task.modified_at = Some(FAKE_EDIT_MODIFIED_AT.to_string());
+        Ok(task)
     }
 
     fn list_sections(&self, project_gid: &str) -> Result<Vec<SectionDto>> {
@@ -205,5 +284,49 @@ impl AsanaClient for FakeAsanaClient {
         self.current_user_gid
             .clone()
             .ok_or_else(|| Error::Backend("no fake current user configured".to_string()))
+    }
+}
+
+/// Writes one change onto a stored task fixture.
+///
+/// The mirror of `TaskFieldEdit::apply` one layer down: that one writes onto a
+/// `TaskRecord`, this one onto the DTO a read will hand back.
+fn apply_to_dto(task: &mut TaskDto, edit: &TaskFieldEdit) {
+    match edit {
+        TaskFieldEdit::Name(name) => task.name = name.clone(),
+        TaskFieldEdit::Completed(completed) => task.completed = *completed,
+        TaskFieldEdit::Due(date) => task.due_on = date.clone(),
+        TaskFieldEdit::Start(date) => task.start_on = date.clone(),
+        TaskFieldEdit::Assignee(assignee) => {
+            task.assignee = assignee.as_ref().map(|assignee| UserDto {
+                gid: assignee.handle.clone(),
+                name: Some(assignee.display.clone()),
+                display_name: Some(assignee.display.clone()),
+            })
+        }
+        TaskFieldEdit::CustomField { gid, value } => {
+            let name = task
+                .custom_fields
+                .iter()
+                .find(|field| &field.gid == gid)
+                .map(|field| field.name.clone())
+                .unwrap_or_default();
+            task.custom_fields.retain(|field| &field.gid != gid);
+            if let Some(value) = value {
+                task.custom_fields.push(CustomFieldValueDto {
+                    gid: gid.clone(),
+                    name,
+                    display_value: Some(value.display()),
+                    enum_value: match value {
+                        CustomFieldValue::Enum { option_gid, name } => Some(EnumOptionDto {
+                            gid: option_gid.clone(),
+                            name: name.clone(),
+                            enabled: true,
+                        }),
+                        _ => None,
+                    },
+                });
+            }
+        }
     }
 }

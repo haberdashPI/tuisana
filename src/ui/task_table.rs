@@ -15,15 +15,18 @@ use std::{collections::HashSet, time::Duration};
 use ratatui::text::{Line, Span};
 
 use crate::{
-    app::task::{TaskState, TaskStatus},
+    app::{
+        task::{TaskState, TaskStatus},
+        task_edit::CellEditView,
+    },
     domain::{month_name, GanttModel, TaskRowKind, TaskSortField, TimelineView},
     ui::{
         chrome::{Chip, PaneMessage, Tone},
         date::{self, Urgency},
         gantt,
         text::{
-            fill, pad_cell, pad_cell_centered, pad_cell_right_aligned, pad_spans, slice_spans,
-            spans_width, visible_width,
+            caret_spans, caret_window, fill, pad_cell, pad_cell_centered, pad_cell_right_aligned,
+            pad_spans, slice_spans, spans_width, visible_width,
         },
         theme::Theme,
     },
@@ -197,6 +200,14 @@ pub struct TaskTableView {
     pub chart_width: usize,
     /// How many of the table's columns are being drawn.
     pub visible_columns: usize,
+    /// The column the cursor is on, or `None` where it cannot be moved.
+    ///
+    /// `None` outside task and task-edit modes, which is what keeps every
+    /// Gantt snapshot unchanged: a cursor you cannot move is a cursor that
+    /// lies about what the keys do.
+    pub cursor_column: Option<usize>,
+    /// The cell editor drawn in place of a cell, while one is open.
+    pub editing: Option<CellEditView>,
 }
 
 impl TaskTableView {
@@ -296,7 +307,12 @@ fn split_pane(
 /// `inner_width` is the pane's whole interior. The split between table columns
 /// and chart is decided here, because this is the only place that knows both
 /// the columns' natural widths and whether the chart is on.
-pub fn render_task_table(state: &TaskState, inner_width: usize, theme: &Theme) -> TaskTableView {
+pub fn render_task_table(
+    state: &mut TaskState,
+    inner_width: usize,
+    theme: &Theme,
+    cursor_column: Option<usize>,
+) -> TaskTableView {
     let model = state.table();
     let today = date::today();
     let sort_field = primary_sort_field(state);
@@ -345,6 +361,16 @@ pub fn render_task_table(state: &TaskState, inner_width: usize, theme: &Theme) -
     let total_width = total_width(&column_widths);
     let max_scroll = total_width.saturating_sub(split.columns);
 
+    // Only the renderer knows the widths, so this is where moving onto an
+    // off-screen column scrolls the table to it — the same division of labour
+    // `ensure_filter_visible` follows.
+    if cursor_column.is_some() {
+        state.ensure_column_visible(&column_widths, split.columns);
+    }
+    let editing = editing_cell(state, &column_widths, theme);
+    let state = &*state;
+    let model = state.table();
+
     let chart = (split.chart > 0).then(|| {
         GanttModel::build(
             model,
@@ -378,9 +404,36 @@ pub fn render_task_table(state: &TaskState, inner_width: usize, theme: &Theme) -
         chart,
         chart_width: split.chart,
         visible_columns: split.visible_columns,
+        cursor_column: cursor_column.filter(|column| *column < split.visible_columns),
+        editing,
     }
     .with_scroll_count()
     .with_narrow_chart_warning(split.too_narrow)
+}
+
+/// Resolves the open cell editor into the text to draw in its cell.
+///
+/// The window is measured and stored here because the column width is only
+/// known at this point; keeping the start on the edit state is what makes the
+/// text scroll under the caret rather than re-centre on every frame.
+fn editing_cell(
+    state: &mut TaskState,
+    column_widths: &[usize],
+    theme: &Theme,
+) -> Option<CellEditView> {
+    let mut view = state.cell_edit_view()?;
+    let Some(caret) = view.caret else {
+        // A value picker holds no caret and no more text than its column.
+        return Some(view);
+    };
+
+    let width = column_widths.get(view.column).copied().unwrap_or(0);
+    let window = caret_window(&view.text, caret, width, theme.glyphs.ellipsis, view.window_start);
+    state.set_cell_edit_window(window.start);
+    view.text = window.text;
+    view.caret = Some(window.caret);
+    view.window_start = window.start;
+    Some(view)
 }
 
 /// Renders the header row: bold, underlined, and marked with the sort column.
@@ -390,10 +443,20 @@ pub fn task_header_line(view: &TaskTableView, theme: &Theme, width: usize) -> Li
     let header_cells = view
         .headers
         .iter()
-        .map(|header| RenderCell::new(header.clone(), Tone::Text))
+        .enumerate()
+        .map(|(index, header)| {
+            // The column under the cursor is picked out here rather than
+            // only on the cursor row, so the answer to "which column am I on"
+            // survives scrolling the rows.
+            let tone = match view.cursor_column == Some(index) {
+                true => Tone::Accent,
+                false => Tone::Text,
+            };
+            RenderCell::new(header.clone(), tone)
+        })
         .collect::<Vec<_>>();
 
-    let cells = cell_spans(&header_cells, view, theme, true);
+    let cells = cell_spans(&header_cells, view, theme, true, None, None);
     spans.extend(slice_spans(
         &cells,
         view.scroll_offset,
@@ -532,7 +595,11 @@ fn task_line(
         Span::raw(" "),
     ];
 
-    let cells = cell_spans(&row.cells, view, theme, false);
+    // The editor only ever draws on the cursor row: the targets may be many,
+    // but there is one cell being typed into.
+    let editing = is_cursor.then_some(view.editing.as_ref()).flatten();
+    let underline = is_cursor.then_some(view.cursor_column).flatten();
+    let cells = cell_spans(&row.cells, view, theme, false, editing, underline);
     spans.extend(slice_spans(&cells, view.scroll_offset, columns_width));
 
     Line::from(spans)
@@ -605,6 +672,8 @@ fn cell_spans(
     view: &TaskTableView,
     theme: &Theme,
     is_header: bool,
+    editing: Option<&CellEditView>,
+    underline: Option<usize>,
 ) -> Vec<Span<'static>> {
     let mut spans = Vec::with_capacity(cells.len() * 4);
 
@@ -625,14 +694,51 @@ fn cell_spans(
         }
 
         let text_width = width.saturating_sub(prefix_width);
+
+        if let Some(edit) = editing.filter(|edit| edit.column == index) {
+            spans.extend(editing_spans(edit, text_width, theme));
+            continue;
+        }
+
         let padded = match align {
             Align::Left => pad_cell(&cell.text, text_width, theme.glyphs.ellipsis),
             Align::Right => pad_cell_right_aligned(&cell.text, text_width, theme.glyphs.ellipsis),
             Align::Center => pad_cell_centered(&cell.text, text_width, theme.glyphs.ellipsis),
         };
-        spans.push(Span::styled(padded, cell.tone.style(theme)));
+        let mut style = cell.tone.style(theme);
+        if underline == Some(index) {
+            style = style.add_modifier(ratatui::style::Modifier::UNDERLINED);
+        }
+        spans.push(Span::styled(padded, style));
     }
 
+    spans
+}
+
+/// Draws the open editor inside its cell, padded to the column.
+///
+/// A value picker has no caret to draw, so it is accented instead: the cell
+/// says which value is chosen, and `j`/`k` are what change it.
+fn editing_spans(edit: &CellEditView, width: usize, theme: &Theme) -> Vec<Span<'static>> {
+    let mut spans = match edit.caret {
+        Some(caret) => caret_spans(&edit.text, Some(caret), theme.text),
+        None => {
+            let text = match edit.text.is_empty() {
+                true => theme.glyphs.empty.to_string(),
+                false => edit.text.clone(),
+            };
+            vec![Span::styled(
+                text,
+                theme
+                    .accent
+                    .add_modifier(ratatui::style::Modifier::REVERSED),
+            )]
+        }
+    };
+    let used = spans_width(&spans);
+    if used < width {
+        spans.push(Span::raw(" ".repeat(width - used)));
+    }
     spans
 }
 
@@ -715,6 +821,10 @@ fn resolve_cell(
             if completed { Tone::Ok } else { Tone::Muted },
         ),
         ColumnRole::Due | ColumnRole::Start if !value.trim().is_empty() => {
+            // `resolve_cell` turns `2026-09-28` into `+5d`; an editor showing
+            // `+5d` and committing `2026-09-28` would be lying about what
+            // `bksp` is about to delete. Handled by the caller, which draws
+            // the buffer instead of this cell while the editor is open.
             let rendered = date::format_relative(value, today);
             // A completed task's date is history, and a start date is context;
             // neither is an emergency, so only an open due date is graded.
@@ -833,6 +943,18 @@ fn short_date(value: crate::domain::CivilDate) -> String {
 
 fn counts(state: &TaskState) -> Vec<Chip> {
     let mut chips = Vec::new();
+
+    if let Some(notice) = state.edit_notice() {
+        chips.push(Chip::toned(notice.to_string(), Tone::Danger));
+    }
+    // Only worth saying when the blast radius is bigger than the row under
+    // the cursor, which is the case the editor cannot show on its own.
+    if state.cell_edit_target_count() > 1 {
+        chips.push(Chip::toned(
+            format!("editing {}", state.cell_edit_target_count()),
+            Tone::Accent,
+        ));
+    }
 
     // Loading is reported in the header, at the top left, spinner and word
     // together. Repeating it here would only split the reader's attention.
@@ -1108,6 +1230,8 @@ mod tests {
                     custom_field: CustomFieldDto {
                         gid: "cf1".to_string(),
                         name: "Priority".to_string(),
+                        resource_subtype: None,
+                        enum_options: Vec::new(),
                     },
                 }],
             )
@@ -1125,9 +1249,9 @@ mod tests {
     #[test]
     fn resolves_columns_headers_and_group_rows() {
         let theme = Theme::default();
-        let state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
+        let mut state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
 
-        let view = render_task_table(&state, 120, &theme);
+        let view = render_task_table(&mut state, 120, &theme, None);
 
         assert_eq!(view.title, "Tasks");
         assert_eq!(view.headers[0], "Task");
@@ -1146,7 +1270,7 @@ mod tests {
 
     #[test]
     fn every_line_is_exactly_the_pane_width() {
-        let state = state_with(vec![
+        let mut state = state_with(vec![
             task("t1", "Ship release", Some("2026-06-10"), false),
             task(
                 "t2",
@@ -1158,7 +1282,7 @@ mod tests {
 
         let theme = Theme::default();
         for width in [40usize, 80, 120, 200] {
-            let view = render_task_table(&state, width.saturating_sub(GUTTER_WIDTH), &theme);
+            let view = render_task_table(&mut state, width.saturating_sub(GUTTER_WIDTH), &theme, None);
 
             assert_eq!(
                 visible_width(&task_header_line(&view, &theme, width).to_string()),
@@ -1176,7 +1300,7 @@ mod tests {
 
     #[test]
     fn column_rules_stay_aligned_across_rows_and_while_scrolled() {
-        let state = state_with(vec![
+        let mut state = state_with(vec![
             task("t1", "Short", Some("2026-06-10"), false),
             task(
                 "t2",
@@ -1188,7 +1312,7 @@ mod tests {
         let theme = Theme::default();
 
         for scroll in [0usize, 6, 14] {
-            let mut view = render_task_table(&state, 80 - GUTTER_WIDTH, &theme);
+            let mut view = render_task_table(&mut state, 80 - GUTTER_WIDTH, &theme, None);
             view.scroll_offset = scroll.min(view.max_scroll);
 
             let mut lines = vec![task_header_line(&view, &theme, 80)];
@@ -1210,9 +1334,9 @@ mod tests {
 
     #[test]
     fn group_headers_draw_no_column_rules_or_empty_cells() {
-        let state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
+        let mut state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
         let theme = Theme::default();
-        let view = render_task_table(&state, 120 - GUTTER_WIDTH, &theme);
+        let view = render_task_table(&mut state, 120 - GUTTER_WIDTH, &theme, None);
 
         let lines = task_body_lines(&view, None, &theme, 120);
         let project_header = lines[1].to_string();
@@ -1231,13 +1355,13 @@ mod tests {
     fn dates_render_relatively_and_carry_urgency() {
         std::env::set_var("TUISANA_TODAY", "2026-06-10");
         let theme = Theme::default();
-        let state = state_with(vec![
+        let mut state = state_with(vec![
             task("t1", "Due today", Some("2026-06-10"), false),
             task("t2", "Overdue", Some("2026-06-01"), false),
             task("t3", "Later", Some("2026-09-30"), false),
         ]);
 
-        let view = render_task_table(&state, 120, &theme);
+        let view = render_task_table(&mut state, 120, &theme, None);
         let by_title = |title: &str| {
             view.rows
                 .iter()
@@ -1260,9 +1384,9 @@ mod tests {
 
     #[test]
     fn completed_tasks_are_dimmed_and_marked_done() {
-        let state = state_with(vec![task("t1", "Closed", Some("2026-01-01"), true)]);
+        let mut state = state_with(vec![task("t1", "Closed", Some("2026-01-01"), true)]);
         let theme = Theme::default();
-        let view = render_task_table(&state, 120, &theme);
+        let view = render_task_table(&mut state, 120, &theme, None);
 
         let row = view
             .rows
@@ -1282,9 +1406,9 @@ mod tests {
         let mut dto = task("t1", "No assignee", None, false);
         dto.assignee = None;
         dto.custom_fields = vec![];
-        let state = state_with(vec![dto]);
+        let mut state = state_with(vec![dto]);
         let theme = Theme::default();
-        let view = render_task_table(&state, 120, &theme);
+        let view = render_task_table(&mut state, 120, &theme, None);
 
         let row = view
             .rows
@@ -1298,9 +1422,9 @@ mod tests {
 
     #[test]
     fn no_header_is_cut_mid_word_at_eighty_columns() {
-        let state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
+        let mut state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
         let theme = Theme::default();
-        let view = render_task_table(&state, 80 - GUTTER_WIDTH, &theme);
+        let view = render_task_table(&mut state, 80 - GUTTER_WIDTH, &theme, None);
 
         for (index, header) in view.headers.iter().enumerate() {
             let width = view.column_widths[index];
@@ -1332,7 +1456,7 @@ mod tests {
         let mut state = TaskState::new();
         state.finish_loading(model);
         let theme = Theme::default();
-        let view = render_task_table(&state, 120, &theme);
+        let view = render_task_table(&mut state, 120, &theme, None);
 
         let titles = view
             .rows
@@ -1358,7 +1482,7 @@ mod tests {
             task("t2", "Two", Some("2026-06-11"), false),
         ]);
 
-        let view = render_task_table(&state, 120, &theme);
+        let view = render_task_table(&mut state, 120, &theme, None);
         let texts = |view: &super::TaskTableView| {
             view.counts
                 .iter()
@@ -1369,7 +1493,7 @@ mod tests {
         assert_eq!(texts(&view), vec!["2 tasks".to_string(), "row 1".to_string()]);
 
         let _ = state.apply_action(&crate::input::Action::ToggleTaskSelection, 10);
-        assert!(texts(&render_task_table(&state, 120, &theme))
+        assert!(texts(&render_task_table(&mut state, 120, &theme, None))
             .iter()
             .any(|text| text == "1 selected"));
     }
@@ -1429,7 +1553,7 @@ mod tests {
         let theme = Theme::default();
         let mut state = TaskState::new();
         state.set_visible(true);
-        let idle = render_task_table(&state, 80, &theme);
+        let idle = render_task_table(&mut state, 80, &theme, None);
         assert!(idle
             .message
             .expect("idle explains itself")
@@ -1437,7 +1561,7 @@ mod tests {
             .contains("No tasks loaded"));
 
         state.begin_loading(&[Project::new("p1", "Inbox", true)]);
-        let loading = render_task_table(&state, 80, &theme);
+        let loading = render_task_table(&mut state, 80, &theme, None);
         assert!(loading
             .message
             .expect("loading explains itself")
@@ -1446,7 +1570,7 @@ mod tests {
 
         state.finish_loading(crate::domain::TaskTableModel::empty());
         state.set_error("token expired".to_string());
-        let error = render_task_table(&state, 80, &theme);
+        let error = render_task_table(&mut state, 80, &theme, None);
         let message = error.message.expect("errors explain themselves");
         assert!(message.text.contains("token expired"));
         assert_eq!(message.tone, Tone::Danger);
@@ -1481,7 +1605,7 @@ mod tests {
 
     #[test]
     fn the_chart_is_off_until_asked_for() {
-        let view = render_task_table(&state_with(vec![task("t1", "Ship it", None, false)]), 120, &Theme::default());
+        let view = render_task_table(&mut state_with(vec![task("t1", "Ship it", None, false)]), 120, &Theme::default(), None);
 
         assert!(view.chart.is_none());
         assert_eq!(view.chart_width, 0);
@@ -1492,8 +1616,8 @@ mod tests {
         let theme = Theme::default();
 
         for width in [80usize, 120, 200] {
-            let state = charted_state(2);
-            let view = render_task_table(&state, width, &theme);
+            let mut state = charted_state(2);
+            let view = render_task_table(&mut state, width, &theme, None);
             assert!(view.chart.is_some(), "a chart fits at {width}");
 
             let header = task_header_line(&view, &theme, width).to_string();
@@ -1513,7 +1637,7 @@ mod tests {
     fn the_divider_lands_in_the_same_column_on_every_kind_of_row() {
         let theme = Theme::default();
         let width = 120usize;
-        let view = render_task_table(&charted_state(2), width, &theme);
+        let view = render_task_table(&mut charted_state(2), width, &theme, None);
         let expected = width - view.chart_width - 2;
 
         let lines = task_body_lines(&view, Some(0), &theme, width);
@@ -1540,8 +1664,8 @@ mod tests {
     #[test]
     fn showing_more_columns_takes_the_space_from_the_chart() {
         let theme = Theme::default();
-        let narrow = render_task_table(&charted_state(2), 160, &theme);
-        let wide = render_task_table(&charted_state(5), 160, &theme);
+        let narrow = render_task_table(&mut charted_state(2), 160, &theme, None);
+        let wide = render_task_table(&mut charted_state(5), 160, &theme, None);
 
         assert!(wide.headers.len() > narrow.headers.len());
         assert!(
@@ -1556,7 +1680,7 @@ mod tests {
     fn a_pane_too_narrow_for_a_chart_says_so_instead_of_drawing_one() {
         let theme = Theme::default();
         // Room for the gutter and one column, but not for a usable chart.
-        let view = render_task_table(&charted_state(4), GUTTER_WIDTH + MIN_CHART_WIDTH, &theme);
+        let view = render_task_table(&mut charted_state(4), GUTTER_WIDTH + MIN_CHART_WIDTH, &theme, None);
 
         assert!(view.chart.is_none());
         assert!(
@@ -1571,7 +1695,7 @@ mod tests {
     #[test]
     fn a_column_squeezed_out_by_the_chart_is_still_reachable_by_scrolling() {
         let theme = Theme::default();
-        let view = render_task_table(&charted_state(6), 80, &theme);
+        let view = render_task_table(&mut charted_state(6), 80, &theme, None);
 
         assert!(view.chart.is_some());
         assert!(
@@ -1587,7 +1711,7 @@ mod tests {
         let mut state = charted_state(2);
         state.gantt_mut().set_visible(false);
 
-        let view = render_task_table(&state, 120, &theme);
+        let view = render_task_table(&mut state, 120, &theme, None);
 
         assert_eq!(
             view.headers.len(),
@@ -1605,7 +1729,7 @@ mod tests {
     fn group_headings_draw_gridlines_rather_than_a_track() {
         let theme = Theme::default();
         let width = 120usize;
-        let view = render_task_table(&charted_state(2), width, &theme);
+        let view = render_task_table(&mut charted_state(2), width, &theme, None);
         let lines = task_body_lines(&view, Some(0), &theme, width);
 
         let heading = view
@@ -1623,7 +1747,7 @@ mod tests {
     fn spacer_rows_stay_blank_across_the_whole_pane() {
         let theme = Theme::default();
         let width = 120usize;
-        let view = render_task_table(&charted_state(2), width, &theme);
+        let view = render_task_table(&mut charted_state(2), width, &theme, None);
         let lines = task_body_lines(&view, Some(0), &theme, width);
 
         for (row, line) in view.rows.iter().zip(lines) {
@@ -1640,7 +1764,7 @@ mod tests {
     fn the_columns_take_exactly_what_they_need_and_no_more() {
         let theme = Theme::default();
         let width = 160usize;
-        let view = render_task_table(&charted_state(2), width, &theme);
+        let view = render_task_table(&mut charted_state(2), width, &theme, None);
         let used = view.total_width;
 
         assert_eq!(
@@ -1663,7 +1787,7 @@ mod tests {
         )]);
         state.gantt_mut().set_visible(true);
 
-        let view = render_task_table(&state, 160, &theme);
+        let view = render_task_table(&mut state, 160, &theme, None);
 
         assert!(view.chart.is_some());
         assert!(
@@ -1713,13 +1837,105 @@ mod tests {
         // its full length and push the assignee column out of view even
         // though the split had reserved room for it.
         let theme = Theme::default();
-        let view = render_task_table(&charted_state(2), 80, &theme);
+        let view = render_task_table(&mut charted_state(2), 80, &theme, None);
 
         assert!(view.chart.is_some());
         assert_eq!(view.headers.len(), 2);
         assert_eq!(
             view.max_scroll, 0,
             "both columns fit, so there is nothing to scroll to"
+        );
+    }
+
+    #[test]
+    fn an_edited_title_scrolls_under_the_caret_rather_than_truncating() {
+        // The bug this replaces: a value longer than its column truncated with
+        // an ellipsis, so a caret past the cut was simply not on screen.
+        let long = "Ship the release before the summit in September";
+        let mut state = state_with(vec![task("t1", long, Some("2026-06-10"), false)]);
+        state
+            .begin_cell_edit(&crate::app::task_edit::EditContext::default())
+            .expect("the title opens");
+        state.cell_edit_jump_end();
+
+        let theme = Theme::default();
+        let view = render_task_table(&mut state, 60 - GUTTER_WIDTH, &theme, Some(0));
+        let lines = task_body_lines(&view, state.selected_index(), &theme, 60);
+        let row = lines
+            .iter()
+            .map(ToString::to_string)
+            .find(|line| line.contains("September"))
+            .expect("the tail of the title is on screen, under the caret");
+
+        assert!(
+            row.starts_with(&format!("   {}", theme.glyphs.ellipsis))
+                || row.contains(theme.glyphs.ellipsis),
+            "the clipped side is marked: {row}"
+        );
+        assert_eq!(visible_width(&row), 60);
+    }
+
+    #[test]
+    fn the_cursor_column_is_only_offered_where_it_can_be_moved() {
+        let mut state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
+        let theme = Theme::default();
+
+        let with_cursor = render_task_table(&mut state, 120, &theme, Some(2));
+        let without = render_task_table(&mut state, 120, &theme, None);
+
+        assert_eq!(with_cursor.cursor_column, Some(2));
+        assert_eq!(without.cursor_column, None, "no cursor outside task mode");
+    }
+
+    #[test]
+    fn a_value_picker_draws_the_chosen_option_in_the_cell() {
+        let mut state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
+        state.move_column(crate::domain::STATE_COLUMN as i64);
+        state
+            .begin_cell_edit(&crate::app::task_edit::EditContext::default())
+            .expect("the state opens");
+        state.cell_edit_cycle_value(1);
+
+        let theme = Theme::default();
+        let view = render_task_table(&mut state, 120, &theme, Some(crate::domain::STATE_COLUMN));
+        let lines = task_body_lines(&view, state.selected_index(), &theme, 120)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        assert!(
+            lines.iter().any(|line| line.contains("done")),
+            "the picker shows the option it would commit: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn the_border_reports_a_failed_write_and_a_bulk_edit() {
+        let mut state = state_with(vec![
+            task("t1", "Ship release", Some("2026-06-10"), false),
+            task("t2", "Cut the tag", Some("2026-06-11"), false),
+        ]);
+        state.apply_action(&crate::input::Action::SelectAllVisibleTasks, 10);
+        state.move_column(crate::domain::STATE_COLUMN as i64);
+        state
+            .begin_cell_edit(&crate::app::task_edit::EditContext::default())
+            .expect("the state opens");
+        // After the edit opens: `e` clears the last failure, so a notice set
+        // before it would never reach the border.
+        state.set_edit_notice("could not update 1 of 2: backend error: 403");
+
+        let theme = Theme::default();
+        let view = render_task_table(&mut state, 120, &theme, Some(crate::domain::STATE_COLUMN));
+        let chips = view
+            .counts
+            .iter()
+            .map(|chip| chip.text.clone())
+            .collect::<Vec<_>>();
+
+        assert!(chips.contains(&"could not update 1 of 2: backend error: 403".to_string()));
+        assert!(
+            chips.contains(&"editing 2".to_string()),
+            "the blast radius is on screen before the commit: {chips:?}"
         );
     }
 }

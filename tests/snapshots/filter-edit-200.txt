@@ -36,5 +36,5 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-⏎ done   esc cancel   left/right caret   bksp delete   ^l clear
+⏎ done   esc cancel   left/right caret   M-b/M-f word   bksp delete   ^l clear
  FILTER-EDIT                                                                                                                                                                                    1 filter

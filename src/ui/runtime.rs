@@ -112,7 +112,7 @@ fn classify(event: Event) -> InputEvent {
 /// "where do my keys go" is visible at both ends of the screen.
 fn focused_pane(mode: Mode) -> FocusedPane {
     match mode {
-        Mode::Task | Mode::Gantt | Mode::GanttOrder => FocusedPane::Task,
+        Mode::Task | Mode::TaskEdit | Mode::Gantt | Mode::GanttOrder => FocusedPane::Task,
         Mode::Project
         | Mode::ProjectSearch
         | Mode::Filter
@@ -166,8 +166,18 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
 
             // Resolved before drawing so the hint bar can tell whether there
             // are columns off-screen worth mentioning.
+            // The cursor is drawn only where it can be moved: in Gantt mode
+            // `h` and `l` scroll the timeline, so there is no column cursor
+            // to show there.
+            let cursor_column = matches!(mode, Mode::Task | Mode::TaskEdit)
+                .then(|| app.tasks.selected_column());
             let task_view = regions.task_pane.map(|area| {
-                task_table::render_task_table(&app.tasks, pane_inner(area).width as usize, &theme)
+                task_table::render_task_table(
+                    &mut app.tasks,
+                    pane_inner(area).width as usize,
+                    &theme,
+                    cursor_column,
+                )
             });
 
             if let (Some(area), Some(view)) = (regions.task_pane, task_view.as_ref()) {
@@ -207,7 +217,7 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                 help_overlay::render(frame, regions.body, &theme, keymap, mode);
             } else if let Some(dialog) = app.tasks.gantt().dialog() {
                 gantt_order::render(frame, regions.body, &theme, keymap, dialog);
-            } else if let Some(view) = calendar::calendar_view(app.tasks.filter_calendar()) {
+            } else if let Some(view) = calendar::calendar_view(app.tasks.calendar()) {
                 calendar::render(frame, regions.body, &theme, &view);
             }
         })
@@ -219,6 +229,7 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
 fn help_visible<C: AsanaClient + Clone + Send + 'static>(app: &App<C>, mode: Mode) -> bool {
     match mode {
         Mode::Task
+        | Mode::TaskEdit
         | Mode::Gantt
         | Mode::GanttOrder
         | Mode::Filter
@@ -291,19 +302,21 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
     let context = hints::HintContext {
         searching: app.projects.search_active() || !app.projects.search_query().is_empty(),
         has_selection: match mode {
-            Mode::Task => app.tasks.selected_task_count() > 0,
+            Mode::Task | Mode::TaskEdit => app.tasks.selected_task_count() > 0,
             Mode::Filter | Mode::FilterEdit | Mode::FilterSetName | Mode::Calendar => false,
             _ => app.projects.selected_count() > 0,
         },
         can_scroll: task_view.is_some_and(|view| view.max_scroll > 0),
         on_label_filter: app.tasks.filter_selected_is_labels(),
-        on_date_range: app.tasks.filter_calendar_is_range(),
+        on_date_range: app.tasks.calendar_is_range(),
         timeline_windowed: app.tasks.gantt().timeline_windowed(),
         many_filter_sets: app.tasks.filter_set_position().1 > 1,
         filter_sets_sidebar: app.tasks.filter_sets_sidebar_visible(),
         saved_filter_sets: app.config.filter_sets.len(),
         filter_set_loaded: app.tasks.filter_set_loaded_name().is_some(),
         filter_set_confirm: app.tasks.filter_set_prompt_is_confirmation(),
+        on_task_cell: app.tasks.cell_edit_open(),
+        task_edit_is_options: app.tasks.cell_edit_is_options(),
     };
 
     let line = hints::hint_line(

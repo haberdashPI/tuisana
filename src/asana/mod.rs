@@ -9,7 +9,7 @@ pub mod fake;
 
 use crate::{
     asana::dto::{ProjectCustomFieldSettingDto, SectionDto, TaskDto},
-    domain::{Project, ProjectKind},
+    domain::{Project, ProjectKind, TaskFieldEdit},
     error::Result,
 };
 
@@ -133,6 +133,13 @@ pub trait AsanaClient {
         &self,
         project_gid: &str,
     ) -> Result<Vec<ProjectCustomFieldSettingDto>>;
+    /// Applies one field change to one task and returns the task as the
+    /// server now has it.
+    ///
+    /// Returns the task rather than `()` so the caller can pick up the new
+    /// `modified_at` — without it the next merge cannot tell the server's copy
+    /// from a stale one.
+    fn update_task(&self, task_gid: &str, edit: &TaskFieldEdit) -> Result<TaskDto>;
     /// Resolves the gid of the currently authenticated Asana user ("me").
     ///
     /// Used to offer the "assigned to me" pseudo-project without any manual

@@ -8,6 +8,7 @@ pub mod date;
 mod gantt;
 mod project;
 mod task;
+mod task_edit;
 
 /// Calendar dates, the filter date grammar, and the local-timezone `today`.
 pub use date::{
@@ -22,8 +23,15 @@ pub use gantt::{
 pub use project::{Project, ProjectKind};
 /// Task-domain types and helpers for filtering, sorting, and table building.
 pub use task::{
-    group_custom_fields_by_name, CustomFieldColumn, CustomFieldDefinition, Section, SortDirection,
-    SubtaskVisibility, ASSIGNEE_COLUMN, STATE_COLUMN,
+    group_custom_fields_by_name, CustomFieldColumn, CustomFieldDefinition, CustomFieldKind,
+    EnumOption, Section, SortDirection,
+    SubtaskVisibility, ASSIGNEE_COLUMN, DUE_COLUMN, FIRST_CUSTOM_COLUMN, PROJECTS_COLUMN,
+    START_COLUMN, STATE_COLUMN, TITLE_COLUMN,
     TaskFilter, TaskRecord, TaskRow, TaskRowKind, TaskSort,
     TaskSortField, TaskSortRule, TaskTableModel, TaskTableSettings, merge_task_record,
+};
+/// The write model: one field of one task, and the parsing that builds it.
+pub use task_edit::{
+    parse_custom_value, parse_date_value, resolve_assignee, AssigneeRef, CustomFieldValue,
+    CustomValueKind, TaskEdit, TaskFieldEdit,
 };

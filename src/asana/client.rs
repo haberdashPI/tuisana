@@ -15,7 +15,7 @@ use crate::{
         AsanaClient, TaskLoadScope, TaskQuery, TaskTarget,
     },
     config::AuthConfig,
-    domain::Project,
+    domain::{Project, TaskFieldEdit},
     error::{Error, Result},
 };
 
@@ -29,9 +29,11 @@ const ASANA_API_BASE_URL: &str = "https://app.asana.com/api/1.0";
 /// project its parent lives in.
 const TASK_OPT_FIELDS: &str = "gid,name,completed,modified_at,due_on,start_on,assignee.gid,assignee.name,num_subtasks,parent.gid,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.enum_value.gid,custom_fields.enum_value.name";
 
-/// Minimal transport abstraction for JSON GET requests.
+/// Minimal transport abstraction for JSON requests.
 pub trait Transport {
     fn get_json(&self, path: &str, query: &[(&str, String)], token: &str) -> Result<Value>;
+    /// Sends a JSON body and returns the response.
+    fn put_json(&self, path: &str, body: &Value, token: &str) -> Result<Value>;
 }
 
 /// Production HTTP transport using `reqwest`.
@@ -74,6 +76,58 @@ impl Transport for ReqwestTransport {
         response
             .json::<Value>()
             .map_err(|err| Error::Backend(format!("failed to decode asana response: {err}")))
+    }
+
+    fn put_json(&self, path: &str, body: &Value, token: &str) -> Result<Value> {
+        let url = format!(
+            "{}/{}",
+            self.base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+        let response = self
+            .client
+            .put(url)
+            .bearer_auth(token)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .json(body)
+            .send()
+            .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
+
+        let response = response
+            .error_for_status()
+            .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
+
+        response
+            .json::<Value>()
+            .map_err(|err| Error::Backend(format!("failed to decode asana response: {err}")))
+    }
+}
+
+/// The `data` object one field change sends.
+///
+/// A cleared value is JSON `null`, which is how Asana unsets a field: omitting
+/// the key means "no change", which would make clearing impossible.
+fn update_body(edit: &TaskFieldEdit) -> Value {
+    use crate::domain::CustomFieldValue;
+    use serde_json::json;
+
+    match edit {
+        TaskFieldEdit::Name(name) => json!({ "name": name }),
+        TaskFieldEdit::Completed(completed) => json!({ "completed": completed }),
+        TaskFieldEdit::Due(date) => json!({ "due_on": date }),
+        TaskFieldEdit::Start(date) => json!({ "start_on": date }),
+        TaskFieldEdit::Assignee(assignee) => {
+            json!({ "assignee": assignee.as_ref().map(|assignee| assignee.handle.clone()) })
+        }
+        TaskFieldEdit::CustomField { gid, value } => {
+            let value = match value {
+                Some(CustomFieldValue::Enum { option_gid, .. }) => Value::from(option_gid.clone()),
+                Some(CustomFieldValue::Text(text)) => Value::from(text.clone()),
+                Some(CustomFieldValue::Number { value, .. }) => Value::from(*value),
+                None => Value::Null,
+            };
+            json!({ "custom_fields": { gid.clone(): value } })
+        }
     }
 }
 
@@ -228,7 +282,13 @@ impl<T: Transport> HttpAsanaClient<T> {
         offset: Option<&str>,
     ) -> Result<CollectionResponse<ProjectCustomFieldSettingDto>> {
         let mut query = vec![
-            ("opt_fields", "gid,custom_field.gid,custom_field.name".to_string()),
+            (
+                "opt_fields",
+                "gid,custom_field.gid,custom_field.name,\
+                 custom_field.resource_subtype,custom_field.enum_options.gid,\
+                 custom_field.enum_options.name,custom_field.enum_options.enabled"
+                    .replace(' ', ""),
+            ),
             ("limit", "100".to_string()),
         ];
         if let Some(offset) = offset {
@@ -352,6 +412,20 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
         Ok(settings)
     }
 
+    fn update_task(&self, task_gid: &str, edit: &TaskFieldEdit) -> Result<TaskDto> {
+        let body = serde_json::json!({ "data": update_body(edit) });
+        let json = self.transport.put_json(
+            &format!("tasks/{task_gid}?opt_fields={TASK_OPT_FIELDS}"),
+            &body,
+            &self.personal_access_token,
+        )?;
+
+        let response: ResourceResponse<TaskDto> = serde_json::from_value(json).map_err(|err| {
+            Error::Backend(format!("failed to decode updated task {task_gid}: {err}"))
+        })?;
+        Ok(response.data)
+    }
+
     fn current_user_gid(&self) -> Result<String> {
         let json = self.transport.get_json(
             "users/me",
@@ -373,10 +447,13 @@ mod tests {
 
     use super::{HttpAsanaClient, Transport, TASK_OPT_FIELDS};
     use crate::asana::{AsanaClient, TaskLoadScope, TaskQuery};
+    use crate::domain::TaskFieldEdit;
     use crate::error::{Error, Result};
 
     struct MockTransport {
         requests: RefCell<Vec<(String, Vec<(String, String)>, String)>>,
+        /// Every `put_json` call, as `(path, body)`.
+        puts: RefCell<Vec<(String, serde_json::Value)>>,
         responses: RefCell<Vec<serde_json::Value>>,
     }
 
@@ -384,6 +461,7 @@ mod tests {
         fn new(responses: Vec<serde_json::Value>) -> Self {
             Self {
                 requests: RefCell::new(Vec::new()),
+                puts: RefCell::new(Vec::new()),
                 responses: RefCell::new(responses),
             }
         }
@@ -404,6 +482,18 @@ mod tests {
                     .collect(),
                 token.to_string(),
             ));
+            Ok(self.responses.borrow_mut().remove(0))
+        }
+
+        fn put_json(
+            &self,
+            path: &str,
+            body: &serde_json::Value,
+            _token: &str,
+        ) -> Result<serde_json::Value> {
+            self.puts
+                .borrow_mut()
+                .push((path.to_string(), body.clone()));
             Ok(self.responses.borrow_mut().remove(0))
         }
     }
@@ -486,6 +576,119 @@ mod tests {
     #[test]
     fn task_requests_ask_for_the_parent_id() {
         assert!(TASK_OPT_FIELDS.contains("parent.gid"));
+    }
+
+    #[test]
+    fn an_update_sends_one_field_and_asks_for_the_task_back() {
+        let transport = MockTransport::new(vec![json!({
+            "data": { "gid": "t1", "name": "Renamed", "modified_at": "2026-06-02T00:00:00Z" }
+        })]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        let task = client
+            .update_task("t1", &TaskFieldEdit::Name("Renamed".to_string()))
+            .expect("the task updates");
+
+        assert_eq!(task.name, "Renamed");
+        let puts = client.transport.puts.borrow();
+        let (path, body) = &puts[0];
+        assert!(path.starts_with("tasks/t1?"), "{path}");
+        assert!(
+            path.contains(TASK_OPT_FIELDS),
+            "the reply has to decode as an ordinary task"
+        );
+        assert_eq!(body, &json!({ "data": { "name": "Renamed" } }));
+    }
+
+    #[test]
+    fn a_cleared_value_is_sent_as_null_rather_than_omitted() {
+        // Omitting the key means "no change", which would make clearing a
+        // field impossible.
+        let responses = vec![
+            json!({ "data": { "gid": "t1", "name": "Ship" } }),
+            json!({ "data": { "gid": "t1", "name": "Ship" } }),
+            json!({ "data": { "gid": "t1", "name": "Ship" } }),
+        ];
+        let transport = MockTransport::new(responses);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        client
+            .update_task("t1", &TaskFieldEdit::Due(None))
+            .expect("the date clears");
+        client
+            .update_task("t1", &TaskFieldEdit::Assignee(None))
+            .expect("the assignee clears");
+        client
+            .update_task(
+                "t1",
+                &TaskFieldEdit::CustomField {
+                    gid: "cf1".to_string(),
+                    value: None,
+                },
+            )
+            .expect("the custom field clears");
+
+        let puts = client.transport.puts.borrow();
+        assert_eq!(puts[0].1, json!({ "data": { "due_on": null } }));
+        assert_eq!(puts[1].1, json!({ "data": { "assignee": null } }));
+        assert_eq!(
+            puts[2].1,
+            json!({ "data": { "custom_fields": { "cf1": null } } })
+        );
+    }
+
+    #[test]
+    fn an_enum_custom_field_is_sent_as_its_option_gid() {
+        let transport = MockTransport::new(vec![json!({
+            "data": { "gid": "t1", "name": "Ship" }
+        })]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        client
+            .update_task(
+                "t1",
+                &TaskFieldEdit::CustomField {
+                    gid: "cf1".to_string(),
+                    value: Some(crate::domain::CustomFieldValue::Enum {
+                        option_gid: "opt-high".to_string(),
+                        name: "High".to_string(),
+                    }),
+                },
+            )
+            .expect("the field updates");
+
+        assert_eq!(
+            client.transport.puts.borrow()[0].1,
+            json!({ "data": { "custom_fields": { "cf1": "opt-high" } } }),
+            "the name is for the table; the gid is what Asana takes"
+        );
+    }
+
+    /// A picker can only offer an option the settings request asked for.
+    #[test]
+    fn the_settings_request_asks_for_declared_enum_options() {
+        let transport = MockTransport::new(vec![json!({ "data": [], "next_page": null })]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        client
+            .list_project_custom_field_settings("p1")
+            .expect("settings load");
+
+        let requests = client.transport.requests.borrow();
+        let opt_fields = requests[0]
+            .1
+            .iter()
+            .find(|(key, _)| key == "opt_fields")
+            .map(|(_, value)| value.clone())
+            .expect("an opt_fields parameter");
+        for field in [
+            "custom_field.resource_subtype",
+            "custom_field.enum_options.gid",
+            "custom_field.enum_options.name",
+            "custom_field.enum_options.enabled",
+        ] {
+            assert!(opt_fields.contains(field), "{opt_fields} is missing {field}");
+        }
     }
 
     #[test]
