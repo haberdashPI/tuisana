@@ -215,8 +215,8 @@ pub fn today() -> CivilDate {
 /// empty token, which a range uses to mean "no bound on this side".
 ///
 /// Accepted forms, in order: empty, `today`, `tomorrow`, `yesterday`, a weekday
-/// name (the next occurrence, counting today itself), `MM-DD` in the current
-/// year, and a full `YYYY-MM-DD`.
+/// name (that day of the current week, which may already be past), `MM-DD` in
+/// the current year, and a full `YYYY-MM-DD`.
 pub fn parse_token(token: &str, today: CivilDate) -> Option<Option<CivilDate>> {
     let token = token.trim();
     if token.is_empty() {
@@ -230,7 +230,13 @@ pub fn parse_token(token: &str, today: CivilDate) -> Option<Option<CivilDate>> {
     } else if token.eq_ignore_ascii_case("yesterday") {
         today.add_days(-1)
     } else if let Some(index) = weekday_index_from_name(token) {
-        let delta = (index as i64 - today.weekday_index() as i64).rem_euclid(7);
+        // A weekday names a day of the week we are in now, not the next one to
+        // come round: on a Thursday, `mon` is the Monday three days back. The
+        // week turns over on Sunday, so the two dates are compared by the
+        // column they would occupy in a Sunday-first calendar, which makes the
+        // delta negative for a day already spent.
+        let column = (index + 1) % 7;
+        let delta = column as i64 - today.calendar_column() as i64;
         today.add_days(delta)
     } else {
         // Two components mean `MM-DD` in the current year; three mean a full
@@ -490,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn a_weekday_means_the_next_one_counting_today() {
+    fn a_weekday_means_that_day_of_the_current_week() {
         let monday = date(2026, 8, 24);
 
         assert_eq!(
@@ -499,7 +505,35 @@ mod tests {
             "today's own weekday is today, never a week out"
         );
         assert_eq!(parse_token("tuesday", monday), Some(Some(date(2026, 8, 25))));
-        assert_eq!(parse_token("sun", monday), Some(Some(date(2026, 8, 30))));
+        assert_eq!(
+            parse_token("sat", monday),
+            Some(Some(date(2026, 8, 29))),
+            "the week runs to Saturday"
+        );
+        assert_eq!(
+            parse_token("sun", monday),
+            Some(Some(date(2026, 8, 23))),
+            "the week turned over on Sunday, so Sunday is behind us"
+        );
+    }
+
+    #[test]
+    fn a_weekday_already_past_stays_in_the_week_that_has_it() {
+        // A Thursday: everything from Sunday through Wednesday is spent, and
+        // naming it must not skip ahead to next week.
+        let thursday = date(2026, 8, 27);
+
+        assert_eq!(parse_token("sun", thursday), Some(Some(date(2026, 8, 23))));
+        assert_eq!(parse_token("mon", thursday), Some(Some(date(2026, 8, 24))));
+        assert_eq!(parse_token("wed", thursday), Some(Some(date(2026, 8, 26))));
+        assert_eq!(parse_token("thu", thursday), Some(Some(thursday)));
+        assert_eq!(parse_token("fri", thursday), Some(Some(date(2026, 8, 28))));
+
+        // Sunday itself starts a fresh week, so every other day is ahead.
+        let sunday = date(2026, 8, 30);
+        assert_eq!(parse_token("sun", sunday), Some(Some(sunday)));
+        assert_eq!(parse_token("mon", sunday), Some(Some(date(2026, 8, 31))));
+        assert_eq!(parse_token("sat", sunday), Some(Some(date(2026, 9, 5))));
     }
 
     #[test]

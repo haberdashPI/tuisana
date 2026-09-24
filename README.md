@@ -141,7 +141,7 @@ Date filters accept:
 | a full date | `2026-09-15` |
 | a date in the current year | `09-15` |
 | a keyword | `today`, `tomorrow`, `yesterday` |
-| the next occurrence of a weekday | `mon`, `friday` |
+| a weekday of the current week (Sunday-first) | `mon`, `friday` |
 | an inclusive range | `2026-09-01..2026-09-30` |
 | a range open on one side | `today..`, `..2026-12-31` |
 
