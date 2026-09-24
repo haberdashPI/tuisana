@@ -456,7 +456,7 @@ pub fn task_header_line(view: &TaskTableView, theme: &Theme, width: usize) -> Li
         })
         .collect::<Vec<_>>();
 
-    let cells = cell_spans(&header_cells, view, theme, true, None, None);
+    let cells = cell_spans(&header_cells, view, theme, true, None, view.cursor_column);
     spans.extend(slice_spans(
         &cells,
         view.scroll_offset,
@@ -598,8 +598,8 @@ fn task_line(
     // The editor only ever draws on the cursor row: the targets may be many,
     // but there is one cell being typed into.
     let editing = is_cursor.then_some(view.editing.as_ref()).flatten();
-    let underline = is_cursor.then_some(view.cursor_column).flatten();
-    let cells = cell_spans(&row.cells, view, theme, false, editing, underline);
+    let cursor_column = is_cursor.then_some(view.cursor_column).flatten();
+    let cells = cell_spans(&row.cells, view, theme, false, editing, cursor_column);
     spans.extend(slice_spans(&cells, view.scroll_offset, columns_width));
 
     Line::from(spans)
@@ -667,13 +667,16 @@ fn group_header_line(
 }
 
 /// Renders a row of cells with column rules between them.
+///
+/// `cursor_column` marks the column the cell cursor is on: banded in the
+/// header, underlined on the cursor row.
 fn cell_spans(
     cells: &[RenderCell],
     view: &TaskTableView,
     theme: &Theme,
     is_header: bool,
     editing: Option<&CellEditView>,
-    underline: Option<usize>,
+    cursor_column: Option<usize>,
 ) -> Vec<Span<'static>> {
     let mut spans = Vec::with_capacity(cells.len() * 4);
 
@@ -706,8 +709,13 @@ fn cell_spans(
             Align::Center => pad_cell_centered(&cell.text, text_width, theme.glyphs.ellipsis),
         };
         let mut style = cell.tone.style(theme);
-        if underline == Some(index) {
-            style = style.add_modifier(ratatui::style::Modifier::UNDERLINED);
+        if cursor_column == Some(index) {
+            // The header bands the whole cell; a row only underlines it. One
+            // band per column is a landmark, one per row is a second cursor.
+            style = match is_header {
+                true => style.patch(theme.header_cursor),
+                false => style.add_modifier(ratatui::style::Modifier::UNDERLINED),
+            };
         }
         spans.push(Span::styled(padded, style));
     }
@@ -1152,6 +1160,8 @@ mod tests {
         render_task_table, settings_chips, task_body_lines, task_header_line, Align, ColumnRole,
         GUTTER_WIDTH, MIN_CHART_WIDTH,
     };
+    use ratatui::style::Modifier;
+
     use crate::{
         app::task::TaskState,
         asana::{
@@ -1885,6 +1895,52 @@ mod tests {
 
         assert_eq!(with_cursor.cursor_column, Some(2));
         assert_eq!(without.cursor_column, None, "no cursor outside task mode");
+    }
+
+    #[test]
+    fn the_header_cell_of_the_cursor_column_is_banded() {
+        let mut state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
+        let theme = Theme::default();
+        let view = render_task_table(&mut state, 120, &theme, Some(2));
+
+        let header = task_header_line(&view, &theme, 120);
+        let banded = header
+            .spans
+            .iter()
+            .filter(|span| span.style.bg.is_some())
+            .collect::<Vec<_>>();
+
+        assert_eq!(banded.len(), 1, "exactly one header cell bands: {header:?}");
+        assert!(
+            banded[0].content.contains(&view.headers[2]),
+            "the band is on the cursor column: {:?}",
+            banded[0].content
+        );
+        assert_eq!(banded[0].style.bg, theme.header_cursor.bg);
+    }
+
+    #[test]
+    fn the_header_band_survives_a_terminal_without_color() {
+        use crate::config::{ThemeConfig, ThemeGlyphs, ThemeVariant};
+
+        let mut state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
+        let theme = Theme::new(&ThemeConfig {
+            variant: ThemeVariant::Mono,
+            glyphs: ThemeGlyphs::Ascii,
+            accent: "cyan".to_string(),
+            zebra: false,
+        });
+        let view = render_task_table(&mut state, 120, &theme, Some(2));
+
+        let header = task_header_line(&view, &theme, 120);
+        let reversed = header
+            .spans
+            .iter()
+            .filter(|span| span.style.add_modifier.contains(Modifier::REVERSED))
+            .collect::<Vec<_>>();
+
+        assert_eq!(reversed.len(), 1, "the band is a reverse: {header:?}");
+        assert!(reversed[0].content.contains(&view.headers[2]));
     }
 
     #[test]

@@ -241,6 +241,11 @@ pub struct Theme {
     pub info: Style,
     /// The table header row.
     pub header: Style,
+    /// The header cell of the column the cursor is on.
+    ///
+    /// A band rather than a color: the header is already accented, so the cue
+    /// that survives next to it has to be a different kind of thing.
+    pub header_cursor: Style,
     /// A key name in the hint bar or help overlay.
     pub key: Style,
     /// The app-name badge in the header bar.
@@ -312,6 +317,8 @@ impl Theme {
                 danger: plain.add_modifier(Modifier::BOLD),
                 info: plain,
                 header: plain.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                header_cursor: plain
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED | Modifier::REVERSED),
                 key: plain.add_modifier(Modifier::BOLD),
                 brand: plain.add_modifier(Modifier::REVERSED | Modifier::BOLD),
                 zebra: None,
@@ -351,6 +358,13 @@ impl Theme {
             info: plain.fg(Color::Blue),
             header: plain
                 .fg(accent)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            // The same dim gray the cursor row bands with, for the same
+            // reason: it reads as a light band on a dark terminal and a gray
+            // one on a light terminal, without either end knowing which it is.
+            header_cursor: plain
+                .fg(accent)
+                .bg(cursor_bg)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             key: plain.fg(accent).add_modifier(Modifier::BOLD),
             brand: plain
@@ -579,6 +593,7 @@ mod tests {
             theme.cursor,
             theme.marker,
             theme.header,
+            theme.header_cursor,
             theme.key,
             theme.danger,
         ] {

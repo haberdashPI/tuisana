@@ -604,9 +604,9 @@ left alone.
 
 The task table is writable. `h` and `l` walk a **column cursor** left and right
 through `Task`, `Assignee`, `Due`, `Start`, `State`, `Projects`, and whatever
-custom fields the loaded projects carry. The column under it is picked out in
-the header, the cell under it on the cursor row is underlined, and moving onto
-a column that is off to the right scrolls the table to it.
+custom fields the loaded projects carry. The column under it is banded in the
+header, the cell under it on the cursor row is underlined, and moving onto a
+column that is off to the right scrolls the table to it.
 
 The cursor is only drawn in task and task-edit modes. In gantt mode `h` and `l`
 already scroll the timeline, and a cursor you cannot move is a cursor that lies
