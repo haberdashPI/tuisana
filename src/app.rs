@@ -147,13 +147,13 @@ pub struct App<C> {
     task_edit_events: (Sender<TaskEditMessage>, Receiver<TaskEditMessage>),
     /// Writes sent, still outstanding, and failed in the current burst.
     ///
-    /// Counted rather than reported one by one: twelve failures is one border
-    /// chip, `could not update 3 of 12: …`, not three that overwrite each
-    /// other. Reset once the last reply of a burst has landed.
+    /// Counted rather than reported one by one: twelve failures is one notice,
+    /// `could not update 3 of 12: …`, not three that overwrite each other.
+    /// Reset once the last reply of a burst has landed.
     task_edits_sent: usize,
     task_edits_outstanding: usize,
     task_edit_failures: usize,
-    /// The last write error, which is what the chip quotes.
+    /// The last write error, which is what the notice quotes.
     task_edit_error: Option<String>,
     /// The logged-in user's gid, for resolving `me` in an assignee edit.
     current_user_gid: Option<String>,
@@ -170,8 +170,8 @@ pub struct App<C> {
 ///
 /// A field edit and a membership change go to different endpoints and come
 /// back with different things, but they are counted, reported, and rolled
-/// back as one burst — twelve failures are one border chip whichever kind
-/// they were.
+/// back as one burst — twelve failures are one notice whichever kind they
+/// were.
 #[derive(Clone, Debug)]
 enum PendingEdit {
     Field(TaskEdit),
@@ -1427,6 +1427,21 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             Some(KeyBinding::Ctrl('c'))
         ) {
             return Ok(Some(AppCommand::Quit));
+        }
+
+        // `esc` dismisses the notice pane, in whatever mode it is showing
+        // over. Here rather than as an action because `esc` is already bound
+        // to something else in half the modes a notice can be raised in, and
+        // the notice is the topmost thing on screen in all of them.
+        //
+        // It does not consume the key: the same press still cancels the edit
+        // or closes the panel it always did. A notice that cost a keystroke
+        // to clear would be worse than one that stayed.
+        //
+        // Ahead of the polls, so a write that fails on this very keystroke is
+        // read rather than cleared unseen.
+        if matches!(KeyBinding::from_crossterm_event(event), Some(KeyBinding::Esc)) {
+            self.tasks.clear_edit_notice();
         }
 
         self.poll_task_data();

@@ -178,9 +178,26 @@ pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
     }
 }
 
+/// Anchors a box of the given size to the bottom-right of `area`, clamping to
+/// fit.
+///
+/// The corner rather than the centre, because what goes here is an aside: it
+/// reports on something the user already did, so it must not land on top of
+/// the row they are looking at.
+pub fn bottom_right(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + (area.width - width),
+        y: area.y + (area.height - height),
+        width,
+        height,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{regions, HEADER_HEIGHT, HINT_HEIGHT, STATUS_HEIGHT};
+    use super::{bottom_right, regions, HEADER_HEIGHT, HINT_HEIGHT, STATUS_HEIGHT};
     use crate::app::PaneSizeState;
     use ratatui::layout::Rect;
 
@@ -285,5 +302,18 @@ mod tests {
         assert_eq!(three_lines.hint.height, 1);
         assert_eq!(three_lines.status.height, 1);
         assert_eq!(three_lines.top_pane, None);
+    }
+
+    #[test]
+    fn the_corner_anchor_sits_in_the_bottom_right_and_shrinks_to_fit() {
+        let body = Rect::new(0, 1, 80, 30);
+
+        let anchored = bottom_right(body, 30, 6);
+        assert_eq!(anchored, Rect::new(50, 25, 30, 6));
+        assert_eq!(anchored.right(), body.right());
+        assert_eq!(anchored.bottom(), body.bottom());
+
+        // A box bigger than the region is clamped rather than drawn off-screen.
+        assert_eq!(bottom_right(body, 200, 100), body);
     }
 }

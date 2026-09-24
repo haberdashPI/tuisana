@@ -12,7 +12,9 @@
 //!   handed. The last two are centered modals drawn over the panes.
 //!   [`gantt`] is the exception to "a region": it hands [`task_table`] spans to
 //!   append to each row, so a row and its bar are one line. [`completion`] is
-//!   a third modal, over the field an editor is completing.
+//!   a third modal, over the field an editor is completing. [`notice`] is the
+//!   one that is not centered: it sits in the bottom-right corner, over
+//!   everything else, and says what the last edit refused or failed to do.
 //!
 //! [`runtime`] runs the event loop and is the only module that talks to the
 //! terminal backend.
@@ -28,6 +30,7 @@ pub mod gantt_order;
 pub mod help_overlay;
 pub mod hints;
 pub mod layout;
+pub mod notice;
 pub mod project_list;
 pub mod runtime;
 pub mod task_table;

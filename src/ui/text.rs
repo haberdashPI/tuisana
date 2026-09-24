@@ -84,6 +84,83 @@ pub fn pad_cell_centered(value: &str, width: usize, ellipsis: &str) -> String {
     )
 }
 
+/// Wraps `value` to `width` cells, breaking on whitespace and keeping the
+/// newlines already in it.
+///
+/// Every other helper here clips to one row, because a column is one row.
+/// A message is not: an error worth reading is worth reading whole, and the
+/// line breaks the sender put in it are part of what it says.
+///
+/// A word too long to fit on a line of its own is cut rather than allowed to
+/// overflow — a gid or a url is still readable split across two rows, and
+/// there is no width at which the pane could show it whole.
+pub fn wrap_to_width(value: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+
+    for paragraph in value.split('\n') {
+        let before = lines.len();
+        let mut current = String::new();
+
+        for word in paragraph.split_whitespace() {
+            for piece in split_to_width(word, width) {
+                let joined = visible_width(&current) + 1 + visible_width(&piece);
+                if !current.is_empty() && joined > width {
+                    lines.push(std::mem::take(&mut current));
+                }
+                if !current.is_empty() {
+                    current.push(' ');
+                }
+                current.push_str(&piece);
+            }
+        }
+
+        if !current.is_empty() {
+            lines.push(current);
+        }
+        // A blank line in the source is a blank line on screen: it is how the
+        // sender separated one thing from the next.
+        if lines.len() == before {
+            lines.push(String::new());
+        }
+    }
+
+    lines
+}
+
+/// Cuts a word with nowhere to break into `width`-cell pieces.
+fn split_to_width(word: &str, width: usize) -> Vec<String> {
+    if visible_width(word) <= width {
+        return vec![word.to_string()];
+    }
+
+    let mut pieces = Vec::new();
+    let mut rest = word;
+
+    while visible_width(rest) > width {
+        let mut head = truncate_to_width(rest, width);
+        // A single glyph wider than the line would otherwise cut to nothing
+        // and loop forever; one overflowing cell beats no progress.
+        if head.is_empty() {
+            let Some(first) = rest.chars().next() else {
+                break;
+            };
+            head = first.to_string();
+        }
+        rest = &rest[head.len()..];
+        pieces.push(head);
+    }
+
+    if !rest.is_empty() {
+        pieces.push(rest.to_string());
+    }
+
+    pieces
+}
+
 /// A window of a value, sized to a column, with the caret inside it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaretWindow {
@@ -340,7 +417,7 @@ pub fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>>
 mod tests {
     use super::{
         caret_window, clip_spans, fill, pad_cell, pad_cell_centered, pad_cell_right_aligned,
-        pad_spans, slice_spans, truncate_with_ellipsis, visible_width,
+        pad_spans, slice_spans, truncate_with_ellipsis, visible_width, wrap_to_width,
     };
     use ratatui::text::Span;
 
@@ -473,5 +550,41 @@ mod tests {
         );
 
         assert_eq!(clipped.len(), 2);
+    }
+
+    #[test]
+    fn wrapping_breaks_on_spaces_and_keeps_the_newlines_it_was_given() {
+        assert_eq!(
+            wrap_to_width("could not update 1 of 1", 12),
+            vec!["could not", "update 1 of", "1"]
+        );
+        // The break the sender wrote is a break, even where the line would
+        // have fitted.
+        assert_eq!(
+            wrap_to_width("first\nsecond", 40),
+            vec!["first", "second"]
+        );
+        assert_eq!(
+            wrap_to_width("one\n\ntwo", 40),
+            vec!["one", "", "two"],
+            "a blank line separates, so it survives"
+        );
+    }
+
+    #[test]
+    fn a_word_with_nowhere_to_break_is_cut_rather_than_overflowing() {
+        let lines = wrap_to_width("gid:1234567890123456", 8);
+
+        assert!(lines.iter().all(|line| visible_width(line) <= 8), "{lines:?}");
+        assert_eq!(lines.concat(), "gid:1234567890123456");
+    }
+
+    #[test]
+    fn wrapping_measures_in_cells_so_a_wide_glyph_takes_two() {
+        // Four CJK characters are eight cells, so six cells holds three.
+        let lines = wrap_to_width("日本語訳", 6);
+
+        assert_eq!(lines, vec!["日本語", "訳"]);
+        assert_eq!(wrap_to_width("ab", 0), Vec::<String>::new());
     }
 }

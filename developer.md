@@ -123,6 +123,11 @@ a convention.
 - To change how a name is completed, start in `src/app/autocomplete.rs`; the
   candidate overlay is `src/ui/completion.rs` and is drawn for whichever of
   the two callers has an editor open (`TaskState::open_completion`).
+- To change what a failed or refused edit says, the message is built where the
+  edit fails (`reconcile_task_edit` and the `Err` arms in `src/app.rs`), stored
+  as `edit_notice` on `TaskState`, and drawn by `src/ui/notice.rs` — a box in
+  the bottom-right corner, over every other overlay, wrapped and newline-aware.
+  `esc` clears it from `handle_key_event_inner` without consuming the key.
 - To change the recently-edited pane, start at `rebuild_recent_table` and the
   cursor handoff in `refresh_table` (`src/app/task.rs`); its geometry is
   `split_recent` in `src/ui/layout.rs` and it renders through

@@ -25,7 +25,7 @@ use crate::{
     ui::{
         chrome::{self, Chip, Tone},
         calendar, completion, filter_panel, filter_sets, gantt, gantt_order, help_overlay,
-        hints, layout, project_list,
+        hints, layout, notice, project_list,
         task_table::{self, TaskTableView},
         theme::Theme,
     },
@@ -236,6 +236,16 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                 calendar::render(frame, regions.body, &theme, &view);
             } else if let Some(view) = completion::completion_view(&app.tasks) {
                 completion::render(frame, regions.body, &theme, &view);
+            }
+
+            // Outside that chain, and last of all: a refusal or a failed
+            // write is the one thing on screen the user did not ask to see,
+            // so nothing gets to hide it — not even the help they opened
+            // afterwards. It is in the corner rather than the centre, so
+            // sitting over an overlay costs the overlay a corner and not its
+            // content.
+            if let Some(view) = notice::notice_view(&app.tasks) {
+                notice::render(frame, regions.body, &theme, mode, &view);
             }
         })
         .map(|_| page_size)

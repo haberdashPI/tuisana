@@ -993,9 +993,9 @@ fn short_date(value: crate::domain::CivilDate) -> String {
 fn counts(state: &TaskState) -> Vec<Chip> {
     let mut chips = Vec::new();
 
-    if let Some(notice) = state.edit_notice() {
-        chips.push(Chip::toned(notice.to_string(), Tone::Danger));
-    }
+    // A failed write used to be a chip here. It is a corner pane now: see
+    // `ui::notice`, where a message has room to be read whole.
+    //
     // Only worth saying when the blast radius is bigger than the row under
     // the cursor, which is the case the editor cannot show on its own.
     if state.cell_edit_target_count() > 1 {
@@ -2007,7 +2007,7 @@ mod tests {
     }
 
     #[test]
-    fn the_border_reports_a_failed_write_and_a_bulk_edit() {
+    fn the_border_reports_a_bulk_edit_and_leaves_the_notice_to_its_own_pane() {
         let mut state = state_with(vec![
             task("t1", "Ship release", Some("2026-06-10"), false),
             task("t2", "Cut the tag", Some("2026-06-11"), false),
@@ -2018,7 +2018,7 @@ mod tests {
             .begin_cell_edit(&crate::app::task_edit::EditContext::default())
             .expect("the state opens");
         // After the edit opens: `e` clears the last failure, so a notice set
-        // before it would never reach the border.
+        // before it would never be shown at all.
         state.set_edit_notice("could not update 1 of 2: backend error: 403");
 
         let theme = Theme::default();
@@ -2029,10 +2029,13 @@ mod tests {
             .map(|chip| chip.text.clone())
             .collect::<Vec<_>>();
 
-        assert!(chips.contains(&"could not update 1 of 2: backend error: 403".to_string()));
         assert!(
             chips.contains(&"editing 2".to_string()),
             "the blast radius is on screen before the commit: {chips:?}"
+        );
+        assert!(
+            chips.iter().all(|chip| !chip.contains("could not update")),
+            "the border reports the table, not the last write: {chips:?}"
         );
     }
 }

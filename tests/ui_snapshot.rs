@@ -654,6 +654,22 @@ fn task_mode_completing_an_assignee() {
 /// A task marked done while the table is showing only open ones, so the row
 /// it was on has left the table and the pane below the project list is
 /// holding it.
+/// The corner notice, over the task pane it used to be a border chip on.
+///
+/// A refusal rather than a failed write: the fake backend here accepts
+/// everything, and what the snapshot is guarding is the box, not the message.
+#[test]
+fn task_mode_with_a_notice() {
+    assert_snapshot("task-notice", || {
+        vec![
+            enter_task_mode(),
+            // Two rows selected, then `e` on the title: a title is edited one
+            // task at a time, which is refused rather than done.
+            vec![key(' '), key(' '), key('e')],
+        ]
+    });
+}
+
 #[test]
 fn task_mode_with_a_recently_edited_task() {
     assert_snapshot("task-recent-edits", || {

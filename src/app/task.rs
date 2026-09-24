@@ -142,7 +142,10 @@ struct TaskViewState {
     /// default: the first edit that hides a task is the moment it is needed,
     /// which is too late to go looking for a key.
     recent_hidden: bool,
-    /// What went wrong with the last edit, shown on the pane border.
+    /// What went wrong with the last edit, shown in the corner notice pane.
+    ///
+    /// Held whole, newlines and all: `ui::notice` wraps it and the breaks a
+    /// backend put in its message are part of what the message says.
     edit_notice: Option<String>,
     filter_editor: TaskFilterEditorState,
     task_vertical_scroll: usize,
@@ -4000,7 +4003,7 @@ impl TaskState {
         }
     }
 
-    /// The last edit failure, shown on the pane border.
+    /// The last edit failure or refusal, shown in the corner notice pane.
     pub fn edit_notice(&self) -> Option<&str> {
         self.view.edit_notice.as_deref()
     }

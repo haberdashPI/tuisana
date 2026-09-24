@@ -477,7 +477,7 @@ fn an_enum_custom_field_offers_the_options_the_project_declares() {
 }
 
 #[test]
-fn a_failed_write_is_rolled_back_and_the_border_says_so() {
+fn a_failed_write_is_rolled_back_and_the_notice_says_so() {
     // Optimism is worth it — nearly every write succeeds — but an optimistic
     // update that quietly diverges from the server is worse than either.
     let client = client().with_update_failure("t1");
@@ -511,6 +511,39 @@ fn a_failed_write_is_rolled_back_and_the_border_says_so() {
         session.app.tasks.edit_notice(),
         Some("could not update 1 of 1: backend error: 403")
     );
+}
+
+#[test]
+fn esc_dismisses_the_notice_without_costing_the_key_its_own_job() {
+    let mut session = Session::start();
+
+    // A refusal rather than a failed write: it needs no backend, and it is
+    // the case where `esc` already means something in the same mode.
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    assert!(session.app.tasks.edit_notice().is_some());
+
+    session.press(KeyCode::Esc, KeyModifiers::NONE);
+    assert_eq!(session.app.tasks.edit_notice(), None);
+
+    // And the same press still cancels an open edit, rather than being spent
+    // on the notice: `l` onto Assignee, `e` to open it, then a bad name.
+    session.press(KeyCode::Char('l'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('l'), KeyModifiers::CONTROL);
+    session.type_keys("nobody");
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(
+        session.app.tasks.edit_notice(),
+        Some("no one called nobody is loaded")
+    );
+    assert!(session.app.tasks.cell_edit_open(), "the edit stays open");
+
+    session.press(KeyCode::Esc, KeyModifiers::NONE);
+    assert_eq!(session.app.tasks.edit_notice(), None);
+    assert!(!session.app.tasks.cell_edit_open(), "one press did both");
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Task);
 }
 
 /// Keeps the fixture honest: `ProjectDto` is the shape the settings request
