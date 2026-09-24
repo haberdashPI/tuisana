@@ -2691,6 +2691,13 @@ impl TaskState {
         self.view.filter_editor.sidebar_visible
     }
 
+    /// Opens or closes the sidebar outright, for restoring a saved view.
+    pub fn set_filter_sets_sidebar(&mut self, visible: bool) {
+        if self.filter_sets_sidebar_visible() != visible {
+            self.filter_sets_toggle_sidebar();
+        }
+    }
+
     pub(crate) fn filter_sets_toggle_sidebar(&mut self) {
         let editor = &mut self.view.filter_editor;
         editor.sidebar_visible = !editor.sidebar_visible;
@@ -3583,8 +3590,20 @@ impl TaskState {
         self.rebuild_visible_dataset();
     }
 
-    pub fn apply_action(&mut self, action: &Action, page_size: usize) -> Option<crate::input::AppCommand> {
-        if self.view.filter_editor.visible {
+    /// Routes one action, to the filter panel when the panel has the keys and
+    /// to the table otherwise.
+    ///
+    /// `filter_focused` rather than the panel's own `visible` flag: the panel
+    /// stays on screen when the keys move to the table, so "it is showing"
+    /// and "it is being driven" stopped being the same question. Only the
+    /// app knows the answer, because only the app knows the mode.
+    pub fn apply_action(
+        &mut self,
+        action: &Action,
+        page_size: usize,
+        filter_focused: bool,
+    ) -> Option<crate::input::AppCommand> {
+        if self.view.filter_editor.visible && filter_focused {
             match action {
                 Action::MoveUp => {
                     self.move_filter_up();
@@ -4770,6 +4789,22 @@ impl TaskState {
         !self.view.recent_hidden && !self.view.recent_table.rows.is_empty()
     }
 
+    /// Whether the pane is switched on, whether or not it has anything to show.
+    ///
+    /// This is the half worth persisting: the rows come from what this
+    /// session edited, so at startup the pane is always empty and
+    /// [`Self::recent_pane_visible`] is always `false`.
+    pub fn recent_pane_enabled(&self) -> bool {
+        !self.view.recent_hidden
+    }
+
+    /// Switches the pane on or off outright, for restoring a saved view.
+    pub fn set_recent_pane_enabled(&mut self, enabled: bool) {
+        if self.recent_pane_enabled() != enabled {
+            self.toggle_recent_pane();
+        }
+    }
+
     /// How many recently-edited tasks the view is not showing.
     pub fn recent_hidden_count(&self) -> usize {
         self.view.recent_hidden_count
@@ -5746,14 +5781,14 @@ mod tests {
 
         assert_eq!(gids(&state), vec!["early", "late", "undated"]);
 
-        state.apply_action(&crate::input::Action::ToggleTaskSortDirection, 10);
+        state.apply_action(&crate::input::Action::ToggleTaskSortDirection, 10, false);
         assert_eq!(
             gids(&state),
             vec!["late", "early", "undated"],
             "the dates reverse and the undated row stays at the bottom"
         );
 
-        state.apply_action(&crate::input::Action::ToggleTaskSortDirection, 10);
+        state.apply_action(&crate::input::Action::ToggleTaskSortDirection, 10, false);
         assert_eq!(gids(&state), vec!["early", "late", "undated"]);
     }
 
@@ -7848,14 +7883,14 @@ mod tests {
         let first_index = state.selected_index().expect("cursor set after load");
         assert_eq!(state.table().rows[first_index].gid, "t1");
 
-        state.apply_action(&Action::ToggleTaskSelection, 10);
+        state.apply_action(&Action::ToggleTaskSelection, 10, false);
 
         assert_eq!(state.selected_task_count(), 1);
         assert!(state.is_task_selected("t1"));
         let second_index = state.selected_index().expect("cursor advanced");
         assert_eq!(state.table().rows[second_index].gid, "t2");
 
-        state.apply_action(&Action::ToggleTaskSelection, 10);
+        state.apply_action(&Action::ToggleTaskSelection, 10, false);
         assert_eq!(state.selected_task_count(), 2);
         assert!(state.is_task_selected("t2"));
     }
@@ -7865,12 +7900,12 @@ mod tests {
         use crate::input::Action;
         let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Task one", false)]);
 
-        state.apply_action(&Action::ToggleTaskSelection, 10);
+        state.apply_action(&Action::ToggleTaskSelection, 10, false);
         assert_eq!(state.selected_task_count(), 1);
 
         // Move cursor back to t1 and toggle again
-        state.apply_action(&Action::JumpTop, 10);
-        state.apply_action(&Action::ToggleTaskSelection, 10);
+        state.apply_action(&Action::JumpTop, 10, false);
+        state.apply_action(&Action::ToggleTaskSelection, 10, false);
         assert_eq!(state.selected_task_count(), 0);
         assert!(!state.is_task_selected("t1"));
     }
@@ -7883,7 +7918,7 @@ mod tests {
             sel_task("t2", "Task two", false),
         ]);
 
-        state.apply_action(&Action::SelectAllVisibleTasks, 10);
+        state.apply_action(&Action::SelectAllVisibleTasks, 10, false);
 
         assert_eq!(state.selected_task_count(), 2);
         assert!(state.is_task_selected("t1"));
@@ -7899,12 +7934,12 @@ mod tests {
         ]);
 
         // Select t1 only
-        state.apply_action(&Action::ToggleTaskSelection, 10);
+        state.apply_action(&Action::ToggleTaskSelection, 10, false);
         assert!(state.is_task_selected("t1"));
         assert!(!state.is_task_selected("t2"));
 
         // Invert: t1 deselected, t2 selected
-        state.apply_action(&Action::InvertTaskSelection, 10);
+        state.apply_action(&Action::InvertTaskSelection, 10, false);
         assert!(!state.is_task_selected("t1"));
         assert!(state.is_task_selected("t2"));
         assert_eq!(state.selected_task_count(), 1);
@@ -7918,10 +7953,10 @@ mod tests {
             sel_task("t2", "Task two", false),
         ]);
 
-        state.apply_action(&Action::SelectAllVisibleTasks, 10);
+        state.apply_action(&Action::SelectAllVisibleTasks, 10, false);
         assert_eq!(state.selected_task_count(), 2);
 
-        state.apply_action(&Action::ClearTaskSelection, 10);
+        state.apply_action(&Action::ClearTaskSelection, 10, false);
         assert_eq!(state.selected_task_count(), 0);
     }
 
@@ -7936,7 +7971,7 @@ mod tests {
 
         // Both tasks visible — select all
         assert_eq!(state.table().task_count(), 2);
-        state.apply_action(&Action::SelectAllVisibleTasks, 10);
+        state.apply_action(&Action::SelectAllVisibleTasks, 10, false);
         assert_eq!(state.selected_task_count(), 2);
 
         // Filter to open-only: t2 is now hidden
@@ -7944,7 +7979,7 @@ mod tests {
         assert_eq!(state.table().task_count(), 1);
 
         // clear_hidden removes t2 from selection
-        state.apply_action(&Action::ClearHiddenTaskSelection, 10);
+        state.apply_action(&Action::ClearHiddenTaskSelection, 10, false);
         assert_eq!(state.selected_task_count(), 1);
         assert!(state.is_task_selected("t1"));
         assert!(!state.is_task_selected("t2"));
@@ -7958,9 +7993,9 @@ mod tests {
             sel_task("t2", "Write docs", false),
         ]);
 
-        state.apply_action(&Action::SelectAllVisibleTasks, 10);
+        state.apply_action(&Action::SelectAllVisibleTasks, 10, false);
 
-        let result = state.apply_action(&Action::CopyTasksToClipboard, 10);
+        let result = state.apply_action(&Action::CopyTasksToClipboard, 10, false);
         let text = match result {
             Some(AppCommand::CopyToClipboard(t)) => t,
             _ => panic!("expected CopyToClipboard command"),
@@ -7976,7 +8011,7 @@ mod tests {
         use crate::input::Action;
         let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Task one", false)]);
 
-        let result = state.apply_action(&Action::CopyTasksToClipboard, 10);
+        let result = state.apply_action(&Action::CopyTasksToClipboard, 10, false);
         assert!(result.is_none());
     }
 

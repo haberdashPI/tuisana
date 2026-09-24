@@ -1543,7 +1543,7 @@ mod tests {
 
         assert_eq!(texts(&view), vec!["2 tasks".to_string(), "row 1".to_string()]);
 
-        let _ = state.apply_action(&crate::input::Action::ToggleTaskSelection, 10);
+        let _ = state.apply_action(&crate::input::Action::ToggleTaskSelection, 10, false);
         assert!(texts(&render_task_table(&mut state, 120, &theme, None))
             .iter()
             .any(|text| text == "1 selected"));
@@ -2012,7 +2012,7 @@ mod tests {
             task("t1", "Ship release", Some("2026-06-10"), false),
             task("t2", "Cut the tag", Some("2026-06-11"), false),
         ]);
-        state.apply_action(&crate::input::Action::SelectAllVisibleTasks, 10);
+        state.apply_action(&crate::input::Action::SelectAllVisibleTasks, 10, false);
         state.move_column(crate::domain::STATE_COLUMN as i64);
         state
             .begin_cell_edit(&crate::app::task_edit::EditContext::default())

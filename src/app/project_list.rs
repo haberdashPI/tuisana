@@ -387,6 +387,27 @@ impl ProjectListState {
         }
     }
 
+    /// Replaces the selection with the saved one, at startup.
+    ///
+    /// Gids the workspace no longer returns are dropped, the same way a
+    /// reload drops them from the live selection — a project someone left
+    /// must not keep asking to be loaded. No history is pushed: `u` undoes
+    /// what *you* did this session, and restoring the view is not that.
+    pub fn restore_selection(&mut self, project_ids: &[String]) {
+        let cursor_id = self.selected_project().map(|project| project.id.clone());
+        let live: HashSet<&str> = self
+            .all_projects
+            .iter()
+            .map(|project| project.id.as_str())
+            .collect();
+        self.selected_ids = project_ids
+            .iter()
+            .filter(|id| live.contains(id.as_str()))
+            .cloned()
+            .collect();
+        self.rebuild_visible_projects(cursor_id);
+    }
+
     pub fn clear_selection(&mut self) {
         if self.selected_ids.is_empty() {
             return;

@@ -696,6 +696,15 @@ fn filter_mode() {
     assert_snapshot("filter-mode", || vec![enter_task_mode(), vec![key('f')]]);
 }
 
+/// The panel stays up top when the keys go back to the table: a thin border
+/// on the filters, a thick one on the table.
+#[test]
+fn task_mode_with_the_filter_panel_still_open() {
+    assert_snapshot("task-with-filters", || {
+        vec![enter_task_mode(), vec![key('f')], vec![key('t')]]
+    });
+}
+
 #[test]
 fn filter_edit_mode() {
     assert_snapshot("filter-edit", || {

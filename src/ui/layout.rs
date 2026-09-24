@@ -6,7 +6,9 @@
 //!
 //! Whatever height is left is the body. It holds the shared top pane (the
 //! project list or the filter panel, never both) above the task pane, sized by
-//! the user's [`PaneSizeState`].
+//! the user's [`PaneSizeState`]. Which of the two the pane holds is the filter
+//! panel's own visibility flag, not the mode: the panel stays put when the
+//! keys move down to the table.
 
 use ratatui::layout::Rect;
 

@@ -1,6 +1,6 @@
 use crate::{
     asana::{AsanaClient, TaskQuery, TaskTarget},
-    config::{Config, Mode, NamedFilterSet},
+    config::{Config, Mode, NamedFilterSet, TopPaneState, ViewConfig},
     domain::{Project, ProjectEdit, ProjectKind, TaskEdit},
     error::Result,
     input::{Action, AppCommand, KeyBinding, KeyMap},
@@ -164,6 +164,13 @@ pub struct App<C> {
     /// making at startup. A failure leaves it `Some(empty)` rather than
     /// `None`, so a workspace that will not answer is asked exactly once.
     people: Option<Vec<(String, String)>>,
+    /// Whether the saved project selection has been put back yet.
+    ///
+    /// The panes and the bound filter set are restored in [`App::new`], but
+    /// the selection needs projects to exist, so it waits for the first
+    /// [`App::load_projects`]. `refresh` goes through that same call and must
+    /// not overwrite what the user has selected since.
+    view_restored: bool,
 }
 
 /// One write still in flight, in the shape its rollback needs.
@@ -222,7 +229,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     pub fn new(config: Config, client: C) -> Self {
         let mut tasks = TaskState::new();
         tasks.apply_gantt_config(&config.gantt);
-        Self {
+        let mut app = Self {
             config,
             projects: ProjectListState::new(),
             tasks,
@@ -238,6 +245,57 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             task_edit_error: None,
             current_user_gid: None,
             people: None,
+            view_restored: false,
+        };
+        app.apply_view_config();
+        app
+    }
+
+    /// Puts the panes and the bound filter set back the way `[view]` left them.
+    ///
+    /// Everything here is state the app can hold before it has spoken to
+    /// Asana. The project selection cannot — it needs a project list to be
+    /// filtered against — so it waits for [`Self::load_projects`].
+    fn apply_view_config(&mut self) {
+        let view = self.config.view.clone();
+
+        // Before the panes, because binding the panel is what the first fetch
+        // reads its query from: a saved `due` filter narrows the window
+        // pushed down to Asana, and the fetch is one `ensure_task_data` away.
+        if let Some(entry) = view.filter_set.as_deref().and_then(|name| {
+            self.config
+                .filter_sets
+                .iter()
+                .find(|entry| entry.name.eq_ignore_ascii_case(name))
+                .cloned()
+        }) {
+            self.tasks.filter_sets_load(&entry.name, &entry.sets);
+        }
+
+        self.tasks.set_recent_pane_enabled(view.recent);
+        self.tasks.set_filter_sets_sidebar(view.filter_sidebar);
+
+        // The top pane's content is decided by the mode, so restoring the
+        // filter panel means starting in filter mode. Only the panel, not the
+        // focus: which pane the keys were going to is where you were looking,
+        // and `[view]` records what was open.
+        if view.filters {
+            self.set_filter_mode();
+        } else if view.tasks {
+            self.tasks.set_visible(true);
+        }
+
+        match view.top_pane {
+            TopPaneState::Normal => self.panel_size.restore(),
+            TopPaneState::Maximized => self.panel_size.maximize(),
+            TopPaneState::Minimized => {
+                // A minimized top pane leaves nothing for project or filter
+                // mode to drive, which is why `{` moves to the table as it
+                // minimizes. A restore that skipped that would put the cursor
+                // in a pane that is not on screen.
+                self.set_task_mode();
+                self.panel_size.minimize();
+            }
         }
     }
 
@@ -262,6 +320,18 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             }
         };
         self.projects.set_assigned_to_me(assigned_to_me);
+        // After the "assigned to me" row, which is synthetic and would not be
+        // among the live gids a moment earlier — saving it and then dropping
+        // it on the way back in would be the one selection the view could
+        // never keep.
+        if !self.view_restored {
+            self.view_restored = true;
+            self.projects.restore_selection(&self.config.view.projects);
+            // A restored selection with the task pane open is a request for
+            // those tasks; nothing else would have asked for them until the
+            // user pressed a key.
+            self.ensure_task_data();
+        }
         Ok(())
     }
 
@@ -415,9 +485,8 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         self.mode = Mode::Gantt;
         self.tasks.set_visible(true);
         self.tasks.gantt_mut().set_visible(true);
-        if self.tasks.filter_panel_visible() {
-            self.tasks.toggle_filter_panel();
-        }
+        // Same pane, same rows, same rule as `set_task_mode`: the top pane
+        // keeps whatever it was holding.
     }
 
     /// Enters the mode the open cell editor reads its keys in.
@@ -431,15 +500,38 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         };
     }
 
+    /// Whether the keys are currently driving the filter panel.
+    ///
+    /// Not the same question as whether the panel is *visible*: it stays up
+    /// top when the keys move to the table, so the panel can be on screen
+    /// with nothing going to it. Calendar mode is the one mode both panes can
+    /// be in — a filter date and a task cell open the same picker — and the
+    /// editor that owns it is what tells them apart.
+    pub fn filter_panel_focused(&self) -> bool {
+        match self.mode {
+            Mode::Filter | Mode::FilterEdit | Mode::FilterSetName => true,
+            Mode::Calendar => !self.tasks.cell_edit_owns_calendar(),
+            _ => false,
+        }
+    }
+
     fn set_task_mode(&mut self) {
         if self.projects.search_active() {
             self.projects.end_search();
         }
         self.mode = Mode::Task;
         self.tasks.set_visible(true);
-        if self.tasks.filter_panel_visible() {
-            self.tasks.toggle_filter_panel();
+        // No binding reaches here from filter-edit mode — that mode has no
+        // global fallback, so its letters type — and the two callers that
+        // close the panel clear the flag on the way. This is what keeps an
+        // open field from taking the table's keys if a third one appears.
+        if self.tasks.filter_panel_editing() {
+            self.tasks.filter_edit_done();
         }
+        // The filter panel is left where it is. Moving the keys to the table
+        // is not a request to put the project list back: the filters you just
+        // built are the thing you are reading the table against, and `f` and
+        // `p` are both one keystroke away when you do want them gone.
     }
 
     fn adjust_top_pane_height(&mut self, delta: i16) {
@@ -870,15 +962,26 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     /// No-op unless the panel is bound and something actually changed. The
     /// comparison is what makes the deliberately over-eager `dirty` flag safe.
     fn sync_named_filter_set(&mut self) {
+        if self.stage_named_filter_set() {
+            self.write_config_or_report();
+        }
+    }
+
+    /// Updates the in-memory config from the panel, without writing.
+    ///
+    /// Split from the write so that a key which changes both the bound entry
+    /// and the view — a digit that loads a set is both — costs one write
+    /// rather than two.
+    fn stage_named_filter_set(&mut self) -> bool {
         if !self.tasks.filter_set_dirty() {
-            return;
+            return false;
         }
         // Cleared whether or not anything is written, so a config that cannot
         // be written reports once rather than once per keystroke.
         self.tasks.clear_filter_set_dirty();
 
         let Some(name) = self.tasks.filter_set_loaded_name().map(str::to_string) else {
-            return;
+            return false;
         };
         let sets = self.tasks.filter_sets_to_saved();
         let Some(entry) = self
@@ -887,14 +990,53 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             .iter_mut()
             .find(|entry| entry.name.eq_ignore_ascii_case(&name))
         else {
-            return;
+            return false;
         };
         if entry.sets == sets {
-            return;
+            return false;
         }
 
         entry.sets = sets;
-        self.write_config_or_report();
+        true
+    }
+
+    /// The panes and the selection as they stand, in the shape `[view]` keeps.
+    fn current_view_config(&self) -> ViewConfig {
+        let mut projects = self
+            .projects
+            .selected_projects()
+            .into_iter()
+            .map(|project| project.id)
+            .collect::<Vec<_>>();
+        // A `HashSet` has no order of its own, so without this the same
+        // selection would rewrite the file differently run to run.
+        projects.sort();
+
+        ViewConfig {
+            filter_set: self.tasks.filter_set_loaded_name().map(str::to_string),
+            top_pane: if self.panel_size.is_minimized() {
+                TopPaneState::Minimized
+            } else if self.panel_size.is_maximized() {
+                TopPaneState::Maximized
+            } else {
+                TopPaneState::Normal
+            },
+            tasks: self.tasks.visible(),
+            filters: self.tasks.filter_panel_visible(),
+            filter_sidebar: self.tasks.filter_sets_sidebar_visible(),
+            recent: self.tasks.recent_pane_enabled(),
+            projects,
+        }
+    }
+
+    /// Updates the in-memory `[view]`, answering whether anything moved.
+    fn stage_view_state(&mut self) -> bool {
+        let view = self.current_view_config();
+        if self.config.view == view {
+            return false;
+        }
+        self.config.view = view;
+        true
     }
 
     fn handle_project_search_input(&mut self, event: crossterm::event::KeyEvent) -> Result<bool> {
@@ -1377,7 +1519,8 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         {
             self.projects.apply_action(action, page_size)
         } else {
-            self.tasks.apply_action(action, page_size)
+            let filter_focused = self.filter_panel_focused();
+            self.tasks.apply_action(action, page_size, filter_focused)
         };
 
         if matches!(action, Action::StartSearch) && matches!(mode, Mode::Project) {
@@ -1412,9 +1555,19 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         // filter is one write, not one per character.
         //
         // Here rather than in `handle_action` because the prompt's keys, and
-        // the filter-field ones, are read outside the keymap entirely.
+        // the filter-field ones, are read outside the keymap entirely — and
+        // because the view has the same problem from the other end: a pane
+        // can be opened from half a dozen actions and from none of them.
+        //
+        // Both are staged before either is written, so a key that moves both
+        // — a digit that loads a named set moves the panel and the binding —
+        // costs one write.
         if !self.tasks.input_pending() {
-            self.sync_named_filter_set();
+            let filter_set_changed = self.stage_named_filter_set();
+            let view_changed = self.stage_view_state();
+            if filter_set_changed || view_changed {
+                self.write_config_or_report();
+            }
         }
         result
     }
@@ -1501,7 +1654,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             return Ok(None);
         }
 
-        if self.tasks.filter_panel_visible() {
+        if self.filter_panel_focused() {
             if self.handle_filter_field_input(event, None)? {
                 return Ok(None);
             }
@@ -1859,12 +2012,12 @@ mod tests {
             },
             fake::FakeAsanaClient,
         },
-        config::{Config, ProjectVisibilityConfig},
+        config::{Config, ProjectVisibilityConfig, TopPaneState},
         domain::{GanttColorKey, Project},
         input::{Action, KeyBinding},
     };
 
-    use super::App;
+    use super::{App, PaneSizeState};
     use crate::config::Mode;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -2029,7 +2182,8 @@ mod tests {
     }
 
     /// An app with one selected project holding two dated tasks.
-    fn gantt_app() -> App<FakeAsanaClient> {
+    /// The two-task workspace the gantt and view tests share.
+    fn gantt_client() -> FakeAsanaClient {
         fn task(gid: &str, name: &str, due: &str) -> TaskDto {
             TaskDto {
                 gid: gid.to_string(),
@@ -2056,11 +2210,14 @@ mod tests {
             }
         }
 
-        let client = FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]).with_tasks(
+        FakeAsanaClient::new(vec![Project::new("1", "Inbox", true)]).with_tasks(
             "1",
             vec![task("t1", "Ship it", "2026-07-20"), task("t2", "Pack it", "2026-08-20")],
-        );
-        let mut app = App::new(Config::default(), client);
+        )
+    }
+
+    fn gantt_app() -> App<FakeAsanaClient> {
+        let mut app = App::new(Config::default(), gantt_client());
         app.load_projects().expect("projects load");
         app.handle_action(&Action::ToggleSelection, 10)
             .expect("select the project");
@@ -2188,6 +2345,11 @@ mod tests {
     /// A config backed by a real file, so save_to_source_path has somewhere
     /// to write.
     fn config_on_disk() -> (Config, std::path::PathBuf) {
+        config_on_disk_with("")
+    }
+
+    /// A config file holding the header and whatever the test adds to it.
+    fn config_on_disk_with(body: &str) -> (Config, std::path::PathBuf) {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
@@ -2195,7 +2357,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("tuisana-gantt-{unique}.toml"));
         std::fs::write(
             &path,
-            "[header]\ntype = \"tuisana\"\nversion = 1.0\n",
+            format!("[header]\ntype = \"tuisana\"\nversion = 1.0\n{body}"),
         )
         .expect("write config");
         (Config::load_from_path(&path).expect("config loads"), path)
@@ -2792,6 +2954,248 @@ mod tests {
         let _ = std::fs::remove_dir(&path);
     }
 
+    // ---- Persisted view state ----------------------------------------------
+
+    /// An app over two projects, backed by a config file with the given body.
+    ///
+    /// Built the way the binary builds it — config first, then
+    /// `load_projects` — because that order is what the restore depends on.
+    fn view_app(body: &str) -> (App<FakeAsanaClient>, std::path::PathBuf) {
+        let (config, path) = config_on_disk_with(body);
+        let client = FakeAsanaClient::new(vec![
+            Project::new("1", "Inbox", true),
+            Project::new("2", "Website", true),
+        ]);
+        let mut app = App::new(config, client);
+        app.load_projects().expect("projects load");
+        (app, path)
+    }
+
+    /// The gids the app would restore, in the order it writes them.
+    fn selected_gids(app: &App<FakeAsanaClient>) -> Vec<String> {
+        let mut gids = app
+            .projects
+            .selected_projects()
+            .into_iter()
+            .map(|project| project.id)
+            .collect::<Vec<_>>();
+        gids.sort();
+        gids
+    }
+
+    #[test]
+    fn opening_a_pane_writes_it_to_the_config() {
+        let (mut app, path) = view_app("");
+        assert!(
+            !std::fs::read_to_string(&path)
+                .expect("config exists")
+                .contains("[view]"),
+            "an app that has opened nothing writes no view section"
+        );
+
+        press(&mut app, KeyCode::Char('t'));
+        assert!(reread(&path).view.tasks, "the task pane is open");
+
+        press(&mut app, KeyCode::Char('f'));
+        let view = reread(&path).view;
+        assert!(view.filters, "and the filter panel is up top");
+        assert!(view.tasks, "which does not close the table underneath");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_saved_view_reopens_the_same_panes() {
+        let (app, path) = view_app("\n[view]\ntasks = true\nfilters = true\n");
+
+        assert_eq!(app.mode(), Mode::Filter);
+        assert!(app.tasks.visible());
+        assert!(app.tasks.filter_panel_visible());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_top_pane_comes_back_maximized_but_not_at_its_old_height() {
+        // From project mode: `]` and `}` are the top pane's keys there, and
+        // mean something else entirely once the table has focus.
+        let (mut app, path) = view_app("");
+        // Two resizes and then a maximize: the height is view state the file
+        // deliberately does not keep, the maximize is not.
+        press(&mut app, KeyCode::Char(']'));
+        press(&mut app, KeyCode::Char(']'));
+        press(&mut app, KeyCode::Char('}'));
+
+        let written = reread(&path);
+        assert_eq!(written.view.top_pane, TopPaneState::Maximized);
+        let serialized = std::fs::read_to_string(&path).expect("config exists");
+        assert!(
+            !serialized.contains("preferred") && !serialized.contains("height"),
+            "no pane height is written: {serialized}"
+        );
+
+        let restored = App::new(written, FakeAsanaClient::new(Vec::new()));
+        assert!(restored.panel_size().is_maximized());
+        assert_eq!(
+            restored.panel_size().preferred(),
+            PaneSizeState::default().preferred(),
+            "the height it was resized to is not restored"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_minimized_top_pane_comes_back_with_the_table_focused() {
+        // `{` minimizes *and* moves to the table, so the pair is the only
+        // state the file can hold; restoring the size without the focus
+        // would leave the keys going somewhere invisible.
+        let (app, path) = view_app("\n[view]\ntasks = true\ntop_pane = \"minimized\"\n");
+
+        assert!(app.panel_size().is_minimized());
+        assert_eq!(app.mode(), Mode::Task);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_selected_projects_are_written_and_come_back() {
+        let (mut app, path) = view_app("");
+        press(&mut app, KeyCode::Char(' ')); // select Inbox, cursor moves on
+        press(&mut app, KeyCode::Char(' ')); // select Website
+        assert_eq!(selected_gids(&app), ["1", "2"]);
+        assert_eq!(reread(&path).view.projects, ["1", "2"]);
+
+        let (restored, other) = view_app("\n[view]\nprojects = [\"2\", \"1\"]\n");
+        assert_eq!(selected_gids(&restored), ["1", "2"]);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&other);
+    }
+
+    #[test]
+    fn a_project_the_workspace_no_longer_returns_is_dropped_from_the_selection() {
+        // Same rule a reload already applies to the live selection: a project
+        // someone left must not keep asking to be loaded.
+        let (app, path) = view_app("\n[view]\nprojects = [\"1\", \"gone\"]\n");
+
+        assert_eq!(selected_gids(&app), ["1"]);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_live_selection_rather_than_restoring_the_saved_one() {
+        let (mut app, path) = view_app("\n[view]\nprojects = [\"1\"]\n");
+        assert_eq!(selected_gids(&app), ["1"]);
+
+        app.projects.clear_selection();
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char(' ')); // Website instead
+        app.refresh().expect("refresh");
+
+        assert_eq!(
+            selected_gids(&app),
+            ["2"],
+            "the restore happens once, at startup"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_bound_filter_set_is_reloaded_and_still_bound() {
+        let (app, path) = view_app(
+            "\n[view]\nfilters = true\nfilter_set = \"mine\"\n\n\
+             [[filter_set]]\nname = \"mine\"\n\n\
+             [[filter_set.set]]\n\n\
+             [[filter_set.set.field]]\nkey = \"assignee\"\nquery = \"alex\"\n",
+        );
+
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("mine"));
+        assert!(
+            !app.tasks.filter_set_dirty(),
+            "freshly loaded is what is already on disk"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_restored_view_filters_the_table_it_reopens() {
+        // The whole feature in one run: the panes, the selection, and the
+        // bound entry come back, the fetch the selection implies starts on
+        // its own, and the filter — parked while there were no rows to put it
+        // on — lands when the data does.
+        let (config, path) = config_on_disk_with(
+            "\n[view]\ntasks = true\nprojects = [\"1\"]\nfilter_set = \"shipping\"\n\n\
+             [[filter_set]]\nname = \"shipping\"\n\n\
+             [[filter_set.set]]\n\n\
+             [[filter_set.set.field]]\nkey = \"title\"\nquery = \"ship\"\n",
+        );
+        let mut app = App::new(config, gantt_client());
+        app.load_projects().expect("projects load");
+
+        assert!(app.tasks.visible());
+        assert_eq!(selected_gids(&app), ["1"]);
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("shipping"));
+
+        settle(&mut app);
+        app.tasks.settle_table();
+
+        let titles = app
+            .tasks
+            .table()
+            .rows
+            .iter()
+            .filter(|row| row.kind == crate::domain::TaskRowKind::Task)
+            .map(|row| row.cells[0].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(titles, ["Ship it"], "the saved title filter applied");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_unnamed_panel_records_no_filter_set_and_a_deleted_name_is_ignored() {
+        let (mut app, path) = view_app("");
+        press(&mut app, KeyCode::Char('t'));
+        press(&mut app, KeyCode::Char('f'));
+        assert_eq!(reread(&path).view.filter_set, None);
+
+        // A `[view]` pointing at an entry that is no longer there loads
+        // nothing rather than refusing to start.
+        let (unbound, other) =
+            view_app("\n[view]\nfilters = true\nfilter_set = \"long gone\"\n");
+        assert_eq!(unbound.tasks.filter_set_loaded_name(), None);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&other);
+    }
+
+    #[test]
+    fn the_sidebar_and_the_recent_pane_keep_their_toggles() {
+        let (mut app, path) = view_app("");
+        press(&mut app, KeyCode::Char('t'));
+        press(&mut app, KeyCode::Char('f'));
+        press(&mut app, KeyCode::Char('b')); // the Sets sidebar
+        assert!(app.tasks.filter_sets_sidebar_visible());
+
+        press(&mut app, KeyCode::Char('t')); // back to the table
+        press(&mut app, KeyCode::Char('b')); // and off with the recent pane
+        assert!(!app.tasks.recent_pane_enabled());
+
+        let written = reread(&path);
+        assert!(written.view.filter_sidebar);
+        assert!(!written.view.recent);
+
+        let restored = App::new(written, FakeAsanaClient::new(Vec::new()));
+        assert!(restored.tasks.filter_sets_sidebar_visible());
+        assert!(!restored.tasks.recent_pane_enabled());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn the_dialog_opens_over_the_current_dimensions_values() {
         let mut app = gantt_app();
@@ -2850,7 +3254,6 @@ mod tests {
     #[test]
     fn cancelling_the_dialog_writes_nothing() {
         let (config, path) = config_on_disk();
-        let before = std::fs::read_to_string(&path).expect("config exists");
         let mut app = gantt_app();
         app.config = config;
 
@@ -2863,10 +3266,12 @@ mod tests {
 
         assert_eq!(app.mode(), Mode::Gantt);
         assert!(!app.tasks.gantt().dialog_open());
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("config exists"),
-            before
-        );
+        // Opening the task pane persists `[view]`, so the file has moved —
+        // what the cancel must leave untouched is the colour order.
+        let reloaded =
+            Config::from_toml_str(&std::fs::read_to_string(&path).expect("config exists"))
+                .expect("it reparses");
+        assert!(reloaded.gantt.order.is_empty());
 
         let _ = std::fs::remove_file(&path);
     }
@@ -3306,6 +3711,99 @@ mod tests {
             .expect("task filter action");
         assert_eq!(app.tasks.table().task_count(), 1);
         assert!(app.tasks.filter_summary().contains("comp open"));
+    }
+
+    #[test]
+    fn the_filter_panel_stays_up_when_the_keys_move_to_the_table() {
+        let mut app = gantt_app();
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('f'));
+        assert_eq!(app.mode(), Mode::Filter);
+
+        press(&mut app, KeyCode::Char('t'));
+
+        assert_eq!(app.mode(), Mode::Task);
+        assert!(
+            app.tasks.filter_panel_visible(),
+            "the filters you just built are what you are reading the table \
+             against"
+        );
+        assert!(!app.filter_panel_focused(), "but the keys are on the table");
+
+        // `p` is the key that means "show me the projects", and it is what
+        // puts the top pane back.
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(app.mode(), Mode::Project);
+        assert!(!app.tasks.filter_panel_visible());
+    }
+
+    #[test]
+    fn the_table_keeps_its_cursor_keys_while_the_filter_panel_is_showing() {
+        let mut app = gantt_app();
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('f'));
+        press(&mut app, KeyCode::Char('t'));
+
+        let filter_row_before = app
+            .tasks
+            .filter_panel_entries()
+            .iter()
+            .position(|entry| entry.selected);
+        let task_row_before = app.tasks.selected_index();
+
+        press(&mut app, KeyCode::Char('j'));
+
+        assert_eq!(
+            app.tasks
+                .filter_panel_entries()
+                .iter()
+                .position(|entry| entry.selected),
+            filter_row_before,
+            "the panel is on screen but is not the thing being driven"
+        );
+        assert_ne!(app.tasks.selected_index(), task_row_before);
+
+        // And `f` hands them back without having to reopen anything.
+        press(&mut app, KeyCode::Char('f'));
+        assert_eq!(app.mode(), Mode::Filter);
+        assert!(app.tasks.filter_panel_visible());
+        press(&mut app, KeyCode::Char('j'));
+        assert_ne!(
+            app.tasks
+                .filter_panel_entries()
+                .iter()
+                .position(|entry| entry.selected),
+            filter_row_before
+        );
+    }
+
+    #[test]
+    fn a_letter_types_into_the_table_not_the_panel_once_the_keys_have_left_it() {
+        let mut app = gantt_app();
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('f'));
+        press(&mut app, KeyCode::Enter); // open the Title row
+        for ch in "ship".chars() {
+            press(&mut app, KeyCode::Char(ch));
+        }
+        // `t` is one of those letters: filter-edit mode does not fall back to
+        // the global bindings, which is why leaving takes `enter` first.
+        assert_eq!(app.mode(), Mode::FilterEdit);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('t'));
+
+        assert_eq!(app.mode(), Mode::Task);
+        assert!(!app.tasks.filter_panel_editing());
+        assert_eq!(app.tasks.filter_panel_rows()[0].1, "ship", "the filter is kept");
+
+        // Raw characters used to reach the panel whenever it was visible.
+        // Now they follow the keys: `c` is the table's completed filter.
+        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(app.tasks.filter_panel_rows()[0].1, "ship");
+        assert!(app.tasks.filter_summary().contains("comp"));
     }
 
     #[test]

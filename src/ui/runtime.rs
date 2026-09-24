@@ -110,9 +110,14 @@ fn classify(event: Event) -> InputEvent {
 ///
 /// Focus decides the thick border and the mode-colored title, so the answer to
 /// "where do my keys go" is visible at both ends of the screen.
-fn focused_pane(mode: Mode) -> FocusedPane {
+///
+/// `filter_focused` is [`App::filter_panel_focused`]: calendar mode is the one
+/// mode both panes can be in, and the keys go wherever the picker was opened
+/// from.
+fn focused_pane(mode: Mode, filter_focused: bool) -> FocusedPane {
     match mode {
         Mode::Task | Mode::TaskEdit | Mode::Gantt | Mode::GanttOrder => FocusedPane::Task,
+        Mode::Calendar if !filter_focused => FocusedPane::Task,
         Mode::Project
         | Mode::ProjectSearch
         | Mode::Filter
@@ -152,20 +157,20 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                 app.panel_size(),
                 app.tasks.recent_pane_rows(),
             );
-            let focus = focused_pane(mode);
+            let focus = focused_pane(mode, app.filter_panel_focused());
 
             render_header(frame, regions.header, app, &theme);
 
             if let Some(area) = regions.top_pane {
                 let focused = focus == FocusedPane::Top;
-                page_size = match mode {
-                    Mode::Filter
-                    | Mode::FilterEdit
-                    | Mode::FilterSetName
-                    | Mode::Calendar => {
-                        render_filter_pane(frame, area, app, &theme, mode, focused)
-                    }
-                    _ => render_project_pane(frame, area, app, &theme, mode, focused),
+                // What the top pane holds is the panel's own flag, not the
+                // mode. The filter panel stays put when the keys move to the
+                // table — `f` and `p` are what put the project list back —
+                // so the pane cannot be read off the mode any more.
+                page_size = if app.tasks.filter_panel_visible() {
+                    render_filter_pane(frame, area, app, &theme, mode, focused)
+                } else {
+                    render_project_pane(frame, area, app, &theme, mode, focused)
                 };
             }
 

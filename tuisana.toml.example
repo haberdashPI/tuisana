@@ -25,6 +25,36 @@ accent = "cyan"
 # Stripe alternating task rows. Requires variant = "truecolor".
 zebra = false
 
+# The screen as you left it. Written by the app after any keystroke that
+# changes what is open, and read back once at startup. Editable by hand; the
+# next keypress that moves a pane rewrites it.
+#
+# It records what is *open*, never how big it is — `top_pane` is the one
+# exception, and it is three named states rather than a height. Scroll
+# offsets, the cursor, the sort, the grouping, and which pane had focus stay
+# out, the same way the Gantt chart's timeline window does.
+[view]
+# The named `[[filter_set]]` entry the filter panel is bound to. The panel
+# comes back bound, so editing a field still writes through. Left out when the
+# panel is unnamed; ignored when the entry it names has been deleted.
+# filter_set = "Overdue mine"
+# "normal" | "minimized" | "maximized". "minimized" starts in the task table,
+# the same way `{` moves there as it minimizes.
+top_pane = "normal"
+# The task table, and whether the top pane holds the filter panel rather than
+# the project list.
+tasks = false
+filters = false
+# The `Sets` sidebar beside the filter panel.
+filter_sidebar = false
+# The recently-edited pane. On unless it was toggled off; it holds what this
+# session edited, so it starts empty either way.
+recent = true
+# The selected projects, by gid — not the same thing as `[[project]]` below,
+# which decides what is listed at all. A gid the workspace no longer returns
+# is dropped at startup.
+projects = []
+
 # Projects not listed here default to hidden.
 
 [[bind]]

@@ -56,6 +56,14 @@ a convention.
 - `TaskState` owns task datasets, filters, selection, and the task table.
 - `Domain` owns the core data models and rules orchestration built on top of them.
 - `request_task_data` starts an async fetch; `poll_task_data` merges the results.
+- The top pane holds the project list **or** the filter panel, and which one
+  is the panel's own `visible` flag rather than the mode. The panel stays on
+  screen when the keys move to the table — `f` and `p` are what close it — so
+  "the panel is showing" and "the panel has the keys" are two questions.
+  `App::filter_panel_focused` answers the second, and is the single place that
+  knows calendar mode belongs to whichever editor opened the picker; every
+  routing decision (`TaskState::apply_action`, raw filter-field typing, the
+  focused border) reads it rather than re-deriving it from the mode.
 - The filter panel holds one or more `TaskFilterSet`s, ORed together: fields AND
   within a set, sets OR between them. `restore_queries` is what carries the set
   list, the active tab, and every query across the rebuild each streamed project
@@ -113,6 +121,13 @@ a convention.
   what the pane holds is defined by what the table stopped showing. The cursor
   is one cursor over two lists — `recent_selected` is `Some` when the keys act
   on the pane — and `cursor_task_gid` is what every edit path asks.
+- The `[view]` section is **what is open, not where you were**. The panes'
+  open/closed flags, the top pane's three-state size, the bound filter set's
+  name, and the selected project gids persist; heights, scroll offsets, the
+  cursor, the sort, the grouping, and which pane had focus do not. It is
+  written from `App::handle_key_event` on the same settled-burst rule as the
+  filter-set write-through, and both are staged before either is written so a
+  key that moves both costs one write.
 - `FakeAsanaClient` is the test backend for deterministic state transitions.
 
 ## Common Change Paths
@@ -148,6 +163,12 @@ a convention.
 - Snapshots in `tests/snapshots/` are the visual regression guard. Run
   `UPDATE_SNAPSHOTS=1 cargo test --test ui_snapshot` and read the diff before
   committing it.
+- To change what the app remembers about the view between runs, the section
+  is `ViewConfig` in `src/config/mod.rs`, the read is `App::apply_view_config`
+  plus the one-shot selection restore in `App::load_projects`, and the write
+  is `App::stage_view_state`. Adding a field means touching all three: the
+  restore and the capture are deliberately separate functions, so a field
+  added to one and not the other is written and never read back.
 - To change how input is dispatched, update `src/ui/runtime.rs` and `src/app.rs`.
 
 ## Testing Strategy

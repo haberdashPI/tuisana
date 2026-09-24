@@ -29,6 +29,9 @@ pub struct Config {
     #[serde(skip_serializing_if = "GanttConfig::is_default")]
     pub gantt: GanttConfig,
     #[serde(default)]
+    #[serde(skip_serializing_if = "ViewConfig::is_default")]
+    pub view: ViewConfig,
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
     #[serde(default)]
@@ -48,6 +51,7 @@ impl PartialEq for Config {
         self.header == other.header
             && self.theme == other.theme
             && self.gantt == other.gantt
+            && self.view == other.view
             && self.auth == other.auth
             && self.bind == other.bind
             && self.project_visibility == other.project_visibility
@@ -61,6 +65,7 @@ impl Default for Config {
             header: Header::default(),
             theme: ThemeConfig::default(),
             gantt: GanttConfig::default(),
+            view: ViewConfig::default(),
             auth: None,
             bind: default_bindings(),
             project_visibility: Vec::new(),
@@ -144,6 +149,7 @@ impl Config {
 
         self.theme.validate()?;
         self.gantt.validate()?;
+        self.view.validate()?;
 
         if let Some(auth) = &self.auth {
             auth.validate()?;
@@ -465,6 +471,132 @@ impl GanttConfig {
                     "gantt.order key must be assignee, section, state, or field:<Name>, found {key}"
                 )));
             }
+        }
+
+        Ok(())
+    }
+}
+
+/// How tall the top pane is, in the only three steps worth remembering.
+///
+/// Deliberately not a row count: a pane sized to one terminal is noise in
+/// another, and the thing the user actually chose was "give this pane the
+/// screen" or "give it back".
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TopPaneState {
+    #[default]
+    Normal,
+    Minimized,
+    Maximized,
+}
+
+impl TopPaneState {
+    fn is_default(&self) -> bool {
+        matches!(self, Self::Normal)
+    }
+}
+
+/// The view as it stood when the app last wrote the config.
+///
+/// This is the *serialization* of what the panes and the project list are
+/// showing, written after every settled keystroke that changes it and read
+/// back once at startup. Like `[gantt]`, it is a section the app owns: hand
+/// edits are honoured, but the next keypress that changes the view rewrites
+/// them.
+///
+/// It records what is *open*, never how big it is. `top_pane` is the one
+/// exception, and it is three named states rather than a height — see
+/// [`TopPaneState`]. Scroll offsets, cursor positions, the sort, the
+/// grouping, and the completed filter all stay out, for the same reason
+/// [`GanttConfig`] leaves its timeline window out: they are where you were
+/// looking, not what you had set up.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ViewConfig {
+    /// The named entry the filter panel was bound to, if any.
+    ///
+    /// Only a *saved* panel is recorded. An unnamed one lives nowhere but on
+    /// screen, and writing it here would quietly give it a second home that
+    /// the sidebar never lists.
+    ///
+    /// A name that no longer matches an entry is ignored at startup rather
+    /// than rejected: deleting a `[[filter_set]]` by hand must not make the
+    /// config unloadable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter_set: Option<String>,
+    #[serde(default, skip_serializing_if = "TopPaneState::is_default")]
+    pub top_pane: TopPaneState,
+    /// The task table shares the body with the top pane.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tasks: bool,
+    /// The top pane holds the filter panel rather than the project list.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub filters: bool,
+    /// The `Sets` sidebar down the left of the filter panel.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub filter_sidebar: bool,
+    /// The recently-edited pane, which is on unless it was toggled off.
+    ///
+    /// The toggle, not whether the pane is drawn: it holds what *this*
+    /// session edited, so at startup it is always empty and always hidden.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub recent: bool,
+    /// The selected projects, by gid.
+    ///
+    /// Sorted on write so a selection made in a different order does not
+    /// churn the file. A gid the workspace no longer returns is dropped at
+    /// startup, exactly as a reload drops it from the live selection.
+    ///
+    /// Last, because `toml` cannot emit a value after a table and this is the
+    /// only field here that is not a scalar.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+impl Default for ViewConfig {
+    fn default() -> Self {
+        Self {
+            filter_set: None,
+            top_pane: TopPaneState::default(),
+            tasks: false,
+            filters: false,
+            filter_sidebar: false,
+            recent: true,
+            projects: Vec::new(),
+        }
+    }
+}
+
+impl ViewConfig {
+    /// Returns `true` when nothing has been recorded.
+    ///
+    /// Keeps `[view]` out of a config the app rewrites before the user has
+    /// opened anything, exactly as `[theme]` and `[gantt]` are kept out.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    fn validate(&self) -> Result<()> {
+        if let Some(name) = &self.filter_set {
+            if name.trim().is_empty() {
+                return Err(Error::ConfigValidation(
+                    "view.filter_set must not be empty".to_string(),
+                ));
+            }
+        }
+
+        if self.projects.iter().any(|gid| gid.trim().is_empty()) {
+            return Err(Error::ConfigValidation(
+                "view.projects entries must not be empty".to_string(),
+            ));
         }
 
         Ok(())
@@ -1740,7 +1872,7 @@ name = "Mine"
 
 #[cfg(test)]
 mod theme_config_tests {
-    use super::{Config, GanttConfig, ThemeConfig, ThemeGlyphs, ThemeVariant};
+    use super::{Config, GanttConfig, ThemeConfig, ThemeGlyphs, ThemeVariant, TopPaneState, ViewConfig};
     use crate::domain::GanttColorKey;
 
     #[test]
@@ -1821,6 +1953,80 @@ version = 1.0
         let parsed = Config::from_toml_str(&serialized).expect("reparses");
 
         assert_eq!(parsed.gantt, config.gantt);
+    }
+
+    #[test]
+    fn view_defaults_are_omitted_when_the_config_is_serialized() {
+        // Same rule as `[gantt]`: the app rewrites the whole file, and a
+        // section nobody has touched must not start appearing in it.
+        let serialized = toml::to_string_pretty(&Config::default()).expect("serializes");
+
+        assert!(!serialized.contains("[view]"), "{serialized}");
+    }
+
+    #[test]
+    fn a_recorded_view_survives_a_serialize_round_trip() {
+        let config = Config {
+            view: ViewConfig {
+                filter_set: Some("Overdue mine".to_string()),
+                top_pane: TopPaneState::Maximized,
+                tasks: true,
+                filters: true,
+                filter_sidebar: true,
+                recent: false,
+                projects: vec!["1201".to_string(), "1202".to_string()],
+            },
+            ..Config::default()
+        };
+
+        let serialized = toml::to_string_pretty(&config).expect("serializes");
+        let parsed = Config::from_toml_str(&serialized).expect("reparses");
+
+        assert_eq!(parsed.view, config.view);
+    }
+
+    #[test]
+    fn a_view_section_reads_back_what_it_says_and_defaults_the_rest() {
+        let config = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 1.0
+
+[view]
+tasks = true
+projects = ["1201"]
+"#,
+        )
+        .expect("config parses");
+
+        assert!(config.view.tasks);
+        assert_eq!(config.view.projects, ["1201"]);
+        assert!(!config.view.filters);
+        assert_eq!(config.view.top_pane, TopPaneState::Normal);
+        assert!(
+            config.view.recent,
+            "the recently-edited pane is on unless it was turned off"
+        );
+        assert_eq!(config.view.filter_set, None);
+    }
+
+    #[test]
+    fn rejects_a_view_that_names_an_empty_filter_set_or_project() {
+        for (body, expected) in [
+            ("filter_set = \"  \"", "view.filter_set"),
+            ("projects = [\"\"]", "view.projects"),
+        ] {
+            let error = Config::from_toml_str(&format!(
+                "[header]\ntype = \"tuisana\"\nversion = 1.0\n\n[view]\n{body}\n"
+            ))
+            .expect_err("an empty name is rejected");
+
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected error: {error}"
+            );
+        }
     }
 
     #[test]

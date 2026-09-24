@@ -398,8 +398,8 @@ The top window is shared between the project list and the filter view. When the 
 
 - `j`/`k` to move between filter fields
 - `enter` to start editing the selected field
-- `esc` to close the panel and return to task mode
-- `f` to toggle the filter panel
+- `esc` to return to task mode, leaving the panel on screen
+- `f` to close the panel and go back to the task table
 - `s` to cycle the string-match mode
 - `e` to require the field to be empty (`ctrl-q` while editing)
 - `a` to add a filter set, `x` to remove the current one, `h`/`l` to move between
@@ -411,6 +411,12 @@ The top window is shared between the project list and the filter view. When the 
 - `n` to start a completely fresh panel
 - `ctrl-l` to clear the search string
 - `ctrl-z`, `ctrl-s`, `ctrl-r` to switch search mode
+
+The panel does not close when the keys leave it. `esc`, `t`, and `m` move the
+cursor to the task table with the filters still up top, unfocused — the filters
+you just built are usually what you are reading the table against. `f` closes
+the panel and `p` swaps the project list back in, so putting it away is still
+one keystroke.
 
 The panel's fields are `Title`, `Assignee`, `Due`, `Start`, `State`, `Projects`,
 and one row per custom field. `Title` and `Assignee` match fuzzily by default —
@@ -874,6 +880,40 @@ name = "Sprint triage"
 - `empty = true` is "has no value", the same filter `e` sets. It is ignored on
   a row that cannot be empty, such as `state`.
 - `negated = true` on a field inverts that row's verdict alone.
+
+### Saved view state
+
+The optional `[view]` section is where tuisana leaves the screen as you found
+it. It is written by the app after any keystroke that changes what is open,
+and read back once at startup. You can edit it by hand; the next keypress that
+moves a pane rewrites it.
+
+```toml
+[view]
+filter_set = "Sprint triage"   # the named entry the filter panel is bound to
+top_pane = "normal"            # "normal" | "minimized" | "maximized"
+tasks = true                   # the task table is open
+filters = true                 # the top pane holds the filter panel
+filter_sidebar = false         # the `Sets` sidebar beside it
+recent = true                  # the recently-edited pane is switched on
+projects = ["123", "456"]      # the selected projects, by GID
+```
+
+- `projects` is the selection, not the visibility — `[[project]]` below is
+  what decides which projects are listed at all. A GID the workspace no longer
+  returns is dropped at startup, the same way a reload drops it from the live
+  selection. Restoring a selection with `tasks = true` starts the fetch for it.
+- `filter_set` must name a `[[filter_set]]` entry. The panel comes back
+  **bound** to it, so editing a field still writes through. An unnamed panel
+  records nothing here, and a name whose entry has been deleted is ignored.
+- `top_pane` is the only size that is kept, and only as one of three states.
+  The height you resized a pane to is not saved: a pane sized to one terminal
+  is noise in another. `"minimized"` starts in the task table, the same way
+  `{` moves there as it minimizes — there would be nothing else on screen.
+- Everything else stays out, for the same reason the Gantt chart's timeline
+  window does. Scroll offsets, the cursor, the sort, the grouping, the
+  completed filter, and which pane had focus are where you were looking, not
+  what you had set up.
 
 ### Project visibility
 
