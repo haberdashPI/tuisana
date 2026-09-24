@@ -74,13 +74,7 @@ impl Transport for ReqwestTransport {
             .send()
             .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
 
-        let response = response
-            .error_for_status()
-            .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
-
-        response
-            .json::<Value>()
-            .map_err(|err| Error::Backend(format!("failed to decode asana response: {err}")))
+        decode(response, path)
     }
 
     fn put_json(&self, path: &str, body: &Value, token: &str) -> Result<Value> {
@@ -98,13 +92,7 @@ impl Transport for ReqwestTransport {
             .send()
             .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
 
-        let response = response
-            .error_for_status()
-            .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
-
-        response
-            .json::<Value>()
-            .map_err(|err| Error::Backend(format!("failed to decode asana response: {err}")))
+        decode(response, path)
     }
 
     fn post_json(&self, path: &str, body: &Value, token: &str) -> Result<Value> {
@@ -122,14 +110,51 @@ impl Transport for ReqwestTransport {
             .send()
             .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
 
-        let response = response
-            .error_for_status()
-            .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
-
-        response
-            .json::<Value>()
-            .map_err(|err| Error::Backend(format!("failed to decode asana response: {err}")))
+        decode(response, path)
     }
+}
+
+/// Turns a response into JSON, or into an error carrying what Asana said.
+///
+/// `error_for_status` reports only the status and the request URL, and an
+/// Asana URL drags the whole `opt_fields` list behind it — a hundred
+/// characters of field names where the one sentence explaining the refusal
+/// should be. That sentence is in the body, so the body is read before the
+/// status is turned into an error.
+fn decode(response: reqwest::blocking::Response, path: &str) -> Result<Value> {
+    let status = response.status();
+    if status.is_success() {
+        return response
+            .json::<Value>()
+            .map_err(|err| Error::Backend(format!("failed to decode asana response: {err}")));
+    }
+
+    let detail = response
+        .text()
+        .ok()
+        .and_then(|body| asana_error_message(&body))
+        .unwrap_or_default();
+    let path = path.split('?').next().unwrap_or(path);
+    Err(Error::Backend(format!(
+        "asana request failed: {status} for {path}{detail}"
+    )))
+}
+
+/// Pulls the human-readable part out of an Asana error response.
+///
+/// Asana answers a refusal with `{"errors": [{"message": ...}]}`; anything
+/// else — an HTML gateway page, an empty body — is dropped rather than shown,
+/// since the status already says as much as it would.
+fn asana_error_message(body: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(body).ok()?;
+    let messages = value
+        .get("errors")?
+        .as_array()?
+        .iter()
+        .filter_map(|error| error.get("message")?.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+    (!messages.is_empty()).then(|| format!(": {messages}"))
 }
 
 /// The `data` object one field change sends.
@@ -144,6 +169,8 @@ fn update_body(edit: &TaskFieldEdit) -> Value {
         TaskFieldEdit::Name(name) => json!({ "name": name }),
         TaskFieldEdit::Completed(completed) => json!({ "completed": completed }),
         TaskFieldEdit::Due(date) => json!({ "due_on": date }),
+        // The due date `start_on` has to be sent with is added by the
+        // caller, which is the only place that knows it.
         TaskFieldEdit::Start(date) => json!({ "start_on": date }),
         TaskFieldEdit::Assignee(assignee) => {
             json!({ "assignee": assignee.as_ref().map(|assignee| assignee.handle.clone()) })
@@ -191,6 +218,29 @@ impl<T: Transport> HttpAsanaClient<T> {
             transport,
             personal_access_token: personal_access_token.into(),
             workspace_gid,
+        }
+    }
+
+    /// Reads back the due date a start-date write has to restate.
+    ///
+    /// Asana refuses any request that sets or clears `start_on` without also
+    /// naming `due_on` or `due_at`, so a start-date edit has to carry the due
+    /// date the task already holds. It is read from the server rather than
+    /// from the loaded record because a stale local copy would not merely
+    /// fail — it would quietly move the due date. `due_at` wins when the task
+    /// has one: sending `due_on` for a task due at a time of day would drop
+    /// the time.
+    fn current_due(&self, task_gid: &str) -> Result<(&'static str, Value)> {
+        let json = self.transport.get_json(
+            &format!("tasks/{task_gid}"),
+            &[("opt_fields", "due_on,due_at".to_string())],
+            &self.personal_access_token,
+        )?;
+        let data = &json["data"];
+
+        match data.get("due_at") {
+            Some(due_at) if !due_at.is_null() => Ok(("due_at", due_at.clone())),
+            _ => Ok(("due_on", data.get("due_on").cloned().unwrap_or(Value::Null))),
         }
     }
 
@@ -466,7 +516,15 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
     }
 
     fn update_task(&self, task_gid: &str, edit: &TaskFieldEdit) -> Result<TaskDto> {
-        let body = serde_json::json!({ "data": update_body(edit) });
+        let mut data = update_body(edit);
+        if matches!(edit, TaskFieldEdit::Start(_)) {
+            let (key, due) = self.current_due(task_gid)?;
+            if let Some(data) = data.as_object_mut() {
+                data.insert(key.to_string(), due);
+            }
+        }
+
+        let body = serde_json::json!({ "data": data });
         let json = self.transport.put_json(
             &format!("tasks/{task_gid}?opt_fields={TASK_OPT_FIELDS}"),
             &body,
@@ -529,7 +587,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{HttpAsanaClient, Transport, TASK_OPT_FIELDS};
+    use super::{asana_error_message, HttpAsanaClient, Transport, TASK_OPT_FIELDS};
     use crate::asana::{AsanaClient, TaskLoadScope, TaskQuery};
     use crate::domain::TaskFieldEdit;
     use crate::error::{Error, Result};
@@ -733,6 +791,78 @@ mod tests {
         assert_eq!(
             puts[2].1,
             json!({ "data": { "custom_fields": { "cf1": null } } })
+        );
+    }
+
+    /// Asana refuses `start_on` on its own: the due date has to ride along,
+    /// or the write comes back 400 and the start date never moves.
+    #[test]
+    fn a_start_date_write_restates_the_due_date() {
+        let transport = MockTransport::new(vec![
+            json!({ "data": { "gid": "t1", "due_on": "2026-09-30", "due_at": null } }),
+            json!({ "data": { "gid": "t1", "name": "Ship" } }),
+        ]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        client
+            .update_task("t1", &TaskFieldEdit::Start(None))
+            .expect("the start date clears");
+
+        let (path, query, _) = client.transport.requests.borrow()[0].clone();
+        assert_eq!(path, "tasks/t1");
+        assert_eq!(
+            query,
+            vec![("opt_fields".to_string(), "due_on,due_at".to_string())]
+        );
+        assert_eq!(
+            client.transport.puts.borrow()[0].1,
+            json!({ "data": { "start_on": null, "due_on": "2026-09-30" } })
+        );
+    }
+
+    /// Restating a timed due date as `due_on` would drop the time, so the
+    /// write names `due_at` whenever the task has one.
+    #[test]
+    fn a_start_date_write_keeps_a_due_time_intact() {
+        let transport = MockTransport::new(vec![
+            json!({
+                "data": {
+                    "gid": "t1",
+                    "due_on": "2026-09-30",
+                    "due_at": "2026-09-30T17:00:00.000Z"
+                }
+            }),
+            json!({ "data": { "gid": "t1", "name": "Ship" } }),
+        ]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        client
+            .update_task("t1", &TaskFieldEdit::Start(Some("2026-09-01".to_string())))
+            .expect("the start date sets");
+
+        assert_eq!(
+            client.transport.puts.borrow()[0].1,
+            json!({
+                "data": { "start_on": "2026-09-01", "due_at": "2026-09-30T17:00:00.000Z" }
+            })
+        );
+    }
+
+    #[test]
+    fn a_refusal_is_reported_in_asanas_own_words() {
+        let body = json!({
+            "errors": [{ "message": "due_on: Must be present when setting start_on" }]
+        })
+        .to_string();
+
+        assert_eq!(
+            asana_error_message(&body).expect("a message"),
+            ": due_on: Must be present when setting start_on"
+        );
+        assert_eq!(asana_error_message("<html>502</html>"), None);
+        assert_eq!(
+            asana_error_message(&json!({ "errors": [] }).to_string()),
+            None
         );
     }
 

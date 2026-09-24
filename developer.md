@@ -97,6 +97,12 @@ a convention.
   them. The candidates arrive through `EditContext` — the project list belongs
   to the other pane, and the workspace directory is one `list_users` cached on
   `App` for the session — so the editor stays testable without a backend.
+- A **start date is never written alone**. Asana rejects any request that
+  sets or clears `start_on` without also naming `due_on` or `due_at`, so
+  `HttpAsanaClient::update_task` reads the task's current due date back and
+  restates it in the same body. It reads it from the server rather than from
+  the cached record: a stale local copy would not just fail the write, it
+  would quietly move the due date.
 - Project membership is not a field on the task, so a commit resolves to
   `ProjectEdit`s rather than `TaskFieldEdit`s and goes out through
   `addProject` / `removeProject`. Both kinds share one write channel, one
