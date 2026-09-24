@@ -1011,11 +1011,14 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 return Ok(None);
             }
             Action::CalendarClear => {
-                // The picker stays open on a task date: `d` empties the value
-                // and `enter` is still what sends it, so clearing a date is
-                // one key-path rather than two.
+                // On a task date `d` is the whole gesture: it empties the
+                // value and sends it. Leaving the picker open would strand
+                // the user, since `enter` normalizes an empty query back into
+                // the highlighted day and would quietly re-set the date they
+                // just cleared.
                 if self.tasks.cell_edit_owns_calendar() {
                     self.tasks.calendar_clear_text();
+                    self.commit_open_cell_edit();
                     return Ok(None);
                 }
                 self.tasks.filter_calendar_clear();

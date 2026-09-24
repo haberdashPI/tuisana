@@ -290,11 +290,15 @@ fn a_task_moved_out_of_the_project_in_view_lands_in_the_recently_edited_pane() {
     session.press(KeyCode::Tab, KeyModifiers::NONE);
     session.press(KeyCode::Enter, KeyModifiers::NONE);
 
+    // Sorted, because the two requests go out on their own threads and the
+    // fake logs them in whatever order they land.
+    let mut sent = session.project_updates();
+    sent.sort_by_key(|edit| edit.project_gid.clone());
     assert_eq!(
-        session.project_updates(),
+        sent,
         vec![
-            ProjectEdit::add("t1", "project-2", "Backlog"),
             ProjectEdit::remove("t1", "project-1", "Inbox"),
+            ProjectEdit::add("t1", "project-2", "Backlog"),
         ],
         "one request each way, and no task field was touched"
     );
@@ -439,6 +443,33 @@ fn a_due_date_is_picked_on_the_calendar_and_committed_with_enter() {
         vec![("t1".to_string(), TaskFieldEdit::Due(Some(today)))]
     );
     assert_eq!(session.app.mode(), tuisana::config::Mode::Task);
+}
+
+#[test]
+fn clearing_a_date_on_the_calendar_sends_the_cleared_value_and_closes() {
+    let mut session = Session::start();
+
+    // Put a date on the cell first, so clearing has something to undo.
+    session.press(KeyCode::Char('l'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('l'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('t'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(session.cell("t1", 2), tuisana::domain::today().iso());
+
+    // `d` in the picker clears and saves in one gesture: leaving it open
+    // would mean `enter` filled the highlighted day back in.
+    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Calendar);
+    session.press(KeyCode::Char('d'), KeyModifiers::NONE);
+
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Task);
+    assert!(!session.app.tasks.cell_edit_open());
+    assert_eq!(session.cell("t1", 2), "");
+    assert_eq!(
+        session.updates().last(),
+        Some(&("t1".to_string(), TaskFieldEdit::Due(None)))
+    );
 }
 
 #[test]

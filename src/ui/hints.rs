@@ -193,12 +193,12 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
             // The same keys, one layer over: on a task cell `enter` sends a
             // write and `esc` throws the edit away, so they are not "pick"
             // and "close".
-            let (commit, close) = match context.on_task_cell {
-                true => ("save", "cancel"),
-                false => ("pick", "close"),
+            let (commit, close, clear) = match context.on_task_cell {
+                true => ("save", "cancel", "clear and save"),
+                false => ("pick", "close", "clear"),
             };
             hints.push(Hint::new(&[Action::CalendarCommit], commit));
-            hints.push(Hint::new(&[Action::CalendarClear], "clear"));
+            hints.push(Hint::new(&[Action::CalendarClear], clear));
             hints.push(Hint::new(&[Action::CalendarClose], close));
             hints
         }

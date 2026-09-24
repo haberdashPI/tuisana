@@ -2531,8 +2531,8 @@ impl TaskState {
 
     /// Empties the text the picker is editing, leaving it open.
     ///
-    /// The task-cell half of `d`: the value goes, the picker stays, and
-    /// `enter` is still what sends the cleared date.
+    /// The first half of the task-cell `d`: the caller follows it with the
+    /// commit that sends the cleared date and closes the picker.
     pub(crate) fn calendar_clear_text(&mut self) {
         self.with_calendar(|calendar| calendar.clear());
     }
