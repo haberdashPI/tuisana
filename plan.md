@@ -70,6 +70,7 @@ Top-level source layout:
 - `src/app/task_review.rs`
 - `src/app/task_edit.rs`
 - `src/app/text_edit.rs`
+- `src/app/autocomplete.rs`
 - `src/ui/project_list.rs`
 - `src/ui/task_table.rs`
 - `src/ui/help_overlay.rs`
@@ -127,6 +128,7 @@ along the way.
 | 13 | [Filter sets](plan/13-filter-sets.md) | ✓ |
 | 13.5 | [Named filter sets](plan/13.5-named-filter-sets.md) | ✓ |
 | 14 | [Edit task fields](plan/14-edit-tasks.md) | ✓ |
+| 14.5 | [Assign people and projects](plan/14.5-assign-people-and-projects.md) | ✓ |
 | 15 | [Hardening and polish](plan/15-hardening-and-polish.md) |  |
 
 ## Testing Strategy

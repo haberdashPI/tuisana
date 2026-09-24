@@ -189,6 +189,15 @@ impl ProjectListState {
         state
     }
 
+    /// Every project loaded, including the hidden ones.
+    ///
+    /// The completion editor's candidate list: a task can be in a project
+    /// that is hidden from the list or not currently selected, and one you
+    /// cannot type is one you cannot move a task into.
+    pub fn all_projects(&self) -> &[Project] {
+        &self.all_projects
+    }
+
     pub fn items(&self) -> Vec<&Project> {
         self.visible_project_indices
             .iter()
@@ -814,6 +823,14 @@ mod tests {
         }
 
         fn get_task(&self, _task_gid: &str) -> Result<crate::asana::dto::TaskDto> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
+        fn update_task_project(&self, _edit: &crate::domain::ProjectEdit) -> Result<()> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
+        fn list_users(&self) -> Result<Vec<crate::asana::dto::UserDto>> {
             Err(Error::Backend("backend unavailable".to_string()))
         }
 

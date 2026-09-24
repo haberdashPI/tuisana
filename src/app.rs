@@ -1,7 +1,7 @@
 use crate::{
-    asana::{dto::TaskDto, AsanaClient, TaskQuery, TaskTarget},
+    asana::{AsanaClient, TaskQuery, TaskTarget},
     config::{Config, Mode, NamedFilterSet},
-    domain::{Project, ProjectKind, TaskEdit},
+    domain::{Project, ProjectEdit, ProjectKind, TaskEdit},
     error::Result,
     input::{Action, AppCommand, KeyBinding, KeyMap},
 };
@@ -11,6 +11,7 @@ use std::{
     thread,
 };
 
+pub mod autocomplete;
 pub mod calendar;
 pub mod gantt;
 pub mod project_list;
@@ -156,12 +157,44 @@ pub struct App<C> {
     task_edit_error: Option<String>,
     /// The logged-in user's gid, for resolving `me` in an assignee edit.
     current_user_gid: Option<String>,
+    /// The workspace directory, fetched once and kept for the session.
+    ///
+    /// `None` until the first editor that needs it opens: most sessions never
+    /// reassign anything, and a request nobody needed is a request not worth
+    /// making at startup. A failure leaves it `Some(empty)` rather than
+    /// `None`, so a workspace that will not answer is asked exactly once.
+    people: Option<Vec<(String, String)>>,
+}
+
+/// One write still in flight, in the shape its rollback needs.
+///
+/// A field edit and a membership change go to different endpoints and come
+/// back with different things, but they are counted, reported, and rolled
+/// back as one burst — twelve failures are one border chip whichever kind
+/// they were.
+#[derive(Clone, Debug)]
+enum PendingEdit {
+    Field(TaskEdit),
+    Project(ProjectEdit),
+}
+
+impl PendingEdit {
+    fn gid(&self) -> &str {
+        match self {
+            Self::Field(edit) => &edit.gid,
+            Self::Project(edit) => &edit.gid,
+        }
+    }
 }
 
 /// One finished write, on its way back to the main thread.
 struct TaskEditMessage {
-    edit: TaskEdit,
-    result: Result<TaskDto>,
+    edit: PendingEdit,
+    /// The server's `modified_at` on success, when the endpoint reports one.
+    ///
+    /// `addProject` answers with nothing worth keeping, so a membership
+    /// change succeeds with `None` — and takes no timestamp with it.
+    result: Result<Option<String>>,
 }
 
 /// One of the shared text motions, for [`App::move_text_caret`].
@@ -204,6 +237,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             task_edit_failures: 0,
             task_edit_error: None,
             current_user_gid: None,
+            people: None,
         }
     }
 
@@ -217,6 +251,9 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         let assigned_to_me = match self.client.current_user_gid() {
             Ok(gid) => {
                 self.current_user_gid = Some(gid.clone());
+                // The filter's `me` resolves at match time, far from here, so
+                // the task pane keeps its own copy.
+                self.tasks.set_current_user_gid(Some(gid.clone()));
                 Some(Project::assigned_to_me(gid))
             }
             Err(err) => {
@@ -317,7 +354,46 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             self.tasks.toggle_filter_panel();
         }
         if !self.tasks.filter_panel_editing() {
+            self.begin_filter_field_edit();
+        }
+    }
+
+    /// Starts editing the selected filter row, with its candidates when the
+    /// row is one that has any.
+    ///
+    /// The directory is fetched only for the row that can use it: every other
+    /// row is free text, and a request to open one of those would be a
+    /// request for nothing.
+    fn begin_filter_field_edit(&mut self) {
+        if !self.tasks.filter_row_completes() {
             self.tasks.filter_edit_begin();
+            return;
+        }
+        let context = self.edit_context();
+        let candidates = self.tasks.people_candidates(&context);
+        self.tasks.filter_edit_begin_with(candidates);
+    }
+
+    /// Resolves whatever the panel's completion editor still holds.
+    fn finish_filter_completion(&mut self) {
+        if let Some(message) = self.tasks.filter_autocomplete_commit() {
+            self.tasks.set_edit_notice(message);
+        }
+    }
+
+    /// `tab`: completes the prefix in whichever editor is open.
+    fn complete_candidate(&mut self, delta: i32) {
+        let (open, completed) = match self.tasks.cell_edit_is_complete() {
+            true => (true, self.tasks.cell_edit_complete(delta)),
+            false => (
+                self.tasks.filter_autocomplete_open(),
+                self.tasks.filter_complete(delta),
+            ),
+        };
+        // A prefix that matches nothing is worth saying so: the key looked
+        // like it did nothing, and the reason is that there is nothing to do.
+        if open && !completed {
+            self.tasks.set_edit_notice("nothing to complete");
         }
     }
 
@@ -660,7 +736,8 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         let context = self.edit_context();
         match self.tasks.commit_cell_edit(&context) {
             Ok(edits) => {
-                self.dispatch_task_edits(edits);
+                self.dispatch_task_edits(edits.fields);
+                self.dispatch_project_edits(edits.projects);
                 self.set_task_mode();
             }
             Err(message) => self.tasks.set_edit_notice(message),
@@ -880,9 +957,17 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 if self.tasks.filter_calendar_begin() {
                     self.set_calendar_mode();
                 } else {
-                    self.tasks.filter_edit_begin();
+                    self.begin_filter_field_edit();
                     self.set_filter_edit_mode();
                 }
+                return Ok(None);
+            }
+            Action::ToggleRecentPane => {
+                self.tasks.toggle_recent_pane();
+                return Ok(None);
+            }
+            Action::CompleteCandidate(delta) => {
+                self.complete_candidate(*delta);
                 return Ok(None);
             }
             Action::CalendarCommit => {
@@ -959,6 +1044,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 return Ok(None);
             }
             Action::FilterDoneEditing => {
+                self.finish_filter_completion();
                 self.tasks.filter_calendar_close();
                 self.tasks.filter_edit_done();
                 self.set_filter_mode();
@@ -966,6 +1052,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 return Ok(None);
             }
             Action::FilterCancelEditing => {
+                self.finish_filter_completion();
                 self.tasks.filter_calendar_close();
                 self.tasks.filter_edit_done();
                 self.tasks.toggle_filter_panel();
@@ -1412,11 +1499,47 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     }
 
     /// What resolving an edit needs that the task pane does not own.
-    fn edit_context(&self) -> crate::app::task_edit::EditContext {
+    fn edit_context(&mut self) -> crate::app::task_edit::EditContext {
         crate::app::task_edit::EditContext {
             today: Some(crate::domain::today()),
             current_user_gid: self.current_user_gid.clone(),
+            projects: self
+                .projects
+                .all_projects()
+                .iter()
+                .filter(|project| matches!(project.kind, ProjectKind::Normal))
+                .map(|project| (project.id.clone(), project.name.clone()))
+                .collect(),
+            people: self.people_directory(),
         }
+    }
+
+    /// The workspace directory, fetched at most once per session.
+    ///
+    /// Synchronous, unlike the task fetch: it happens when an editor opens
+    /// rather than while the user is reading, it is one request, and an
+    /// editor that opened without its candidates would be an editor that
+    /// refuses every name typed into it.
+    fn people_directory(&mut self) -> Vec<(String, String)> {
+        if let Some(people) = &self.people {
+            return people.clone();
+        }
+
+        let people = match self.client.list_users() {
+            Ok(users) => users
+                .into_iter()
+                .filter_map(|user| Some((user.gid, user.name.or(user.display_name)?)))
+                .collect(),
+            Err(err) => {
+                // Not fatal and not retried: the picker falls back to the
+                // people the loaded tasks name, and a workspace that will not
+                // answer will not answer on the next keystroke either.
+                debug_log(&format!("user directory unavailable: {err}"));
+                Vec::new()
+            }
+        };
+        self.people = Some(people.clone());
+        people
     }
 
     /// Applies a batch of edits locally, then sends each one in the background.
@@ -1430,17 +1553,49 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
 
         self.tasks.clear_edit_notice();
         self.tasks.apply_edits_locally(&edits);
-        self.task_edits_sent += edits.len();
-        self.task_edits_outstanding += edits.len();
+        self.begin_writes(edits.len());
 
         for edit in edits {
             let client = self.client.clone();
             let sender = self.task_edit_events.0.clone();
             thread::spawn(move || {
-                let result = client.update_task(&edit.gid, &edit.field);
-                let _ = sender.send(TaskEditMessage { edit, result });
+                let result = client
+                    .update_task(&edit.gid, &edit.field)
+                    .map(|task| task.modified_at);
+                let _ = sender.send(TaskEditMessage {
+                    edit: PendingEdit::Field(edit),
+                    result,
+                });
             });
         }
+    }
+
+    /// The same, for membership changes: one request per project, per task.
+    fn dispatch_project_edits(&mut self, edits: Vec<ProjectEdit>) {
+        if edits.is_empty() {
+            return;
+        }
+
+        self.tasks.clear_edit_notice();
+        self.tasks.apply_project_edits_locally(&edits);
+        self.begin_writes(edits.len());
+
+        for edit in edits {
+            let client = self.client.clone();
+            let sender = self.task_edit_events.0.clone();
+            thread::spawn(move || {
+                let result = client.update_task_project(&edit).map(|()| None);
+                let _ = sender.send(TaskEditMessage {
+                    edit: PendingEdit::Project(edit),
+                    result,
+                });
+            });
+        }
+    }
+
+    fn begin_writes(&mut self, count: usize) {
+        self.task_edits_sent += count;
+        self.task_edits_outstanding += count;
     }
 
     /// Reconciles whatever writes have come back.
@@ -1475,7 +1630,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         self.task_edits_outstanding = self.task_edits_outstanding.saturating_sub(1);
 
         match message.result {
-            Ok(task) => self.tasks.confirm_edit(&message.edit.gid, task.modified_at),
+            Ok(modified_at) => self.tasks.confirm_edit(message.edit.gid(), modified_at),
             Err(err) => {
                 debug_log(&format!("task write failed: {err}"));
                 self.task_edit_failures += 1;
@@ -1483,12 +1638,19 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 // Optimism is worth it — nearly every write succeeds — but an
                 // optimistic update that quietly diverges from the server is
                 // worse than either, so the rollback is not optional.
-                let rollback = TaskEdit {
-                    gid: message.edit.gid.clone(),
-                    field: message.edit.previous.clone(),
-                    previous: message.edit.field.clone(),
-                };
-                self.tasks.apply_edit_locally(&rollback);
+                match &message.edit {
+                    PendingEdit::Field(edit) => {
+                        let rollback = TaskEdit {
+                            gid: edit.gid.clone(),
+                            field: edit.previous.clone(),
+                            previous: edit.field.clone(),
+                        };
+                        self.tasks.apply_edit_locally(&rollback);
+                    }
+                    PendingEdit::Project(edit) => {
+                        self.tasks.apply_project_edits_locally(&[edit.undo()]);
+                    }
+                }
             }
         }
 

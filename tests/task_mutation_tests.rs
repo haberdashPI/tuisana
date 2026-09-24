@@ -133,7 +133,8 @@ fn a_custom_field_write_uses_the_gid_from_the_tasks_own_project() {
     state.move_column(priority as i64);
     state.begin_cell_edit(&EditContext::default()).expect("the picker opens");
     state.cell_edit_cycle_value(-1);
-    let edits = state.commit_cell_edit(&EditContext::default()).expect("the option resolves");
+    let edits = state.commit_cell_edit(&EditContext::default()).expect("the option resolves")
+        .fields;
 
     assert_eq!(edits.len(), 1);
     assert_eq!(edits[0].gid, "b1");
@@ -164,7 +165,8 @@ fn the_same_edit_on_the_other_projects_task_names_the_other_gid() {
     state.move_column(priority as i64);
     state.begin_cell_edit(&EditContext::default()).expect("the picker opens");
     state.cell_edit_cycle_value(-1);
-    let edits = state.commit_cell_edit(&EditContext::default()).expect("the option resolves");
+    let edits = state.commit_cell_edit(&EditContext::default()).expect("the option resolves")
+        .fields;
 
     assert_eq!(
         edits[0].field,
@@ -192,7 +194,8 @@ fn clearing_a_custom_field_sends_no_value_rather_than_leaving_it_alone() {
     state.move_column(priority as i64);
     state.begin_cell_edit(&EditContext::default()).expect("the picker opens");
     state.cell_edit_clear();
-    let edits = state.commit_cell_edit(&EditContext::default()).expect("an empty value resolves");
+    let edits = state.commit_cell_edit(&EditContext::default()).expect("an empty value resolves")
+        .fields;
 
     assert_eq!(
         edits[0].field,

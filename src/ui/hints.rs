@@ -87,6 +87,11 @@ pub struct HintContext {
     pub on_task_cell: bool,
     /// The open cell editor is a value picker, which reads `j`/`k`.
     pub task_edit_is_options: bool,
+    /// The open editor completes over a list of names, so `tab` does
+    /// something.
+    pub task_edit_completes: bool,
+    /// The recently-edited pane has rows, so the toggle can do something.
+    pub has_recent_edits: bool,
 }
 
 /// Hints shown on the right of the bar in every mode.
@@ -285,6 +290,11 @@ fn task_hints(context: HintContext) -> Vec<Hint> {
         ));
     }
     hints.push(Hint::new(&[Action::SetGanttMode], "gantt"));
+    // Only once there is a pane to toggle: with nothing edited out of view
+    // the key is a no-op, and a hint for a no-op is a hint in the way.
+    if context.has_recent_edits {
+        hints.push(Hint::new(&[Action::ToggleRecentPane], "recent"));
+    }
     hints.push(Hint::new(&[Action::ToggleCompletedFilter], "completed"));
     hints.push(Hint::new(&[Action::ToggleHelpDetails], "help"));
     hints
@@ -310,6 +320,22 @@ fn task_edit_hints(context: HintContext) -> Vec<Hint> {
         hints.push(Hint::new(&[Action::TaskEditClear], "clear"));
         return hints;
     }
+    // Ahead of the caret motions: on a field whose values are a closed set,
+    // completing is the whole interaction and typing is only how you narrow
+    // it.
+    if context.task_edit_completes {
+        hints.push(Hint::new(
+            &[
+                Action::CompleteCandidate(1),
+                Action::CompleteCandidate(-1),
+            ],
+            "complete",
+        ));
+        // A literal, unlike every other hint here: `d` is bound to the same
+        // action but types its letter into a field that reads text, so
+        // naming both keys would advertise one that does something else.
+        hints.push(Hint::literal("^l", "clear"));
+    }
     hints.push(Hint::new(
         &[Action::TextCaretWordBack, Action::TextCaretWordForward],
         "word",
@@ -327,6 +353,15 @@ fn filter_edit_hints(context: HintContext) -> Vec<Hint> {
         Hint::new(&[Action::FilterDoneEditing], "done"),
         Hint::new(&[Action::FilterCancelEditing], "cancel"),
     ];
+    if context.task_edit_completes {
+        hints.push(Hint::new(
+            &[
+                Action::CompleteCandidate(1),
+                Action::CompleteCandidate(-1),
+            ],
+            "complete",
+        ));
+    }
     if context.on_label_filter {
         hints.push(Hint::new(
             &[Action::FilterCycleLabelDown, Action::FilterCycleLabelUp],
@@ -477,6 +512,10 @@ pub fn key_text(key: &KeyBinding, glyphs: &GlyphSet) -> String {
         KeyBinding::Enter => "enter".to_string(),
         KeyBinding::Esc => "esc".to_string(),
         KeyBinding::Backspace => "bksp".to_string(),
+        KeyBinding::Tab if unicode => "⇥".to_string(),
+        KeyBinding::Tab => "tab".to_string(),
+        KeyBinding::BackTab if unicode => "⇤".to_string(),
+        KeyBinding::BackTab => "shift-tab".to_string(),
         KeyBinding::Home => "home".to_string(),
         KeyBinding::End => "end".to_string(),
         KeyBinding::Left => "left".to_string(),

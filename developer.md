@@ -20,6 +20,8 @@ This file is the quickest way to understand the codebase without reading everyth
     the parsing that turns a typed cell into it.
 14. `src/app/task_edit.rs` owns the open cell edit; `src/app/text_edit.rs` is
     the one-line text buffer every editable field runs on.
+15. `src/app/autocomplete.rs` is the completion state machine behind
+    `Assignee`, `Projects`, and the filter panel's `list` match mode.
 
 The async task-data path is split across two modules:
 
@@ -89,6 +91,22 @@ a convention.
   exists once per project, with a different gid in each, and the table shows
   one column for it — so a write resolves the gid from the task's own project,
   per task, at commit time.
+- `Assignee` and `Projects` are references, not text: both run
+  `AutocompleteState`, which holds a list of picked items over a supplied list
+  of `(handle, display)` candidates and refuses anything that is not one of
+  them. The candidates arrive through `EditContext` — the project list belongs
+  to the other pane, and the workspace directory is one `list_users` cached on
+  `App` for the session — so the editor stays testable without a backend.
+- Project membership is not a field on the task, so a commit resolves to
+  `ProjectEdit`s rather than `TaskFieldEdit`s and goes out through
+  `addProject` / `removeProject`. Both kinds share one write channel, one
+  burst counter, and one rollback path: see `PendingEdit` in `src/app.rs`.
+- The **recently-edited pane** is the price of those two edits: they are the
+  ones most likely to make a row vanish. `TaskViewState` keeps the gids, and
+  `refresh_table` rebuilds the pane from them right after the table, because
+  what the pane holds is defined by what the table stopped showing. The cursor
+  is one cursor over two lists — `recent_selected` is `Some` when the keys act
+  on the pane — and `cursor_task_gid` is what every edit path asks.
 - `FakeAsanaClient` is the test backend for deterministic state transitions.
 
 ## Common Change Paths
@@ -102,6 +120,13 @@ a convention.
   parsing in `src/domain/task_edit.rs`, the keys in `App::handle_action`
   (`Mode::TaskEdit`), and the drawing in `cell_spans` in
   `src/ui/task_table.rs`.
+- To change how a name is completed, start in `src/app/autocomplete.rs`; the
+  candidate overlay is `src/ui/completion.rs` and is drawn for whichever of
+  the two callers has an editor open (`TaskState::open_completion`).
+- To change the recently-edited pane, start at `rebuild_recent_table` and the
+  cursor handoff in `refresh_table` (`src/app/task.rs`); its geometry is
+  `split_recent` in `src/ui/layout.rs` and it renders through
+  `task_table::recent_pane_view`, which clones the table's own widths.
 - To change the named-set sidebar, start in `src/ui/filter_sets.rs`. Its split
   from the filter panel lives there too, in `split_sidebar`, not in `layout`:
   the sidebar belongs to the panel rather than to the frame.

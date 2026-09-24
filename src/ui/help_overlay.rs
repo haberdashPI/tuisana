@@ -154,6 +154,13 @@ fn task_groups() -> Vec<HelpGroup> {
                     "pick a value",
                 ),
                 Hint::new(&[Action::TaskEditClear], "clear the value"),
+                Hint::new(
+                    &[
+                        Action::CompleteCandidate(1),
+                        Action::CompleteCandidate(-1),
+                    ],
+                    "complete a name",
+                ),
             ],
         ),
         HelpGroup::new(
@@ -164,6 +171,7 @@ fn task_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::ToggleCompletedFilter], "open / done / all"),
                 Hint::new(&[Action::ToggleSubtaskVisibility], "subtasks"),
                 Hint::new(&[Action::ScrollLeft, Action::ScrollRight], "scroll columns"),
+                Hint::new(&[Action::ToggleRecentPane], "recently edited"),
             ],
         ),
     ]

@@ -449,6 +449,15 @@ key = "d"
 mode = "task"
 command = "toggle_task_completed"
 
+# The recently-edited pane, between the project list and the table: the tasks
+# an edit has pushed out of the current filter. Same letter the filter pane
+# uses for its sidebar — both are "show me the panel beside this one".
+
+[[bind]]
+key = "b"
+mode = "task"
+command = "toggle_recent_pane"
+
 # "task_edit" mode is a cell open for editing. Like filter-edit and calendar
 # mode it does not fall back to the global bindings, so an unbound letter
 # types into the cell rather than firing the command that letter carries.
@@ -486,6 +495,20 @@ command = "task_edit_clear"
 key = "ctrl-l"
 mode = "task_edit"
 command = "task_edit_clear"
+
+# Completion, on the two cells whose values are names the backend knows:
+# Assignee and Projects. tab walks the candidates with the typed prefix
+# intact, so a wrong first match costs one more keystroke rather than an undo.
+
+[[bind]]
+key = "tab"
+mode = "task_edit"
+command = "complete_next_candidate"
+
+[[bind]]
+key = "shift-tab"
+mode = "task_edit"
+command = "complete_prev_candidate"
 
 # The emacs motions, shared by every field that takes text. `alt-` needs the
 # terminal to send Option as a modifier rather than as an escape prefix; see
@@ -530,6 +553,20 @@ command = "text_caret_start"
 key = "ctrl-e"
 mode = "task_edit"
 command = "text_caret_end"
+
+# The Assignee filter row has a fourth match mode, "list": its values are
+# picked from the workspace directory rather than typed as a pattern. These
+# are the same two keys the cell editor completes with.
+
+[[bind]]
+key = "tab"
+mode = "filter_edit"
+command = "complete_next_candidate"
+
+[[bind]]
+key = "shift-tab"
+mode = "filter_edit"
+command = "complete_prev_candidate"
 
 [[bind]]
 key = "alt-b"

@@ -179,7 +179,11 @@ impl Config {
 }
 
 /// The match modes a saved string filter may name.
-const SAVED_MATCH_MODES: [&str; 3] = ["fuzzy", "contains", "regex"];
+///
+/// `list` is only meaningful on a row whose values come from a directory;
+/// one saved against any other row parks unapplied rather than being
+/// rejected here, exactly as an unknown field key does.
+const SAVED_MATCH_MODES: [&str; 4] = ["fuzzy", "contains", "regex", "list"];
 
 /// One named filter set: a whole filter panel, saved under a name.
 ///
@@ -758,6 +762,10 @@ fn default_bindings() -> Vec<Bind> {
         // The emacs motions, shared with task-edit mode so a text field
         // behaves the same wherever it is. `alt-` needs the terminal to send
         // Option as a modifier; see the README.
+        // The same two keys in the panel, where the `list` match mode runs
+        // the same completion editor over the same people.
+        Bind::with_mode("tab", Mode::FilterEdit, "complete_next_candidate"),
+        Bind::with_mode("shift-tab", Mode::FilterEdit, "complete_prev_candidate"),
         Bind::with_mode("alt-b", Mode::FilterEdit, "text_caret_word_back"),
         Bind::with_mode("alt-f", Mode::FilterEdit, "text_caret_word_forward"),
         Bind::with_mode("ctrl-a", Mode::FilterEdit, "text_caret_start"),
@@ -804,6 +812,9 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("ctrl-x", Mode::Task, "clear_hidden_task_selection"),
         Bind::with_mode("y", Mode::Task, "copy_tasks_to_clipboard"),
         Bind::with_mode("g", Mode::Task, "set_gantt_mode"),
+        // The same letter the filter pane uses for its sidebar: both are
+        // "show me the panel beside this one".
+        Bind::with_mode("b", Mode::Task, "toggle_recent_pane"),
         // The column cursor and the cell editor. `h`, `l`, `e`, and `d` are
         // all free in task mode, and `Mode::Any` binds none of them.
         Bind::with_mode("h", Mode::Task, "task_column_prev"),
@@ -826,6 +837,10 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("alt-f", Mode::TaskEdit, "text_caret_word_forward"),
         Bind::with_mode("ctrl-a", Mode::TaskEdit, "text_caret_start"),
         Bind::with_mode("ctrl-e", Mode::TaskEdit, "text_caret_end"),
+        // Completion, on the two cells whose values are names the backend
+        // knows. `tab` is free in every mode: nothing else reads it.
+        Bind::with_mode("tab", Mode::TaskEdit, "complete_next_candidate"),
+        Bind::with_mode("shift-tab", Mode::TaskEdit, "complete_prev_candidate"),
         // Punctuation and ctrl- pairs throughout, because
         // KeyBinding::from_crossterm_event lowercases every char: `G` and `g`
         // are the same key, so shift+letter is not an available namespace.
@@ -1661,8 +1676,29 @@ name = "Mine"
             (KeyBinding::Char('l'), Action::TaskColumnNext),
             (KeyBinding::Char('e'), Action::BeginTaskEdit),
             (KeyBinding::Char('d'), Action::ToggleTaskCompleted),
+            (KeyBinding::Char('b'), Action::ToggleRecentPane),
         ] {
             assert_eq!(keymap.action_for(&key, Mode::Task), Some(&action));
+        }
+    }
+
+    /// The completion keys, in both panes that run the same editor.
+    #[test]
+    fn default_bindings_complete_in_the_cell_editor_and_the_filter_panel() {
+        let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
+            .expect("default bindings parse");
+
+        for mode in [Mode::TaskEdit, Mode::FilterEdit] {
+            assert_eq!(
+                keymap.action_for(&KeyBinding::Tab, mode),
+                Some(&Action::CompleteCandidate(1)),
+                "{mode:?}"
+            );
+            assert_eq!(
+                keymap.action_for(&KeyBinding::BackTab, mode),
+                Some(&Action::CompleteCandidate(-1)),
+                "{mode:?}"
+            );
         }
     }
 

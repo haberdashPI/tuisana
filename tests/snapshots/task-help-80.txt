@@ -2,29 +2,29 @@
 ┌ Projects ────────────────────────────────────────────── 3 shown · 1 selected ┐
 │  ● ★ Northwind BTX 4412                                                      │
 │▍   ★ Platform Infrastructure                                                 │
-│    ☆ Backlog                                                                 │
-│       ┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓       │
+│    ☆ B┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓       │
 │       ┃Tasks                            View                         ┃       │
 │       ┃⏎           open in Asana        g           gantt chart      ┃       │
 │       ┃␣           select               f           filter panel     ┃       │
 │       ┃a           select all           c           open / done / all┃       │
 │       ┃i           invert               z           subtasks         ┃       │
-└───────┃x           clear                left/right  scroll columns   ┃───────┘
-┏ Tasks ┃^x          clear hidden                                      ┃s 0/41 ┓
-┃   Task┃y           copy links           Move                         ┃e▲ │  S┃
-┃       ┃                                 j/k         down / up        ┃       ┃
-┃▌Northw┃Group & sort                     ^d/^u       page down / up   ┃───────┃
-┃       ┃[/]         jump section         home/end    top / bottom     ┃       ┃
-┃   Stud┃{/}         jump project                                      ┃·······┃
-┃▍  Draf┃,           group by project     Modes                        ┃10 │ Ju┃
-┃   Revi┃.           group by section     p           projects         ┃19 │  A┃
-┃   Ship┃s           cycle sort field     f           filters          ┃ay │ Au┃
-┃   Conf┃^           asc / desc           t           tasks            ┃ed │ Au┃
-┃   Upda┃                                 m           toggle tasks     ┃ 4 │ Au┃
-┃   Qual┃Edit                                                          ┃12 │  J┃
-┃       ┃h/l         column cursor        Panes                        ┃       ┃
-┃   Ship┃e           edit the cell        0           restore          ┃·······┃
-┃   Book┃d           open / done                                       ┃15 │  S┃
+│       ┃x           clear                left/right  scroll columns   ┃       │
+└───────┃^x          clear hidden         b           recently edited  ┃───────┘
+┏ Tasks ┃y           copy links                                        ┃s 0/41 ┓
+┃   Task┃                                 Move                         ┃e▲ │  S┃
+┃       ┃Group & sort                     j/k         down / up        ┃       ┃
+┃▌Northw┃[/]         jump section         ^d/^u       page down / up   ┃───────┃
+┃       ┃{/}         jump project         home/end    top / bottom     ┃       ┃
+┃   Stud┃,           group by project                                  ┃·······┃
+┃▍  Draf┃.           group by section     Modes                        ┃10 │ Ju┃
+┃   Revi┃s           cycle sort field     p           projects         ┃19 │  A┃
+┃   Ship┃^           asc / desc           f           filters          ┃ay │ Au┃
+┃   Conf┃                                 t           tasks            ┃ed │ Au┃
+┃   Upda┃Edit                             m           toggle tasks     ┃ 4 │ Au┃
+┃   Qual┃h/l         column cursor                                     ┃12 │  J┃
+┃       ┃e           edit the cell        Panes                        ┃       ┃
+┃   Ship┃d           open / done          0           restore          ┃·······┃
+┃   Book┃                                                              ┃15 │  S┃
 ┃   Labe┃                                 App                          ┃ 9 │   ┃
 ┃   Reco┃                                 r           refresh          ┃30 │ Se┃
 ┃   Clos┃                                 q ^c        quit             ┃14 │  O┃

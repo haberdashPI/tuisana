@@ -674,26 +674,37 @@ impl TaskTableModel {
         merged = apply_task_filter(merged, &settings.filter);
         let merged = arrange_hierarchy(merged, &settings.sort);
 
-        let custom_field_columns = group_custom_fields_by_name(&custom_field_definitions)
-            .into_iter()
-            .map(|(name, gids)| {
-                let values = merged
-                    .iter()
-                    .map(|record| {
-                        let values = gids
-                            .iter()
-                            .filter_map(|gid| record.custom_fields.get(gid))
-                            .flat_map(|values| values.iter().cloned())
-                            .collect::<Vec<_>>();
-                        join_non_empty(&values)
-                    })
-                    .collect();
-                CustomFieldColumn { name, gids, values }
-            })
-            .collect::<Vec<_>>();
-
+        let custom_field_columns = custom_columns(&merged, &custom_field_definitions);
         let rows = build_rows(&merged, &custom_field_columns, settings);
 
+        Self::from_parts(custom_field_columns, rows)
+    }
+
+    /// Builds a table of these records, in the order given, with no grouping.
+    ///
+    /// The recently-edited pane. It shows the same columns as the table so the
+    /// two read as one surface, but its order is "most recently edited", which
+    /// no [`TaskSort`] can express, and its rows are the ones the filter has
+    /// already rejected — so neither the sort nor the filter runs here.
+    pub fn flat_from_records(
+        records: Vec<TaskRecord>,
+        custom_field_definitions: Vec<CustomFieldDefinition>,
+    ) -> Self {
+        let ungrouped = TaskTableSettings {
+            sort: TaskSort {
+                group_by_project: false,
+                group_by_section: false,
+                ..TaskSort::default()
+            },
+            ..TaskTableSettings::default()
+        };
+        let custom_field_columns = custom_columns(&records, &custom_field_definitions);
+        let rows = build_rows(&records, &custom_field_columns, &ungrouped);
+
+        Self::from_parts(custom_field_columns, rows)
+    }
+
+    fn from_parts(custom_field_columns: Vec<CustomFieldColumn>, rows: Vec<TaskRow>) -> Self {
         Self {
             columns: default_columns()
                 .into_iter()
@@ -1241,6 +1252,30 @@ fn arrange_hierarchy(records: Vec<TaskRecord>, sort: &TaskSort) -> Vec<TaskRecor
                 record.parent_gid = None;
             }
             Some(record)
+        })
+        .collect()
+}
+
+/// One column per distinct custom-field *name*, valued per record.
+fn custom_columns(
+    records: &[TaskRecord],
+    custom_field_definitions: &[CustomFieldDefinition],
+) -> Vec<CustomFieldColumn> {
+    group_custom_fields_by_name(custom_field_definitions)
+        .into_iter()
+        .map(|(name, gids)| {
+            let values = records
+                .iter()
+                .map(|record| {
+                    let values = gids
+                        .iter()
+                        .filter_map(|gid| record.custom_fields.get(gid))
+                        .flat_map(|values| values.iter().cloned())
+                        .collect::<Vec<_>>();
+                    join_non_empty(&values)
+                })
+                .collect();
+            CustomFieldColumn { name, gids, values }
         })
         .collect()
 }

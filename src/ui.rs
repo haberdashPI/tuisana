@@ -11,13 +11,15 @@
 //!   [`help_overlay`], and [`calendar`] render content into a region they are
 //!   handed. The last two are centered modals drawn over the panes.
 //!   [`gantt`] is the exception to "a region": it hands [`task_table`] spans to
-//!   append to each row, so a row and its bar are one line.
+//!   append to each row, so a row and its bar are one line. [`completion`] is
+//!   a third modal, over the field an editor is completing.
 //!
 //! [`runtime`] runs the event loop and is the only module that talks to the
 //! terminal backend.
 
 pub mod calendar;
 pub mod chrome;
+pub mod completion;
 pub mod date;
 pub mod filter_panel;
 pub mod filter_sets;

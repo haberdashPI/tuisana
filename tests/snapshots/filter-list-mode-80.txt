@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┏ Filters ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ editing ┓
+┃    Title     fuzzy     —                                                     ┃
+┃▍   Assignee  list                                                            ┃
+┃    Due       date      —                                                     ┃
+┃    Start     date      —                                                     ┃
+┃    State     labels    —                                                     ┃
+┃    Projects  contains  —                                                     ┃
+┃    Priority  labels    —                                                     ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌ Tasks ────────────────────────────────────── 11 tasks · row 1 · columns 0/41 ┐
+│   Task                                          │ Assignee     │    Due▲ │  S│
+│                           ┏ Assignee ━━━━━━━━━━━━┓                           │
+│▌Northwind BTX 4412 ───────┃Alex Chen             ┃───────────────────────────│
+│                           ┃Dana Ruiz             ┃                           │
+│   Study Kit Design ·······┃Jo Park               ┃···························│
+│▍  Draft the assay validati┃Kim Alvarez           ┃Priya Raman  │ !Jul 10 │ Ju│
+│   Review shipment requirem┃Morgan Ellis          ┃Morgan Ellis │ !Aug 19 │  A│
+│   Ship release candidate t┃Priya Raman           ┃Alex Chen    │   Today │ Au│
+│   Confirm carrier pickup w┃Robin Fox             ┃—            │     Wed │ Au│
+│   Update the sample intake┃Sam Okafor            ┃Kim Alvarez  │   Sep 4 │ Au│
+│   Qualify the second reage┗━━━━━━━━━━━━━━━━━━━━━━┛Dana Ruiz    │  Sep 12 │  J│
+│                                                                              │
+│   Shipment ··································································│
+│   Book the courier for the pilot run            │ Sam Okafor   │  Sep 15 │  S│
+│   Label the retention samples                   │ Jo Park      │   Oct 9 │   │
+│   Reconcile the freight invoices                │ Robin Fox    │  Oct 30 │ Se│
+│   Close out packaging vendor contract           │ Alex Chen    │  Nov 14 │  O│
+│   Close the quarter's shipping report           │ Priya Raman  │  Dec 18 │  N│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+⏎ done   esc cancel   ⇥/⇤ complete   left/right caret   M-b/M-f word
+ FILTER-EDIT

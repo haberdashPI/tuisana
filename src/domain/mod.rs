@@ -33,5 +33,5 @@ pub use task::{
 /// The write model: one field of one task, and the parsing that builds it.
 pub use task_edit::{
     parse_custom_value, parse_date_value, resolve_assignee, AssigneeRef, CustomFieldValue,
-    CustomValueKind, TaskEdit, TaskFieldEdit,
+    CustomValueKind, ProjectEdit, ProjectMembership, TaskEdit, TaskFieldEdit,
 };

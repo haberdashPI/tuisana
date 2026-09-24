@@ -25,6 +25,13 @@ pub enum KeyBinding {
     Enter,
     Esc,
     Backspace,
+    Tab,
+    /// Shift plus tab, written `shift-tab`.
+    ///
+    /// Its own key rather than a modifier on `Tab`: terminals send it as a
+    /// distinct code, and `KeyBinding` has no modifier for shift precisely
+    /// because a shifted letter is indistinguishable from the letter.
+    BackTab,
     Home,
     End,
     Left,
@@ -44,6 +51,8 @@ impl FromStr for KeyBinding {
             "enter" => Ok(Self::Enter),
             "esc" | "escape" => Ok(Self::Esc),
             "backspace" => Ok(Self::Backspace),
+            "tab" => Ok(Self::Tab),
+            "shift-tab" | "backtab" => Ok(Self::BackTab),
             "home" => Ok(Self::Home),
             "end" => Ok(Self::End),
             "left" => Ok(Self::Left),
@@ -79,6 +88,8 @@ impl KeyBinding {
             Self::Enter => (2, 0),
             Self::Esc => (2, 1),
             Self::Backspace => (2, 2),
+            Self::Tab => (2, 3),
+            Self::BackTab => (2, 4),
             Self::Home => (3, 0),
             Self::End => (3, 1),
             Self::Up => (4, 0),
@@ -109,6 +120,8 @@ impl KeyBinding {
             KeyCode::Enter => Some(Self::Enter),
             KeyCode::Esc => Some(Self::Esc),
             KeyCode::Backspace => Some(Self::Backspace),
+            KeyCode::Tab => Some(Self::Tab),
+            KeyCode::BackTab => Some(Self::BackTab),
             KeyCode::Home => Some(Self::Home),
             KeyCode::End => Some(Self::End),
             KeyCode::Left => Some(Self::Left),
@@ -302,6 +315,14 @@ pub enum Action {
     TaskEditCycleValue(i32),
     /// Empty the cell being edited.
     TaskEditClear,
+    /// Show or hide the recently-edited pane.
+    ToggleRecentPane,
+    /// Complete the typed prefix to the next candidate, or the previous one.
+    ///
+    /// The direction is a payload, following [`Action::TaskEditCycleValue`].
+    /// One action for both panes: the cell editor and the filter panel's
+    /// `list` row run the same completion state machine.
+    CompleteCandidate(i32),
     /// Move the text caret back one word.
     TextCaretWordBack,
     /// Move the text caret forward one word.
@@ -434,6 +455,9 @@ impl Action {
             "task_edit_next_value" => Ok(Self::TaskEditCycleValue(1)),
             "task_edit_prev_value" => Ok(Self::TaskEditCycleValue(-1)),
             "task_edit_clear" => Ok(Self::TaskEditClear),
+            "toggle_recent_pane" => Ok(Self::ToggleRecentPane),
+            "complete_next_candidate" => Ok(Self::CompleteCandidate(1)),
+            "complete_prev_candidate" => Ok(Self::CompleteCandidate(-1)),
             "text_caret_word_back" => Ok(Self::TextCaretWordBack),
             "text_caret_word_forward" => Ok(Self::TextCaretWordForward),
             "text_caret_start" => Ok(Self::TextCaretStart),
@@ -531,6 +555,12 @@ impl Display for Action {
         if let Action::FilterSetLoad(position) = self {
             return write!(f, "filter_set_load_{position}");
         }
+        if let Action::CompleteCandidate(delta) = self {
+            return f.write_str(match *delta >= 0 {
+                true => "complete_next_candidate",
+                false => "complete_prev_candidate",
+            });
+        }
         if let Action::TaskEditCycleValue(delta) = self {
             return f.write_str(match *delta >= 0 {
                 true => "task_edit_next_value",
@@ -613,7 +643,9 @@ impl Display for Action {
             Action::FilterSetNew => "filter_set_new",
             Action::FilterSetDelete => "filter_set_delete",
             // Handled above: it carries a position rather than a fixed name.
-            Action::FilterSetLoad(_) | Action::TaskEditCycleValue(_) => {
+            Action::FilterSetLoad(_)
+            | Action::TaskEditCycleValue(_)
+            | Action::CompleteCandidate(_) => {
                 unreachable!("handled before the match")
             }
             Action::CalendarPrevDay => "calendar_prev_day",
@@ -659,6 +691,7 @@ impl Display for Action {
             Action::CommitTaskEdit => "commit_task_edit",
             Action::CancelTaskEdit => "cancel_task_edit",
             Action::TaskEditClear => "task_edit_clear",
+            Action::ToggleRecentPane => "toggle_recent_pane",
             Action::TextCaretWordBack => "text_caret_word_back",
             Action::TextCaretWordForward => "text_caret_word_forward",
             Action::TextCaretStart => "text_caret_start",
@@ -825,6 +858,9 @@ mod tests {
             Action::TaskEditCycleValue(1),
             Action::TaskEditCycleValue(-1),
             Action::TaskEditClear,
+            Action::ToggleRecentPane,
+            Action::CompleteCandidate(1),
+            Action::CompleteCandidate(-1),
             Action::TextCaretWordBack,
             Action::TextCaretWordForward,
             Action::TextCaretStart,
@@ -845,6 +881,10 @@ mod tests {
         assert_eq!(
             Action::TaskEditCycleValue(-1).to_string(),
             "task_edit_prev_value"
+        );
+        assert_eq!(
+            Action::CompleteCandidate(1).to_string(),
+            "complete_next_candidate"
         );
     }
 
@@ -888,6 +928,11 @@ mod tests {
             KeyBinding::Right
         );
         assert_eq!("space".parse::<KeyBinding>().expect("space parses"), KeyBinding::Char(' '));
+        assert_eq!("tab".parse::<KeyBinding>().expect("tab parses"), KeyBinding::Tab);
+        assert_eq!(
+            "shift-tab".parse::<KeyBinding>().expect("shift-tab parses"),
+            KeyBinding::BackTab
+        );
         assert_eq!("page-up".parse::<KeyBinding>().expect("page-up parses"), KeyBinding::PageUp);
         assert_eq!(Action::from_command("open").expect("open parses"), Action::Open);
         assert_eq!(Action::from_command("refresh").expect("refresh parses"), Action::Refresh);

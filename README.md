@@ -282,6 +282,8 @@ All bindable commands:
 - `filter_cycle_label_down`
 - `filter_add_label`
 - `filter_delete_label`
+- `complete_next_candidate`
+- `complete_prev_candidate`
 - `filter_caret_left`
 - `filter_caret_right`
 - `text_caret_word_back`
@@ -301,6 +303,8 @@ All bindable commands:
 - `task_edit_next_value`
 - `task_edit_prev_value`
 - `task_edit_clear`
+- `complete_next_candidate`
+- `complete_prev_candidate`
 - `filter_caret_left`
 - `filter_caret_right`
 - `text_caret_word_back`
@@ -324,6 +328,7 @@ All bindable commands:
 - `task_column_next`
 - `begin_task_edit`
 - `toggle_task_completed`
+- `toggle_recent_pane`
 - `set_gantt_mode`
 
 **Gantt mode**
@@ -411,6 +416,14 @@ The panel's fields are `Title`, `Assignee`, `Due`, `Start`, `State`, `Projects`,
 and one row per custom field. `Title` and `Assignee` match fuzzily by default —
 a person's name is typed from memory and is the field most likely to be
 half-remembered — and `ctrl-s` switches a row to `contains`, `ctrl-r` to regex.
+
+`Assignee` has a fourth mode, `list`, which `s` reaches and no other row
+offers: its values are a closed set of real people, so they are picked from the
+same completion editor the table's cell uses rather than typed as a pattern.
+Several picked people are ORed, the row's negation means "none of these", and
+`me` resolves to whoever is logged in at match time — so a saved set stays
+personal to whoever loads it. Everything else is unchanged: the picked names
+are the row's value, and the saved schema gains only `match = "list"`.
 
 **Filter sets.** Filling in more than one field *narrows*: a `Due` of
 `..2026-09-01` and an `Assignee` of `alex` shows Alex's tasks due before
@@ -617,9 +630,10 @@ column, and each one is the filter panel's editor for that kind of field:
 
 | Column | Editor | Keys |
 | --- | --- | --- |
-| `Task`, `Assignee`, text and number custom fields | a text field with a caret | type, `backspace`, the motions above |
+| `Task`, text and number custom fields | a text field with a caret | type, `backspace`, the motions above |
 | `Due`, `Start` | the date picker | `h`/`l` day, `j`/`k` month, `t` today, `d` clear |
 | `State`, enum custom fields | a value picker | `j`/`k` through the options, `d` for no value |
+| `Assignee`, `Projects` | completion over the names that exist | type to filter, `tab`/`shift-tab` to complete, `backspace` to delete an item, `ctrl-l` to clear |
 
 `enter` commits and `esc` throws the edit away, exactly as in the filter panel.
 Two differences, both because a task holds a value where a filter holds a
@@ -629,10 +643,45 @@ refused), and a value picker holds one value rather than a list.
 A picker offers the options the custom field **declares**, not the values tasks
 happen to carry — the whole point may be to be the first task marked `Blocked`.
 
-An `Assignee` is typed as a name, an email address, or `me`. A name is matched
-against the people the loaded tasks name, case-insensitively; one that matches
-nobody, or two people, is refused with a message rather than guessed at. An
-email is sent as typed, which is how you assign someone who is not on screen.
+**`Assignee` and `Projects` complete.** Both are references to something with a
+name and a gid, so both get the same editor: a list of items, typed with
+completion over the names that actually exist. The candidates appear in an
+overlay positioned like the date picker, because the cell is far too narrow to
+list names in.
+
+`tab` *cycles* rather than picks — pressing it repeatedly walks the candidates
+with the typed prefix intact, so a wrong first match costs one more keystroke
+instead of an undo. Nothing is entered that is not a candidate: a typed prefix
+that matches nothing commits nothing and says so.
+
+- **Assignee** is a list capped at one, so typing a second name replaces the
+  first. Committing it empty unassigns the task. The candidates are the
+  workspace directory, fetched once per session, plus `me` and whoever the
+  loaded tasks name — the fallback when the directory is unavailable. An email
+  address is still accepted as typed, which is how you assign someone the
+  workspace list does not cover.
+- **Projects** is a list of any length, completing over every project the
+  session loaded. A commit becomes one `addProject` or `removeProject` request
+  per change. Asana will not store a task in no projects at all, so committing
+  an empty list is refused with a message rather than sent.
+
+### Recently edited
+
+Reassign a task while filtering on one assignee, or move it out of the project
+you are looking at, and the row leaves the table under the cursor — at the one
+moment the edit is least finished. A pane between the project list and the
+table holds those tasks:
+
+- A task is in it when it was edited this session **and** the current view no
+  longer shows it. Edit it back into view — or change the filter — and it
+  leaves on the next rebuild.
+- It lists the same columns as the table, in the same widths, newest edit
+  first, and is not persisted.
+- The cursor moves into it when a rebuild would otherwise lose the task it was
+  following, and the pane shows itself when that happens whatever the toggle
+  says. `j` and `k` walk between the two lists; `e`, `d`, and `space` work in
+  the pane exactly as they do in the table.
+- `b` shows or hides it. With nothing in it, it is not drawn at all.
 
 **`d` marks it done.** Completion is a field like any other, but it is also the
 most common edit in the app, so it gets a key of its own: `d` from anywhere in

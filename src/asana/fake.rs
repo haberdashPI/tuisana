@@ -10,11 +10,11 @@ use crate::{
     asana::{
         dto::{
             CustomFieldValueDto, EnumOptionDto, ProjectCustomFieldSettingDto, SectionDto, TaskDto,
-            UserDto,
+            TaskMembershipDto, TaskMembershipProjectDto, UserDto,
         },
         AsanaClient, TaskLoadScope, TaskQuery, TaskTarget,
     },
-    domain::{CustomFieldValue, Project, TaskFieldEdit},
+    domain::{CustomFieldValue, Project, ProjectEdit, ProjectMembership, TaskFieldEdit},
     error::{Error, Result},
 };
 
@@ -45,7 +45,18 @@ pub struct FakeAsanaClient {
     /// The edits applied so far, per task, so a later read sees them.
     applied_edits: Arc<Mutex<HashMap<String, Vec<TaskFieldEdit>>>>,
     /// Task gids whose updates fail, for the rollback tests.
+    ///
+    /// Covers both kinds of write: a test that wants a membership rollback
+    /// and one that wants a field rollback are asking the same question.
     update_failures: HashSet<String>,
+    /// Every `update_task_project` call, in order.
+    project_update_calls: Arc<Mutex<Vec<ProjectEdit>>>,
+    /// The membership changes applied so far, per task.
+    applied_project_edits: Arc<Mutex<HashMap<String, Vec<ProjectEdit>>>>,
+    /// The workspace directory `list_users` answers with.
+    users: Vec<UserDto>,
+    /// Set to make `list_users` fail, for the fallback test.
+    users_unavailable: bool,
 }
 
 impl FakeAsanaClient {
@@ -108,6 +119,33 @@ impl FakeAsanaClient {
         self
     }
 
+    /// Adds the users `list_users` answers with.
+    pub fn with_users(mut self, users: Vec<(&str, &str)>) -> Self {
+        self.users = users
+            .into_iter()
+            .map(|(gid, name)| UserDto {
+                gid: gid.to_string(),
+                name: Some(name.to_string()),
+                display_name: Some(name.to_string()),
+            })
+            .collect();
+        self
+    }
+
+    /// Makes `list_users` fail, so the caller has to fall back.
+    pub fn with_users_unavailable(mut self) -> Self {
+        self.users_unavailable = true;
+        self
+    }
+
+    /// The membership changes `update_task_project` has been called with.
+    pub fn project_update_calls(&self) -> Vec<ProjectEdit> {
+        self.project_update_calls
+            .lock()
+            .expect("project update calls are not poisoned")
+            .clone()
+    }
+
     /// The `(task gid, change)` pairs `update_task` has been called with.
     pub fn update_calls(&self) -> Vec<(String, TaskFieldEdit)> {
         self.update_calls
@@ -131,6 +169,17 @@ impl FakeAsanaClient {
         };
         for edit in edits {
             apply_to_dto(&mut task, edit);
+        }
+        drop(applied);
+
+        let memberships = self
+            .applied_project_edits
+            .lock()
+            .expect("applied project edits are not poisoned");
+        if let Some(edits) = memberships.get(&task.gid) {
+            for edit in edits {
+                apply_membership_to_dto(&mut task, edit);
+            }
         }
         task
     }
@@ -261,6 +310,32 @@ impl AsanaClient for FakeAsanaClient {
         Ok(task)
     }
 
+    fn update_task_project(&self, edit: &ProjectEdit) -> Result<()> {
+        self.project_update_calls
+            .lock()
+            .expect("project update calls are not poisoned")
+            .push(edit.clone());
+
+        if self.update_failures.contains(&edit.gid) {
+            return Err(Error::Backend("403".to_string()));
+        }
+
+        self.applied_project_edits
+            .lock()
+            .expect("applied project edits are not poisoned")
+            .entry(edit.gid.clone())
+            .or_default()
+            .push(edit.clone());
+        Ok(())
+    }
+
+    fn list_users(&self) -> Result<Vec<UserDto>> {
+        if self.users_unavailable {
+            return Err(Error::Backend("no fake user directory".to_string()));
+        }
+        Ok(self.users.clone())
+    }
+
     fn list_sections(&self, project_gid: &str) -> Result<Vec<SectionDto>> {
         Ok(self
             .sections_by_project
@@ -284,6 +359,34 @@ impl AsanaClient for FakeAsanaClient {
         self.current_user_gid
             .clone()
             .ok_or_else(|| Error::Backend("no fake current user configured".to_string()))
+    }
+}
+
+/// Writes one membership change onto a stored task fixture.
+///
+/// A removal drops the whole membership; an add appends one with no section,
+/// which is what Asana does when a task joins a project without being placed.
+fn apply_membership_to_dto(task: &mut TaskDto, edit: &ProjectEdit) {
+    match edit.membership {
+        ProjectMembership::Remove => task
+            .memberships
+            .retain(|membership| membership.project.gid != edit.project_gid),
+        ProjectMembership::Add => {
+            if task
+                .memberships
+                .iter()
+                .any(|membership| membership.project.gid == edit.project_gid)
+            {
+                return;
+            }
+            task.memberships.push(TaskMembershipDto {
+                project: TaskMembershipProjectDto {
+                    gid: edit.project_gid.clone(),
+                    name: edit.project_name.clone(),
+                },
+                section: None,
+            });
+        }
     }
 }
 

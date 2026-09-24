@@ -2,29 +2,29 @@
 ┌ Projects ────────────────────────────────────────────────────────────────────────────────────── 3 shown · 1 selected ┐
 │  ● ★ Northwind BTX 4412                                                                                              │
 │▍   ★ Platform Infrastructure                                                                                         │
-│    ☆ Backlog                                                                                                         │
-│                           ┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                           │
+│    ☆ Backlog              ┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                           │
 │                           ┃Tasks                            View                         ┃                           │
 │                           ┃⏎           open in Asana        g           gantt chart      ┃                           │
 │                           ┃␣           select               f           filter panel     ┃                           │
 │                           ┃a           select all           c           open / done / all┃                           │
 │                           ┃i           invert               z           subtasks         ┃                           │
-└───────────────────────────┃x           clear                left/right  scroll columns   ┃───────────────────────────┘
-┏ Tasks ━━━━━━━━━━━━━━━━━━━━┃^x          clear hidden                                      ┃asks · row 1 · columns 0/1 ┓
-┃   Task                    ┃y           copy links           Move                         ┃rojects           │ Priorit┃
-┃                           ┃                                 j/k         down / up        ┃                           ┃
-┃▌Northwind BTX 4412 ───────┃Group & sort                     ^d/^u       page down / up   ┃───────────────────────────┃
-┃                           ┃[/]         jump section         home/end    top / bottom     ┃                           ┃
-┃   Study Kit Design ·······┃{/}         jump project                                      ┃···························┃
-┃▍  Draft the assay validati┃,           group by project     Modes                        ┃orthwind BTX 4412 │ High   ┃
-┃   Review shipment requirem┃.           group by section     p           projects         ┃orthwind BTX 4412 │ High   ┃
-┃   Ship release candidate t┃s           cycle sort field     f           filters          ┃orthwind BTX 4412 │ High   ┃
-┃   Confirm carrier pickup w┃^           asc / desc           t           tasks            ┃orthwind BTX 4412 │ —      ┃
-┃   Update the sample intake┃                                 m           toggle tasks     ┃orthwind BTX 4412 │ Medium ┃
-┃   Qualify the second reage┃Edit                                                          ┃orthwind BTX 4412 │ Medium ┃
-┃                           ┃h/l         column cursor        Panes                        ┃                           ┃
-┃   Shipment ···············┃e           edit the cell        0           restore          ┃···························┃
-┃   Book the courier for the┃d           open / done                                       ┃orthwind BTX 4412 │ Low    ┃
+│                           ┃x           clear                left/right  scroll columns   ┃                           │
+└───────────────────────────┃^x          clear hidden         b           recently edited  ┃───────────────────────────┘
+┏ Tasks ━━━━━━━━━━━━━━━━━━━━┃y           copy links                                        ┃asks · row 1 · columns 0/1 ┓
+┃   Task                    ┃                                 Move                         ┃rojects           │ Priorit┃
+┃                           ┃Group & sort                     j/k         down / up        ┃                           ┃
+┃▌Northwind BTX 4412 ───────┃[/]         jump section         ^d/^u       page down / up   ┃───────────────────────────┃
+┃                           ┃{/}         jump project         home/end    top / bottom     ┃                           ┃
+┃   Study Kit Design ·······┃,           group by project                                  ┃···························┃
+┃▍  Draft the assay validati┃.           group by section     Modes                        ┃orthwind BTX 4412 │ High   ┃
+┃   Review shipment requirem┃s           cycle sort field     p           projects         ┃orthwind BTX 4412 │ High   ┃
+┃   Ship release candidate t┃^           asc / desc           f           filters          ┃orthwind BTX 4412 │ High   ┃
+┃   Confirm carrier pickup w┃                                 t           tasks            ┃orthwind BTX 4412 │ —      ┃
+┃   Update the sample intake┃Edit                             m           toggle tasks     ┃orthwind BTX 4412 │ Medium ┃
+┃   Qualify the second reage┃h/l         column cursor                                     ┃orthwind BTX 4412 │ Medium ┃
+┃                           ┃e           edit the cell        Panes                        ┃                           ┃
+┃   Shipment ···············┃d           open / done          0           restore          ┃···························┃
+┃   Book the courier for the┃                                                              ┃orthwind BTX 4412 │ Low    ┃
 ┃   Label the retention samp┃                                 App                          ┃orthwind BTX 4412 │ Medium ┃
 ┃   Reconcile the freight in┃                                 r           refresh          ┃orthwind BTX 4412 │ Low    ┃
 ┃   Close out packaging vend┃                                 q ^c        quit             ┃orthwind BTX 4412 │ Low    ┃

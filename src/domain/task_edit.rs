@@ -47,6 +47,94 @@ impl AssigneeRef {
     }
 }
 
+/// Which way a membership change goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectMembership {
+    Add,
+    Remove,
+}
+
+/// One membership change: a task joins or leaves one project.
+///
+/// Deliberately not a [`TaskFieldEdit`]. Project membership is not a field on
+/// the task — Asana takes it through `addProject` / `removeProject` rather
+/// than through the task's own `PUT` — so a commit resolves to a set of these
+/// and each one is a request of its own.
+///
+/// [`ProjectEdit::undo`] flips the verb, which is what keeps a rollback the
+/// same code path as the apply: both end in [`ProjectEdit::apply`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectEdit {
+    /// The task being moved.
+    pub gid: String,
+    pub project_gid: String,
+    /// The project's name, which is what the record's own list holds.
+    pub project_name: String,
+    pub membership: ProjectMembership,
+}
+
+impl ProjectEdit {
+    pub fn add(
+        gid: impl Into<String>,
+        project_gid: impl Into<String>,
+        project_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            gid: gid.into(),
+            project_gid: project_gid.into(),
+            project_name: project_name.into(),
+            membership: ProjectMembership::Add,
+        }
+    }
+
+    pub fn remove(
+        gid: impl Into<String>,
+        project_gid: impl Into<String>,
+        project_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            membership: ProjectMembership::Remove,
+            ..Self::add(gid, project_gid, project_name)
+        }
+    }
+
+    /// The change that puts the membership back.
+    pub fn undo(&self) -> Self {
+        Self {
+            membership: match self.membership {
+                ProjectMembership::Add => ProjectMembership::Remove,
+                ProjectMembership::Remove => ProjectMembership::Add,
+            },
+            ..self.clone()
+        }
+    }
+
+    /// Writes this change onto a record.
+    ///
+    /// Both lists are kept sorted, as `merge_task_record` leaves them, so a
+    /// record edited locally and one reloaded from Asana compare equal.
+    pub fn apply(&self, record: &mut TaskRecord) {
+        match self.membership {
+            ProjectMembership::Add => {
+                insert_sorted(&mut record.project_gids, &self.project_gid);
+                insert_sorted(&mut record.projects, &self.project_name);
+            }
+            ProjectMembership::Remove => {
+                record.project_gids.retain(|gid| gid != &self.project_gid);
+                record.projects.retain(|name| name != &self.project_name);
+            }
+        }
+    }
+}
+
+fn insert_sorted(values: &mut Vec<String>, value: &str) {
+    if values.iter().any(|existing| existing == value) {
+        return;
+    }
+    values.push(value.to_string());
+    values.sort();
+}
+
 /// A custom field's value, in the shape the API takes it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CustomFieldValue {

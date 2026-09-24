@@ -68,6 +68,10 @@ fn enter() -> KeyEvent {
     KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
 }
 
+fn tab() -> KeyEvent {
+    KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)
+}
+
 /// Builds one fixture task.
 ///
 /// Positional and long, but every argument is a distinct type-free string, so
@@ -627,6 +631,46 @@ fn task_mode_editing_a_value_picker() {
             vec![key(' '), key(' ')],
             vec![key('l'), key('l'), key('l'), key('l'), key('l'), key('l')],
             vec![key('e'), key('j')],
+        ]
+    });
+}
+
+/// The assignee cell mid-completion, with the candidate list over it.
+///
+/// Pins the overlay's position and the highlighted row `tab` landed on — the
+/// cell is far too narrow to list names in, so this is the only place the
+/// choices are visible.
+#[test]
+fn task_mode_completing_an_assignee() {
+    assert_snapshot("task-edit-assignee", || {
+        vec![
+            enter_task_mode(),
+            vec![key('l'), key('e'), ctrl('l')],
+            vec![key('a'), tab()],
+        ]
+    });
+}
+
+/// A task marked done while the table is showing only open ones, so the row
+/// it was on has left the table and the pane below the project list is
+/// holding it.
+#[test]
+fn task_mode_with_a_recently_edited_task() {
+    assert_snapshot("task-recent-edits", || {
+        vec![enter_task_mode(), vec![key('d')]]
+    });
+}
+
+/// The `Assignee` filter row in `list` mode, picking from the same directory
+/// the cell editor offers.
+#[test]
+fn filter_mode_picking_from_a_list() {
+    assert_snapshot("filter-list-mode", || {
+        vec![
+            enter_task_mode(),
+            vec![key('f'), key('j')],
+            vec![key('s'), key('s'), key('s')],
+            vec![enter()],
         ]
     });
 }

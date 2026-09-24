@@ -8,8 +8,8 @@ pub mod dto;
 pub mod fake;
 
 use crate::{
-    asana::dto::{ProjectCustomFieldSettingDto, SectionDto, TaskDto},
-    domain::{Project, ProjectKind, TaskFieldEdit},
+    asana::dto::{ProjectCustomFieldSettingDto, SectionDto, TaskDto, UserDto},
+    domain::{Project, ProjectEdit, ProjectKind, TaskFieldEdit},
     error::Result,
 };
 
@@ -140,6 +140,20 @@ pub trait AsanaClient {
     /// `modified_at` — without it the next merge cannot tell the server's copy
     /// from a stale one.
     fn update_task(&self, task_gid: &str, edit: &TaskFieldEdit) -> Result<TaskDto>;
+    /// Adds a task to a project, or takes it out of one.
+    ///
+    /// Separate from [`AsanaClient::update_task`] because membership is not a
+    /// field on the task: Asana takes it through `addProject` /
+    /// `removeProject`, one request per project, and answers with nothing
+    /// worth keeping.
+    fn update_task_project(&self, edit: &ProjectEdit) -> Result<()>;
+    /// Everyone in the workspace, for the assignee picker.
+    ///
+    /// The only directory the app can offer that is not "people who already
+    /// have a task on screen" — which excludes the most common reason to
+    /// reassign a task. Callers cache the answer for the session and fall
+    /// back to the loaded records when it fails.
+    fn list_users(&self) -> Result<Vec<UserDto>>;
     /// Resolves the gid of the currently authenticated Asana user ("me").
     ///
     /// Used to offer the "assigned to me" pseudo-project without any manual

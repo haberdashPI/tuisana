@@ -24,8 +24,8 @@ use crate::{
     input::KeyMap,
     ui::{
         chrome::{self, Chip, Tone},
-        calendar, filter_panel, filter_sets, gantt, gantt_order, help_overlay, hints, layout,
-        project_list,
+        calendar, completion, filter_panel, filter_sets, gantt, gantt_order, help_overlay,
+        hints, layout, project_list,
         task_table::{self, TaskTableView},
         theme::Theme,
     },
@@ -146,7 +146,12 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
         .draw(|frame| {
             let mode = app.mode();
             let tasks_visible = app.tasks.visible();
-            let regions = layout::regions(frame.area(), tasks_visible, app.panel_size());
+            let regions = layout::regions(
+                frame.area(),
+                tasks_visible,
+                app.panel_size(),
+                app.tasks.recent_pane_rows(),
+            );
             let focus = focused_pane(mode);
 
             render_header(frame, regions.header, app, &theme);
@@ -179,6 +184,16 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                     cursor_column,
                 )
             });
+
+            // The pane above the table, holding what an edit pushed out of it.
+            // Drawn from the table's own view, so it cannot drift out of step
+            // with the columns it is echoing.
+            let recent_view = task_view
+                .as_ref()
+                .and_then(|view| task_table::recent_pane_view(&app.tasks, view, &theme));
+            if let (Some(area), Some(view)) = (regions.recent_pane, recent_view.as_ref()) {
+                render_recent_pane(frame, area, app, &theme, mode, view);
+            }
 
             if let (Some(area), Some(view)) = (regions.task_pane, task_view.as_ref()) {
                 let focused = focus == FocusedPane::Task;
@@ -219,6 +234,8 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                 gantt_order::render(frame, regions.body, &theme, keymap, dialog);
             } else if let Some(view) = calendar::calendar_view(app.tasks.calendar()) {
                 calendar::render(frame, regions.body, &theme, &view);
+            } else if let Some(view) = completion::completion_view(&app.tasks) {
+                completion::render(frame, regions.body, &theme, &view);
             }
         })
         .map(|_| page_size)
@@ -317,6 +334,9 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
         filter_set_confirm: app.tasks.filter_set_prompt_is_confirmation(),
         on_task_cell: app.tasks.cell_edit_open(),
         task_edit_is_options: app.tasks.cell_edit_is_options(),
+        task_edit_completes: app.tasks.cell_edit_is_complete()
+            || app.tasks.filter_autocomplete_open(),
+        has_recent_edits: app.tasks.recent_hidden_count() > 0,
     };
 
     let line = hints::hint_line(
@@ -488,6 +508,35 @@ fn render_filter_sets_pane<C: AsanaClient + Clone + Send + 'static>(
     );
 }
 
+/// Draws the recently-edited pane.
+///
+/// No column header of its own: the table's is one line up and says the same
+/// thing, and a second copy would read as a second table rather than as an
+/// aside to the first.
+fn render_recent_pane<C: AsanaClient + Clone + Send + 'static>(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &App<C>,
+    theme: &Theme,
+    mode: Mode,
+    view: &TaskTableView,
+) {
+    let cursor = app.tasks.recent_selected_index();
+    let block = chrome::pane_block(theme, cursor.is_some(), mode, &view.title, &view.counts);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    frame.render_widget(
+        Paragraph::new(task_table::task_body_lines(
+            view,
+            cursor,
+            theme,
+            inner.width as usize,
+        )),
+        inner,
+    );
+}
+
 fn render_task_pane<C: AsanaClient + Clone + Send + 'static>(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -532,7 +581,13 @@ fn render_task_pane<C: AsanaClient + Clone + Send + 'static>(
     frame.render_widget(
         Paragraph::new(task_table::task_body_lines(
             view,
-            app.tasks.selected_index(),
+            // Nothing is the cursor row here while the cursor is in the pane
+            // above: one cursor, two lists.
+            app.tasks
+                .recent_selected_index()
+                .is_none()
+                .then(|| app.tasks.selected_index())
+                .flatten(),
             theme,
             body_area.width as usize,
         ))

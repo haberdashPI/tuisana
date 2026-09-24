@@ -392,9 +392,12 @@ pub fn render_task_table(
         total_width,
         scroll_offset: state.horizontal_scroll().min(max_scroll),
         max_scroll,
+        // Both lists: a task selected before an edit pushed it out of the
+        // table is still selected, and the pane draws from this same set.
         selected_task_ids: model
             .rows
             .iter()
+            .chain(state.recent_table().rows.iter())
             .filter(|row| row.kind.is_task() && state.is_task_selected(&row.gid))
             .map(|row| row.gid.clone())
             .collect(),
@@ -434,6 +437,44 @@ fn editing_cell(
     view.caret = Some(window.caret);
     view.window_start = window.start;
     Some(view)
+}
+
+/// The recently-edited pane, drawn with the table's own columns.
+///
+/// Everything geometric is taken from the table's view rather than measured
+/// again: the same headers, the same widths, the same horizontal scroll, so
+/// the two panes read as one surface with a rule between them. What differs
+/// is the rows, the title, and that the chart stops at the table.
+pub fn recent_pane_view(
+    state: &TaskState,
+    view: &TaskTableView,
+    theme: &Theme,
+) -> Option<TaskTableView> {
+    if !state.recent_pane_visible() {
+        return None;
+    }
+
+    let today = date::today();
+    let rows = state
+        .recent_table()
+        .rows
+        .iter()
+        .map(|row| resolve_row(row, today, theme))
+        .collect::<Vec<_>>();
+    let hidden = state.recent_hidden_count();
+
+    Some(TaskTableView {
+        title: "Recently edited".to_string(),
+        counts: vec![Chip::toned(
+            format!("{hidden} hidden by filter"),
+            Tone::Warn,
+        )],
+        rows,
+        message: None,
+        chart: None,
+        chart_width: 0,
+        ..view.clone()
+    })
 }
 
 /// Renders the header row: bold, underlined, and marked with the sort column.

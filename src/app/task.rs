@@ -10,10 +10,13 @@ use std::{
 
 use crate::{
     app::{
+        autocomplete::{AutocompleteState, Candidate, Unresolved},
         calendar::CalendarState,
         debug_log,
         gantt::{GanttViewState, MoveTo},
-        task_edit::{CellEditView, CellEditor, EditContext, TaskCellEditState},
+        task_edit::{
+            CellEditView, CellEditor, CommittedEdits, EditContext, TaskCellEditState,
+        },
         text_edit::TextEdit,
     },
     asana::{
@@ -22,9 +25,9 @@ use crate::{
     },
     domain::{
         date, distinct_values, group_custom_fields_by_name, merge_task_record,
-        parse_custom_value, parse_date_value, resolve_assignee, CivilDate,
-        CustomFieldDefinition, CustomFieldKind, CustomValueKind, EnumOption, TaskEdit,
-        TaskFieldEdit,
+        parse_custom_value, parse_date_value, resolve_assignee, AssigneeRef, CivilDate,
+        CustomFieldDefinition, CustomFieldKind, CustomValueKind, EnumOption, ProjectEdit,
+        TaskEdit, TaskFieldEdit,
         GanttColorKey, Timeline,
         DateQuery, Project, ProjectKind, TaskRecord, TaskRowKind, TaskTableModel,
         TaskTableSettings,
@@ -37,6 +40,12 @@ use crate::{
 
 const HORIZONTAL_SCROLL_STEP: usize = 8;
 
+/// What the logged-in user is called wherever a name is typed.
+///
+/// A handle rather than a name: it resolves to whoever is reading, which is
+/// exactly what makes it worth having in both the editor and the filter.
+pub(crate) const ME_LABEL: &str = "me";
+
 /// Cells the rule between two table columns costs.
 ///
 /// The renderer's own constant, mirrored here because the column cursor has to
@@ -48,6 +57,20 @@ const COLUMN_RULE_WIDTH: usize = 3;
 /// Nine because `1`-`9` are the access path: a row the digits cannot reach is
 /// a row with no way to load it.
 pub(crate) const MAX_SIDEBAR_ROWS: usize = 9;
+
+/// Most tasks the recently-edited pane remembers.
+///
+/// It is "what I was just doing", not a history: twenty is more than a
+/// session's worth of edits that went out of view, and the pane only ever
+/// draws a few of them at once.
+const MAX_RECENTLY_EDITED: usize = 20;
+
+/// Most rows the recently-edited pane draws at once.
+///
+/// It is a holding area, not a second table: past a few rows it would be
+/// taking the screen from the table it is an aside to. The rest of the list
+/// is still counted on the border, so the number is never a surprise.
+const MAX_RECENT_ROWS: usize = 4;
 
 /// High-level status for the task state machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,6 +117,31 @@ struct TaskViewState {
     pending_column_scroll: bool,
     /// The edit in progress, if any.
     cell_edit: Option<TaskCellEditState>,
+    /// Tasks edited this session, newest first.
+    ///
+    /// Not persisted and not capped by time: "what I was just doing" is not
+    /// a thing to restore three days later.
+    recently_edited: Vec<String>,
+    /// The recently-edited tasks the current view no longer shows.
+    ///
+    /// Rebuilt beside the table, from the same records and with the same
+    /// columns, so the pane and the table read as one surface.
+    recent_table: TaskTableModel,
+    /// How many recently-edited tasks the view is not showing.
+    ///
+    /// The pane draws the newest few; this counts all of them, so the border
+    /// can say what is out of sight.
+    recent_hidden_count: usize,
+    /// The cursor's row in that pane, when the cursor is in it.
+    ///
+    /// The cursor is one cursor over two lists: `Some` here means the keys
+    /// act on the pane, and `selected` is being held for the row to return
+    /// to.
+    recent_selected: Option<usize>,
+    /// Set by the toggle. Not `recent_visible`, because the pane is shown by
+    /// default: the first edit that hides a task is the moment it is needed,
+    /// which is too late to go looking for a key.
+    recent_hidden: bool,
     /// What went wrong with the last edit, shown on the pane border.
     edit_notice: Option<String>,
     filter_editor: TaskFilterEditorState,
@@ -109,6 +157,12 @@ struct TaskViewState {
     /// are still arriving the rebuild is put off rather than run once per
     /// character.
     input_pending: bool,
+    /// The logged-in user's gid, for the `list` filter's `me`.
+    ///
+    /// Kept here rather than passed in because filtering runs on every
+    /// rebuild, far from the action that started it, and `me` has to mean the
+    /// same thing on all of them.
+    current_user_gid: Option<String>,
     /// When the table stopped matching the filter, if it does not.
     ///
     /// A timestamp rather than a flag: the spinner is only worth showing once
@@ -189,6 +243,11 @@ pub(crate) enum TaskFieldStringMode {
     Fuzzy,
     Substring,
     Regex,
+    /// The value is a list of names picked from a directory, matched exactly.
+    ///
+    /// Only a row whose values are a closed set can offer this — in practice
+    /// `Assignee`, which is the one filter row whose values are real people.
+    List,
 }
 
 /// Static metadata for one filter row in the task filter editor.
@@ -208,6 +267,13 @@ struct TaskFilterFieldSpec {
     /// False only for `state`: a task is always either open or done, so a
     /// require-empty there would match nothing while looking like a filter.
     can_be_empty: bool,
+    /// Whether this row's values come from a directory it can complete over.
+    ///
+    /// True only for `Assignee`. `Projects` deliberately stays free text:
+    /// which projects are in view is what the project pane is for, and a
+    /// second control answering the same question would be two controls
+    /// fighting over it.
+    completes: bool,
 }
 
 /// Mutable state for one filter row, including the user query and any selected
@@ -335,6 +401,12 @@ struct TaskFilterEditorState {
     active: usize,
     /// The date picker, while a date field is being edited through it.
     calendar: Option<CalendarState>,
+    /// The completion editor, while a `list` row is being edited through it.
+    ///
+    /// The same state machine the task table's cell editor runs, mirrored
+    /// into the row's text the same way the calendar is: the row is where the
+    /// value is read, the editor only writes into it.
+    autocomplete: Option<AutocompleteState>,
     /// The named entry the panel currently *is*, if any.
     ///
     /// `Some(name)` means every change writes through to that entry. `y`
@@ -459,6 +531,7 @@ impl TaskFilterEditorState {
                     kind: TaskFieldFilterKind::String,
                     custom_gids: Vec::new(),
                     can_be_empty: true,
+                    completes: false,
                 },
                 TaskFieldStringMode::Fuzzy,
                 Vec::new(),
@@ -470,6 +543,7 @@ impl TaskFilterEditorState {
                     kind: TaskFieldFilterKind::String,
                     custom_gids: Vec::new(),
                     can_be_empty: true,
+                    completes: true,
                 },
                 // A person's name, typed from memory, is the field most likely
                 // to be half-remembered — so it gets the fuzzy default Title
@@ -484,6 +558,7 @@ impl TaskFilterEditorState {
                     kind: TaskFieldFilterKind::Date,
                     custom_gids: Vec::new(),
                     can_be_empty: true,
+                    completes: false,
                 },
                 TaskFieldStringMode::Substring,
                 Vec::new(),
@@ -495,6 +570,7 @@ impl TaskFilterEditorState {
                     kind: TaskFieldFilterKind::Date,
                     custom_gids: Vec::new(),
                     can_be_empty: true,
+                    completes: false,
                 },
                 TaskFieldStringMode::Substring,
                 Vec::new(),
@@ -508,6 +584,7 @@ impl TaskFilterEditorState {
                     // A task is always either open or done, so there is no
                     // empty state for a require-empty to match.
                     can_be_empty: false,
+                    completes: false,
                 },
                 TaskFieldStringMode::Substring,
                 vec!["open".to_string(), "done".to_string()],
@@ -519,6 +596,7 @@ impl TaskFilterEditorState {
                     kind: TaskFieldFilterKind::String,
                     custom_gids: Vec::new(),
                     can_be_empty: true,
+                    completes: false,
                 },
                 TaskFieldStringMode::Substring,
                 Vec::new(),
@@ -561,6 +639,7 @@ impl TaskFilterEditorState {
                     kind,
                     custom_gids: gids,
                     can_be_empty: true,
+                    completes: false,
                 },
                 TaskFieldStringMode::Substring,
                 if kind == TaskFieldFilterKind::Labels {
@@ -593,6 +672,7 @@ impl TaskFilterEditorState {
         self.visible = previous.visible;
         self.editing = previous.editing && self.visible;
         self.calendar = if self.editing { previous.calendar } else { None };
+        self.autocomplete = if self.editing { previous.autocomplete } else { None };
         // The named entry, its binding, and the sidebar's own state are all
         // things the user set; a rebuild that dropped them would detach the
         // panel mid-load.
@@ -750,6 +830,12 @@ impl TaskFilterEditorState {
     }
 
     fn clear_current(&mut self) {
+        // The completion editor is emptied rather than closed: `ctrl-l` is
+        // "clear every item", and closing it would take the candidate list
+        // away from someone who was about to pick a different one.
+        if let Some(state) = self.autocomplete.as_mut() {
+            state.clear();
+        }
         if let Some(field) = self.selected_field_mut() {
             // `ctrl-l` resets the row completely: require-empty and the
             // negation go with the value they were qualifying.
@@ -762,8 +848,13 @@ impl TaskFilterEditorState {
             if !matches!(field.spec.kind, TaskFieldFilterKind::String) {
                 return;
             }
+            // A row with no directory behind it has nothing to list.
+            if matches!(mode, TaskFieldStringMode::List) && !field.spec.completes {
+                return;
+            }
             field.string_mode = mode;
         }
+        self.autocomplete = None;
     }
 
     fn cycle_mode(&mut self) {
@@ -774,12 +865,21 @@ impl TaskFilterEditorState {
             field.string_mode = match field.string_mode {
                 TaskFieldStringMode::Fuzzy => TaskFieldStringMode::Substring,
                 TaskFieldStringMode::Substring => TaskFieldStringMode::Regex,
-                TaskFieldStringMode::Regex => TaskFieldStringMode::Fuzzy,
+                // `list` joins the ring only where it means something, so
+                // every other row still cycles through the three it had.
+                TaskFieldStringMode::Regex if field.spec.completes => TaskFieldStringMode::List,
+                TaskFieldStringMode::Regex | TaskFieldStringMode::List => {
+                    TaskFieldStringMode::Fuzzy
+                }
             };
         }
+        self.autocomplete = None;
     }
 
     fn push_char(&mut self, ch: char) {
+        if self.with_autocomplete(|state| state.push_char(ch)) {
+            return;
+        }
         if let Some(field) = self.selected_field_mut() {
             if matches!(field.spec.kind, TaskFieldFilterKind::Labels) {
                 return;
@@ -792,6 +892,9 @@ impl TaskFilterEditorState {
     }
 
     fn pop_char(&mut self) {
+        if self.with_autocomplete(AutocompleteState::delete_back) {
+            return;
+        }
         if let Some(field) = self.selected_field_mut() {
             if matches!(field.spec.kind, TaskFieldFilterKind::Labels) {
                 return;
@@ -802,6 +905,9 @@ impl TaskFilterEditorState {
 
     /// Moves the selected field's caret, clamped to its text.
     fn move_query_caret(&mut self, delta: i64) {
+        if self.with_autocomplete(|state| state.move_caret(delta)) {
+            return;
+        }
         if let Some(field) = self.selected_field_mut() {
             if matches!(field.spec.kind, TaskFieldFilterKind::Labels) {
                 return;
@@ -841,6 +947,91 @@ impl TaskFilterEditorState {
     fn stop_editing(&mut self) {
         self.editing = false;
         self.calendar = None;
+        self.autocomplete = None;
+    }
+
+    /// Whether the selected row picks its values from a directory.
+    fn selected_completes(&self) -> bool {
+        self.selected_field().is_some_and(|field| {
+            field.spec.completes && matches!(field.string_mode, TaskFieldStringMode::List)
+        })
+    }
+
+    /// Opens the completion editor on the selected row, if it is a list one.
+    fn open_autocomplete(&mut self, candidates: Vec<Candidate>) {
+        if !self.selected_completes() {
+            return;
+        }
+        let Some(field) = self.selected_field() else {
+            return;
+        };
+        // The saved value is the names, so reopening resolves them back into
+        // items — and anything that no longer names a candidate is dropped
+        // rather than silently kept as a filter nobody can see how to remove.
+        let items = parse_label_values(field.value.text())
+            .into_iter()
+            .filter_map(|name| {
+                candidates
+                    .iter()
+                    .find(|candidate| candidate.display.eq_ignore_ascii_case(&name))
+                    .cloned()
+            })
+            .collect();
+        self.autocomplete = Some(AutocompleteState::new(items, candidates, usize::MAX));
+        self.sync_autocomplete_query();
+    }
+
+    /// Runs a change on the open completion editor, mirroring the result into
+    /// the row. Answers whether there was one to run.
+    fn with_autocomplete(&mut self, change: impl FnOnce(&mut AutocompleteState)) -> bool {
+        let Some(state) = self.autocomplete.as_mut() else {
+            return false;
+        };
+        change(state);
+        self.sync_autocomplete_query();
+        true
+    }
+
+    /// Copies the completion editor's value into the row it is editing.
+    fn sync_autocomplete_query(&mut self) {
+        let Some((text, caret)) = self
+            .autocomplete
+            .as_ref()
+            .map(|state| (state.text(), state.caret()))
+        else {
+            return;
+        };
+        if let Some(field) = self.selected_field_mut() {
+            field.empty_required = false;
+            field.value.set_text(text);
+            field.value.jump_start();
+            field.value.move_caret(caret as i64);
+        }
+    }
+
+    /// Resolves the completion editor and writes the picked names into the
+    /// row, answering with whatever could not be resolved.
+    ///
+    /// The names, joined the way a labels row joins its chips: the saved
+    /// schema does not change, and `me` is saved as `me` rather than as the
+    /// person who happened to pick it.
+    fn commit_autocomplete(&mut self) -> Option<Unresolved> {
+        let state = self.autocomplete.take()?;
+        let held = state.items().to_vec();
+        let (items, refusal) = match state.commit() {
+            Ok(items) => (items, None),
+            Err(refusal) => (held, Some(refusal)),
+        };
+        if let Some(field) = self.selected_field_mut() {
+            field.value.set_text_at_end(
+                items
+                    .iter()
+                    .map(|item| item.display.clone())
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            );
+        }
+        refusal
     }
 
     /// Opens the date picker on the selected field, if it holds a date.
@@ -963,7 +1154,7 @@ impl TaskFilterEditorState {
     /// per-record test — a regex filter recompiled its pattern for every task
     /// on every keystroke, which is where a filter pass over 20k tasks spent
     /// ~130ms of its ~135ms.
-    fn prepare(&self) -> PreparedFilter<'_> {
+    fn prepare(&self, me: Option<&str>) -> PreparedFilter<'_> {
         let today = date::today();
         PreparedFilter {
             sets: self
@@ -977,7 +1168,7 @@ impl TaskFilterEditorState {
                         .filter(|field| field.is_active())
                         .map(|field| PreparedField {
                             field,
-                            matcher: PreparedMatcher::for_field(field, today),
+                            matcher: PreparedMatcher::for_field(field, today, me),
                         })
                         .collect(),
                 })
@@ -1304,17 +1495,40 @@ enum PreparedMatcher {
     Regex(Option<regex::Regex>),
     /// The include and exclude tokens, already split and lowercased.
     Labels { includes: Vec<String>, excludes: Vec<String> },
+    /// The picked names, lowercased, and whether `me` was one of them.
+    ///
+    /// `me` is kept apart because it is not a name at all: it resolves to
+    /// whoever is logged in, at match time rather than when it was picked,
+    /// so a saved set stays personal to whoever loads it.
+    Picked {
+        names: Vec<String>,
+        me: Option<String>,
+    },
     /// The parsed query, or `None` when it is not a date expression.
     Date(Option<DateQuery>),
 }
 
 impl PreparedMatcher {
-    fn for_field(field: &TaskFilterFieldState, today: CivilDate) -> Self {
+    fn for_field(field: &TaskFilterFieldState, today: CivilDate, me: Option<&str>) -> Self {
         if field.empty_required {
             return Self::Empty;
         }
         match field.spec.kind {
             TaskFieldFilterKind::String => match field.string_mode {
+                TaskFieldStringMode::List => {
+                    let picked = parse_label_values(field.value.text());
+                    Self::Picked {
+                        names: picked
+                            .iter()
+                            .filter(|name| !name.eq_ignore_ascii_case(ME_LABEL))
+                            .map(|name| name.to_ascii_lowercase())
+                            .collect(),
+                        me: picked
+                            .iter()
+                            .any(|name| name.eq_ignore_ascii_case(ME_LABEL))
+                            .then(|| me.unwrap_or_default().to_string()),
+                    }
+                }
                 TaskFieldStringMode::Fuzzy => Self::Fuzzy(field.value.text().to_ascii_lowercase()),
                 TaskFieldStringMode::Substring => {
                     Self::Substring(field.value.text().to_ascii_lowercase())
@@ -1379,6 +1593,15 @@ impl PreparedField<'_> {
             }
             PreparedMatcher::Labels { includes, excludes } => {
                 label_selection_matches(&self.field.labels(record), includes, excludes)
+            }
+            // Exactly, not as a pattern: having picked from a list is the
+            // whole point, and `alex` must not also match `Alexis`.
+            PreparedMatcher::Picked { names, me } => {
+                let name = self.field.haystack(record).to_ascii_lowercase();
+                let is_me = me.as_ref().is_some_and(|gid| {
+                    !gid.is_empty() && record.assignee_gid.as_deref() == Some(gid.as_str())
+                });
+                is_me || names.iter().any(|picked| picked == &name)
             }
             // Same reasoning as an uncompilable regex: an unparseable date
             // expression is a value that nothing satisfies.
@@ -1516,6 +1739,12 @@ impl TaskFilterSet {
         };
 
         if let Some(mode) = saved.string_mode.as_deref().and_then(parse_string_mode) {
+            // A `list` on a row with no directory behind it is a mode that
+            // row cannot mean, so the value parks the way an unknown key
+            // does rather than landing as a filter nothing satisfies.
+            if matches!(mode, TaskFieldStringMode::List) && !field.spec.completes {
+                return false;
+            }
             field.string_mode = mode;
         }
         field.negated = saved.negated;
@@ -1548,6 +1777,7 @@ fn string_mode_name(mode: TaskFieldStringMode) -> &'static str {
         TaskFieldStringMode::Fuzzy => "fuzzy",
         TaskFieldStringMode::Substring => "contains",
         TaskFieldStringMode::Regex => "regex",
+        TaskFieldStringMode::List => "list",
     }
 }
 
@@ -1557,6 +1787,7 @@ fn parse_string_mode(name: &str) -> Option<TaskFieldStringMode> {
         "fuzzy" => Some(TaskFieldStringMode::Fuzzy),
         "contains" => Some(TaskFieldStringMode::Substring),
         "regex" => Some(TaskFieldStringMode::Regex),
+        "list" => Some(TaskFieldStringMode::List),
         _ => None,
     }
 }
@@ -2171,6 +2402,47 @@ impl TaskState {
             .with_selected_text(TextEdit::jump_end);
     }
 
+    /// Whether the selected filter row picks its values from a directory.
+    ///
+    /// Asked before an edit begins so the caller only pays for the workspace
+    /// directory on the one row that can use it.
+    pub fn filter_row_completes(&self) -> bool {
+        self.view.filter_editor.selected_completes()
+    }
+
+    /// Whether the panel's completion editor is open.
+    pub fn filter_autocomplete_open(&self) -> bool {
+        self.view.filter_editor.autocomplete.is_some()
+    }
+
+    /// Completes the typed prefix in the panel, or answers `false`.
+    pub fn filter_complete(&mut self, delta: i32) -> bool {
+        let mut completed = false;
+        self.view
+            .filter_editor
+            .with_autocomplete(|state| completed = state.complete(delta));
+        completed
+    }
+
+    /// Resolves the panel's completion editor, reporting what it could not.
+    pub fn filter_autocomplete_commit(&mut self) -> Option<String> {
+        let refusal = self.view.filter_editor.commit_autocomplete()?;
+        Some(match refusal {
+            Unresolved::Ambiguous(text) => format!("{text} is ambiguous"),
+            Unresolved::Unknown(text) => format!("no one called {text}"),
+        })
+    }
+
+    /// Who is logged in, for the `list` filter's `me`.
+    pub fn set_current_user_gid(&mut self, gid: Option<String>) {
+        self.view.current_user_gid = gid;
+    }
+
+    pub(crate) fn filter_edit_begin_with(&mut self, candidates: Vec<Candidate>) {
+        self.view.filter_editor.start_editing();
+        self.view.filter_editor.open_autocomplete(candidates);
+    }
+
     pub(crate) fn filter_edit_begin(&mut self) {
         self.view.filter_editor.start_editing();
     }
@@ -2657,6 +2929,7 @@ impl TaskState {
                         TaskFieldStringMode::Fuzzy => "string:fuzzy".to_string(),
                         TaskFieldStringMode::Substring => "string:contains".to_string(),
                         TaskFieldStringMode::Regex => "string:regex".to_string(),
+                        TaskFieldStringMode::List => "string:list".to_string(),
                     },
                     TaskFieldFilterKind::Labels => "labels".to_string(),
                     TaskFieldFilterKind::Date => "date".to_string(),
@@ -2910,12 +3183,7 @@ impl TaskState {
     }
 
     pub fn selected_task_url(&self) -> Option<String> {
-        let index = self.view.selected?;
-        let row = self.view.table.rows.get(index)?;
-        if row.kind != TaskRowKind::Task {
-            return None;
-        }
-        let task_gid = &row.gid;
+        let task_gid = &self.cursor_task_gid()?;
         let dataset = self.loading.dataset.as_ref()?;
         let record = dataset.records.iter().find(|r| r.gid == *task_gid)?;
         let project_gid = record.project_gids.first()?;
@@ -2923,10 +3191,7 @@ impl TaskState {
     }
 
     fn toggle_task_selection(&mut self) {
-        let Some(index) = self.view.selected else { return; };
-        let Some(row) = self.view.table.rows.get(index) else { return; };
-        if row.kind != TaskRowKind::Task { return; }
-        let gid = row.gid.clone();
+        let Some(gid) = self.cursor_task_gid() else { return; };
         if self.view.selected_task_ids.contains(&gid) {
             self.view.selected_task_ids.remove(&gid);
         } else {
@@ -3152,14 +3417,35 @@ impl TaskState {
     }
 
     pub fn move_up(&mut self) {
-        if let Some(index) = self.view.selected {
-            if let Some(previous) = self.view.table.previous_selectable_row_index(index, 1) {
-                self.view.selected = Some(previous);
+        if let Some(index) = self.view.recent_selected {
+            self.view.recent_selected = self
+                .view
+                .recent_table
+                .previous_selectable_row_index(index, 1)
+                .or(Some(index));
+            return;
+        }
+        let Some(index) = self.view.selected else {
+            return;
+        };
+        match self.view.table.previous_selectable_row_index(index, 1) {
+            // The two lists are vertically adjacent, so `k` off the top of
+            // the table lands in the pane rather than stopping dead.
+            Some(previous) if previous != index => self.view.selected = Some(previous),
+            _ => {
+                self.enter_recent_pane();
             }
         }
     }
 
     pub fn move_down(&mut self) {
+        if let Some(index) = self.view.recent_selected {
+            match self.view.recent_table.next_selectable_row_index(index, 1) {
+                Some(next) if next != index => self.view.recent_selected = Some(next),
+                _ => self.leave_recent_pane(),
+            }
+            return;
+        }
         if let Some(index) = self.view.selected {
             if let Some(next) = self.view.table.next_selectable_row_index(index, 1) {
                 self.view.selected = Some(next);
@@ -3170,6 +3456,7 @@ impl TaskState {
     }
 
     pub fn page_up(&mut self, page_size: usize) {
+        self.leave_recent_pane();
         let step = page_size.max(1);
         if let Some(index) = self.view.selected {
             if let Some(previous) = self.view.table.previous_selectable_row_index(index, step) {
@@ -3179,6 +3466,7 @@ impl TaskState {
     }
 
     pub fn page_down(&mut self, page_size: usize) {
+        self.leave_recent_pane();
         let step = page_size.max(1);
         if let Some(index) = self.view.selected {
             if let Some(next) = self.view.table.next_selectable_row_index(index, step) {
@@ -3190,14 +3478,17 @@ impl TaskState {
     }
 
     pub fn jump_top(&mut self) {
+        self.leave_recent_pane();
         self.view.selected = self.view.table.first_selectable_row_index();
     }
 
     pub fn jump_bottom(&mut self) {
+        self.leave_recent_pane();
         self.view.selected = self.view.table.last_selectable_row_index();
     }
 
     pub fn move_section_up(&mut self) {
+        self.leave_recent_pane();
         if let Some(index) = self.view.selected {
             if let Some(previous) = self.view.table.previous_section_row_index(index, 1) {
                 self.view.selected = Some(previous);
@@ -3206,6 +3497,7 @@ impl TaskState {
     }
 
     pub fn move_section_down(&mut self) {
+        self.leave_recent_pane();
         if let Some(index) = self.view.selected {
             if let Some(next) = self.view.table.next_section_row_index(index, 1) {
                 self.view.selected = Some(next);
@@ -3216,6 +3508,7 @@ impl TaskState {
     }
 
     pub fn move_project_up(&mut self) {
+        self.leave_recent_pane();
         if let Some(parent_index) = self.visible_parent_index() {
             self.view.selected = Some(parent_index);
             return;
@@ -3229,6 +3522,7 @@ impl TaskState {
     }
 
     pub fn move_project_down(&mut self) {
+        self.leave_recent_pane();
         if let Some(parent_index) = self.visible_parent_index() {
             self.view.selected = Some(parent_index);
             return;
@@ -3508,10 +3802,7 @@ impl TaskState {
         };
 
         let previous_selected_index = self.view.selected;
-        let selected_gid = self
-            .view.selected
-            .and_then(|index| self.view.table.rows.get(index))
-            .map(|row| row.gid.clone());
+        let selected_gid = self.cursor_task_gid();
         let selected_parent_gid = selected_gid.as_deref().and_then(|gid| {
             dataset
                 .records
@@ -3532,6 +3823,26 @@ impl TaskState {
         self.view.selected = selected_gid
             .as_deref()
             .and_then(|gid| self.view.table.rows.iter().position(|row| row.gid == gid));
+
+        // The pane holds whatever the table has stopped showing, so it is
+        // rebuilt from the table rather than beside it.
+        self.rebuild_recent_table();
+        // A rebuild that loses the cursor's task from the table hands the
+        // cursor to the pane, on the same task, in the same place on screen —
+        // rather than dropping it on a neighbouring row and leaving the edit
+        // behind. The fallbacks below still run, because `selected` is the
+        // row the cursor returns to when the pane is hidden.
+        self.view.recent_selected = match self.view.selected {
+            Some(_) => None,
+            None => selected_gid
+                .as_deref()
+                .and_then(|gid| self.view.recent_table.rows.iter().position(|row| row.gid == gid)),
+        };
+        if self.view.recent_selected.is_some() {
+            // Whatever the toggle says: a cursor the user cannot see is not
+            // a cursor.
+            self.view.recent_hidden = false;
+        }
 
         if self.view.selected.is_none() {
             self.view.selected = selected_parent_gid
@@ -3602,7 +3913,10 @@ impl TaskState {
     }
 
     fn apply_filter_panel(&self, records: &[TaskRecord]) -> Vec<TaskRecord> {
-        let filter = self.view.filter_editor.prepare();
+        let filter = self
+            .view
+            .filter_editor
+            .prepare(self.view.current_user_gid.as_deref());
         records
             .iter()
             .filter(|record| filter.matches(record))
@@ -3670,7 +3984,7 @@ impl TaskState {
         Some(CellEditView {
             column: edit.column,
             text: edit.value(),
-            caret: edit.text().map(|text| text.caret()),
+            caret: edit.caret(),
             window_start: edit.window_start,
             targets: edit.targets.len(),
         })
@@ -3712,11 +4026,15 @@ impl TaskState {
     /// In table order rather than set order, so a bulk edit's requests go out
     /// in the order the rows are read.
     pub fn edit_targets(&self) -> Vec<String> {
+        // Both lists, in reading order: a task selected before an edit pushed
+        // it out of the table is still selected, and the pane is where it is
+        // now — leaving it out would silently narrow the next bulk edit.
         let selected = self
             .view
-            .table
+            .recent_table
             .rows
             .iter()
+            .chain(self.view.table.rows.iter())
             .filter(|row| row.kind.is_task() && self.view.selected_task_ids.contains(&row.gid))
             .map(|row| row.gid.clone())
             .collect::<Vec<_>>();
@@ -3729,26 +4047,37 @@ impl TaskState {
     }
 
     /// The task the cursor is on, if it is on one.
+    ///
+    /// One cursor over two lists: whichever pane holds it answers.
     fn cursor_task_gid(&self) -> Option<String> {
-        let row = self.view.table.rows.get(self.view.selected?)?;
+        let row = match self.view.recent_selected {
+            Some(index) => self.view.recent_table.rows.get(index)?,
+            None => self.view.table.rows.get(self.view.selected?)?,
+        };
         row.kind.is_task().then(|| row.gid.clone())
     }
 
     fn record(&self, gid: &str) -> Option<&TaskRecord> {
         self.loading
             .dataset
-            .as_ref()?
-            .records
-            .iter()
-            .find(|record| record.gid == gid)
+            .as_ref()
+            .and_then(|dataset| dataset.records.iter().find(|record| record.gid == gid))
+            // A task the loaded targets no longer cover has left the dataset
+            // but is still in the cache — and still under the cursor, in the
+            // recently-edited pane, where `e` and `d` have to keep working.
+            .or_else(|| self.loading.cache.records.get(gid))
     }
 
     /// The text the table is showing for one cell of the cursor row.
     fn cursor_cell(&self, column: usize) -> String {
-        self.view
-            .selected
-            .and_then(|index| self.view.table.rows.get(index))
-            .and_then(|row| row.cells.get(column))
+        let row = match self.view.recent_selected {
+            Some(index) => self.view.recent_table.rows.get(index),
+            None => self
+                .view
+                .selected
+                .and_then(|index| self.view.table.rows.get(index)),
+        };
+        row.and_then(|row| row.cells.get(column))
             .cloned()
             .unwrap_or_default()
     }
@@ -3807,7 +4136,26 @@ impl TaskState {
                 CellEditor::Text(TextEdit::new(record.name.clone()))
             }
             crate::domain::ASSIGNEE_COLUMN => {
-                CellEditor::Text(TextEdit::new(record.assignee.clone().unwrap_or_default()))
+                let held = record
+                    .assignee
+                    .clone()
+                    .map(|display| {
+                        let handle = record
+                            .assignee_gid
+                            .clone()
+                            .unwrap_or_else(|| display.clone());
+                        Candidate::new(handle, display)
+                    })
+                    .into_iter()
+                    .collect();
+                // Capped at one: a task has an assignee, not assignees. The
+                // cap is what makes typing a second name a reassignment
+                // rather than an error.
+                CellEditor::Complete(AutocompleteState::new(
+                    held,
+                    self.people_candidates(ctx),
+                    1,
+                ))
             }
             crate::domain::DUE_COLUMN | crate::domain::START_COLUMN => {
                 let (label, value) = match column == crate::domain::DUE_COLUMN {
@@ -3826,7 +4174,16 @@ impl TaskState {
                 allow_empty: false,
             },
             crate::domain::PROJECTS_COLUMN => {
-                return Err("project membership is not editable yet".to_string())
+                let held = record
+                    .project_gids
+                    .iter()
+                    .map(|gid| Candidate::new(gid, ctx.project_name(gid)))
+                    .collect();
+                CellEditor::Complete(AutocompleteState::new(
+                    held,
+                    ctx.project_candidates(),
+                    usize::MAX,
+                ))
             }
             _ => {
                 let definitions = self.definitions_for_column(column, &record);
@@ -3875,20 +4232,39 @@ impl TaskState {
     pub fn commit_cell_edit(
         &mut self,
         ctx: &EditContext,
-    ) -> std::result::Result<Vec<TaskEdit>, String> {
+    ) -> std::result::Result<CommittedEdits, String> {
         let Some(edit) = self.view.cell_edit.clone() else {
-            return Ok(Vec::new());
+            return Ok(CommittedEdits::default());
         };
 
+        // Membership is not a field, so it leaves by a different door: a set
+        // of adds and removes rather than one value written onto each task.
+        if edit.column == crate::domain::PROJECTS_COLUMN {
+            let committed = self.project_edits_for(&edit, ctx)?;
+            self.view.cell_edit = None;
+            return Ok(committed);
+        }
+
         let value = edit.value();
-        let directory = self.assignee_directory();
+        let directory = self.people_directory(ctx);
+        // Resolved once, ahead of the loop: an assignee is resolved against a
+        // directory rather than against the task, so doing it per target
+        // would be the same answer several times — and several copies of the
+        // same refusal.
+        let assignee = match edit.column == crate::domain::ASSIGNEE_COLUMN {
+            true => Some(self.resolve_assignee_edit(&edit, &directory, ctx)?),
+            false => None,
+        };
         let mut edits = Vec::with_capacity(edit.targets.len());
 
         for gid in &edit.targets {
             let Some(record) = self.record(gid).cloned() else {
                 continue;
             };
-            let field = self.field_edit_for(&edit, &record, &value, &directory, ctx)?;
+            let field = match &assignee {
+                Some(assignee) => TaskFieldEdit::Assignee(assignee.clone()),
+                None => self.field_edit_for(&edit, &record, &value, &directory, ctx)?,
+            };
             let previous = field.undo_for(&record);
             edits.push(TaskEdit {
                 gid: gid.clone(),
@@ -3898,7 +4274,96 @@ impl TaskState {
         }
 
         self.view.cell_edit = None;
-        Ok(edits)
+        Ok(CommittedEdits {
+            fields: edits,
+            projects: Vec::new(),
+        })
+    }
+
+    /// Resolves the assignee editor into the person to send, or nobody.
+    ///
+    /// Text the candidate list cannot place gets one more chance through
+    /// [`resolve_assignee`], which is what keeps `me` and an email address —
+    /// two handles Asana takes that no directory lists — working.
+    fn resolve_assignee_edit(
+        &self,
+        edit: &TaskCellEditState,
+        directory: &[(String, String)],
+        ctx: &EditContext,
+    ) -> std::result::Result<Option<AssigneeRef>, String> {
+        let Some(complete) = edit.complete().cloned() else {
+            return Ok(None);
+        };
+
+        match complete.commit() {
+            Ok(items) => Ok(items.first().map(|item| {
+                AssigneeRef::new(
+                    item.handle.clone(),
+                    display_for(&item.handle, &item.display, directory),
+                )
+            })),
+            Err(Unresolved::Ambiguous(text)) => Err(format!("{text} is ambiguous")),
+            Err(Unresolved::Unknown(text)) => {
+                resolve_assignee(&text, directory, ctx.current_user_gid.as_deref())
+            }
+        }
+    }
+
+    /// Resolves the projects editor into the memberships to add and remove.
+    ///
+    /// The diff is per task: the editor opened on the cursor row's projects,
+    /// and applying that list to a selection means "be in these", which for
+    /// another task is a different set of requests.
+    fn project_edits_for(
+        &self,
+        edit: &TaskCellEditState,
+        ctx: &EditContext,
+    ) -> std::result::Result<CommittedEdits, String> {
+        let Some(complete) = edit.complete().cloned() else {
+            return Ok(CommittedEdits::default());
+        };
+        // Only a project the editor could have offered is a project the editor
+        // may take away. One a task is in that this session never loaded is
+        // invisible here, and removing it would be a change nobody asked for.
+        let offered = complete
+            .candidates()
+            .iter()
+            .map(|candidate| candidate.handle.clone())
+            .collect::<Vec<_>>();
+
+        let items = complete.commit().map_err(|unresolved| match unresolved {
+            Unresolved::Ambiguous(text) => format!("{text} is ambiguous"),
+            Unresolved::Unknown(text) => format!("no project called {text}"),
+        })?;
+        // Asana will not store a task in no projects at all, so this is a
+        // refusal rather than a removal that comes back as an error.
+        if items.is_empty() {
+            return Err("a task has to be in at least one project".to_string());
+        }
+
+        let mut projects = Vec::new();
+        for gid in &edit.targets {
+            let Some(record) = self.record(gid) else {
+                continue;
+            };
+            for item in &items {
+                if !record.project_gids.contains(&item.handle) {
+                    projects.push(ProjectEdit::add(gid, &item.handle, &item.display));
+                }
+            }
+            for held in &record.project_gids {
+                let kept = items.iter().any(|item| &item.handle == held);
+                if kept || !offered.contains(held) {
+                    continue;
+                }
+                projects.push(ProjectEdit::remove(gid, held, ctx.project_name(held)));
+            }
+        }
+
+        Ok(CommittedEdits {
+            fields: Vec::new(),
+            projects,
+        })
     }
 
     /// Resolves the typed value into the change one task will take.
@@ -3915,6 +4380,8 @@ impl TaskState {
                 "" => Err("a task needs a title".to_string()),
                 title => Ok(TaskFieldEdit::Name(title.to_string())),
             },
+            // Resolved by `resolve_assignee_edit` before the target loop, so
+            // this is only reached by a caller that bypassed it.
             crate::domain::ASSIGNEE_COLUMN => Ok(TaskFieldEdit::Assignee(resolve_assignee(
                 value,
                 directory,
@@ -3928,7 +4395,7 @@ impl TaskState {
             }
             crate::domain::STATE_COLUMN => Ok(TaskFieldEdit::Completed(value == "done")),
             crate::domain::PROJECTS_COLUMN => {
-                Err("project membership is not editable yet".to_string())
+                Err("project membership is not a task field".to_string())
             }
             column => {
                 // Resolved per task, not once: two projects declare the same
@@ -3957,11 +4424,50 @@ impl TaskState {
         }
     }
 
+    /// Everyone the assignee editor can offer, most useful first.
+    ///
+    /// `me` leads, because it is the one name nobody has to remember and the
+    /// one that means something different to each reader. The workspace
+    /// directory follows, and the people named by loaded tasks after it —
+    /// which is what the picker falls back to when `list_users` fails.
+    pub(crate) fn people_candidates(&self, ctx: &EditContext) -> Vec<Candidate> {
+        let mut candidates = Vec::new();
+        if let Some(gid) = &ctx.current_user_gid {
+            candidates.push(Candidate::new(gid, "me"));
+        }
+        for (handle, display) in self.people_directory(ctx) {
+            if candidates
+                .iter()
+                .any(|candidate| candidate.handle == handle && candidate.display == display)
+            {
+                continue;
+            }
+            candidates.push(Candidate::new(handle, display));
+        }
+        candidates
+    }
+
+    /// The people the editor can resolve a name against, as `(gid, name)`.
+    ///
+    /// The workspace directory when there is one, plus whoever the loaded
+    /// records name — the second is the fallback, and on a task assigned to
+    /// someone outside the workspace list it is also the only entry.
+    fn people_directory(&self, ctx: &EditContext) -> Vec<(String, String)> {
+        let mut directory = ctx.people.clone();
+        for person in self.assignee_directory() {
+            if !directory.iter().any(|(gid, _)| gid == &person.0) {
+                directory.push(person);
+            }
+        }
+        directory
+    }
+
     /// The people the loaded records name, as `(gid, display name)`.
     ///
-    /// The only directory the app has: Asana is never asked who exists, so an
-    /// assignee can be typed by name only for someone already on screen. An
-    /// email address sidesteps this entirely.
+    /// What the app knows without asking Asana who exists: everyone with a
+    /// task on screen. On its own this excludes the most common reason to
+    /// reassign a task, which is why it is the fallback rather than the
+    /// directory.
     fn assignee_directory(&self) -> Vec<(String, String)> {
         let mut directory = self
             .loading
@@ -4025,6 +4531,7 @@ impl TaskState {
     /// The same, for a whole batch, with one rebuild at the end.
     pub fn apply_edits_locally(&mut self, edits: &[TaskEdit]) {
         for edit in edits {
+            self.remember_edited(&edit.gid);
             if let Some(record) = self.loading.cache.records.get_mut(&edit.gid) {
                 edit.field.apply(record);
             }
@@ -4039,6 +4546,26 @@ impl TaskState {
             }
         }
         self.refresh_table();
+    }
+
+    /// Applies membership changes to the cache and rebuilds from it.
+    ///
+    /// A full rebuild rather than `refresh_table`: the cache is keyed by the
+    /// target that loaded a task, so a task taken out of the project in view
+    /// is still in that project's cached page until the dataset is rebuilt
+    /// from it — and the row would sit there until something else forced a
+    /// reload.
+    pub fn apply_project_edits_locally(&mut self, edits: &[ProjectEdit]) {
+        if edits.is_empty() {
+            return;
+        }
+        for edit in edits {
+            self.remember_edited(&edit.gid);
+            if let Some(record) = self.loading.cache.records.get_mut(&edit.gid) {
+                edit.apply(record);
+            }
+        }
+        self.rebuild_visible_dataset();
     }
 
     /// Records the `modified_at` the server reported for a confirmed edit.
@@ -4091,21 +4618,81 @@ impl TaskState {
     // --- keys the open editor reads ---------------------------------------
 
     pub fn cell_edit_push_char(&mut self, ch: char) {
+        if let Some(complete) = self.view.cell_edit.as_mut().and_then(|edit| edit.complete_mut()) {
+            complete.push_char(ch);
+            return;
+        }
         if let Some(text) = self.view.cell_edit.as_mut().and_then(|edit| edit.text_mut()) {
             text.insert(ch);
         }
     }
 
     pub fn cell_edit_pop_char(&mut self) {
+        // The completion editor deletes an item when there is no character
+        // left to delete, so it cannot go through the plain buffer.
+        if let Some(complete) = self.view.cell_edit.as_mut().and_then(|edit| edit.complete_mut()) {
+            complete.delete_back();
+            return;
+        }
         if let Some(text) = self.view.cell_edit.as_mut().and_then(|edit| edit.text_mut()) {
             text.delete_back();
         }
     }
 
     pub fn cell_edit_move_caret(&mut self, delta: i64) {
+        if let Some(complete) = self.view.cell_edit.as_mut().and_then(|edit| edit.complete_mut()) {
+            complete.move_caret(delta);
+            return;
+        }
         if let Some(text) = self.view.cell_edit.as_mut().and_then(|edit| edit.text_mut()) {
             text.move_caret(delta);
         }
+    }
+
+    /// Completes the typed prefix, or answers `false` when nothing matches.
+    pub fn cell_edit_complete(&mut self, delta: i32) -> bool {
+        self.view
+            .cell_edit
+            .as_mut()
+            .and_then(|edit| edit.complete_mut())
+            .is_some_and(|complete| complete.complete(delta))
+    }
+
+    /// Whether the open editor completes over a list of names.
+    pub fn cell_edit_is_complete(&self) -> bool {
+        self.view
+            .cell_edit
+            .as_ref()
+            .is_some_and(|edit| edit.complete().is_some())
+    }
+
+    /// The completion editor that is open, and the field it is editing.
+    ///
+    /// One accessor for both homes: the overlay that lists the candidates
+    /// does not care which pane asked for it, and there is never more than
+    /// one open.
+    pub(crate) fn open_completion(&self) -> Option<(String, &AutocompleteState)> {
+        if let Some(edit) = self.view.cell_edit.as_ref() {
+            if let Some(state) = edit.complete() {
+                let label = self
+                    .view
+                    .table
+                    .columns
+                    .get(edit.column)
+                    .cloned()
+                    .unwrap_or_default();
+                return Some((label, state));
+            }
+        }
+
+        let state = self.view.filter_editor.autocomplete.as_ref()?;
+        let label = self
+            .view
+            .filter_editor
+            .selected_label()
+            .unwrap_or_default()
+            .to_string();
+        Some((label, state))
     }
 
     pub fn cell_edit_move_word(&mut self, delta: i64) {
@@ -4136,6 +4723,137 @@ impl TaskState {
         if let Some(edit) = self.view.cell_edit.as_mut() {
             edit.cycle_option(delta);
         }
+    }
+}
+
+/// The name to show for a picked person.
+///
+/// `me` is a handle, not a name: the cell would read `me` until the next
+/// reload, naming the reader rather than the person. The directory answers
+/// with who that actually is when it knows.
+fn display_for(handle: &str, display: &str, directory: &[(String, String)]) -> String {
+    if display != "me" {
+        return display.to_string();
+    }
+    directory
+        .iter()
+        .find(|(gid, _)| gid == handle)
+        .map(|(_, name)| name.clone())
+        .unwrap_or_else(|| display.to_string())
+}
+
+/// The recently-edited pane: what is in it, and the cursor it shares with the
+/// table.
+///
+/// The pane exists because the two most useful edits are the two most likely
+/// to make a row vanish — reassign a task while filtering on one assignee, or
+/// move it out of the project in view, and the row leaves under the cursor at
+/// the one moment the edit is least finished.
+impl TaskState {
+    /// Records that a task was edited, newest first.
+    fn remember_edited(&mut self, gid: &str) {
+        self.view.recently_edited.retain(|held| held != gid);
+        self.view.recently_edited.insert(0, gid.to_string());
+        self.view.recently_edited.truncate(MAX_RECENTLY_EDITED);
+    }
+
+    /// The rows of the recently-edited pane.
+    pub fn recent_table(&self) -> &TaskTableModel {
+        &self.view.recent_table
+    }
+
+    /// Whether the pane is drawn: it has rows, and it has not been toggled off.
+    pub fn recent_pane_visible(&self) -> bool {
+        !self.view.recent_hidden && !self.view.recent_table.rows.is_empty()
+    }
+
+    /// How many recently-edited tasks the view is not showing.
+    pub fn recent_hidden_count(&self) -> usize {
+        self.view.recent_hidden_count
+    }
+
+    /// How many tasks the pane is holding.
+    pub fn recent_pane_rows(&self) -> usize {
+        match self.recent_pane_visible() {
+            true => self.view.recent_table.rows.len(),
+            false => 0,
+        }
+    }
+
+    /// The cursor's row in the pane, when the cursor is in it.
+    pub fn recent_selected_index(&self) -> Option<usize> {
+        self.view.recent_selected
+    }
+
+    /// Shows or hides the pane.
+    ///
+    /// Hiding it with the cursor inside puts the cursor back in the table, at
+    /// the row it was holding: a cursor the user cannot see is worse than a
+    /// cursor that moved.
+    pub fn toggle_recent_pane(&mut self) {
+        self.view.recent_hidden = !self.view.recent_hidden;
+        if self.view.recent_hidden {
+            self.leave_recent_pane();
+        }
+    }
+
+    /// Moves the cursor out of the pane and back into the table.
+    fn leave_recent_pane(&mut self) {
+        if self.view.recent_selected.take().is_none() {
+            return;
+        }
+        if self.view.selected.is_none() {
+            self.view.selected = self.view.table.first_selectable_row_index();
+        }
+    }
+
+    /// Moves the cursor into the pane, onto its last row.
+    ///
+    /// Answers whether there was a pane to move into, so `k` at the top of
+    /// the table can fall back to doing nothing.
+    fn enter_recent_pane(&mut self) -> bool {
+        if !self.recent_pane_visible() {
+            return false;
+        }
+        self.view.recent_selected = self.view.recent_table.last_selectable_row_index();
+        self.view.recent_selected.is_some()
+    }
+
+    /// Rebuilds the pane's rows from the tasks edited this session.
+    ///
+    /// Records come from the cache rather than the visible dataset: a task
+    /// taken out of the project in view is no longer in the dataset at all,
+    /// and that is exactly the edit the pane exists to keep reachable.
+    fn rebuild_recent_table(&mut self) {
+        let Some(definitions) = self
+            .loading
+            .dataset
+            .as_ref()
+            .map(|dataset| dataset.custom_field_definitions.clone())
+        else {
+            self.view.recent_table = TaskTableModel::empty();
+            return;
+        };
+
+        let shown = self
+            .view
+            .table
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.as_str())
+            .collect::<HashSet<_>>();
+        let mut records = self
+            .view
+            .recently_edited
+            .iter()
+            .filter(|gid| !shown.contains(gid.as_str()))
+            .filter_map(|gid| self.loading.cache.records.get(gid).cloned())
+            .collect::<Vec<_>>();
+
+        self.view.recent_hidden_count = records.len();
+        records.truncate(MAX_RECENT_ROWS);
+        self.view.recent_table = TaskTableModel::flat_from_records(records, definitions);
     }
 }
 
@@ -5402,13 +6120,14 @@ mod tests {
         let mut record = TaskRecord::new("t1", "Task one");
         record.due_date = value.map(ToString::to_string);
 
-        let matcher = super::PreparedMatcher::for_field(&field, crate::domain::date::today());
+        let matcher = super::PreparedMatcher::for_field(&field, crate::domain::date::today(), None);
         super::PreparedField { field: &field, matcher }.matches(&record)
     }
 
     fn due_field(query: &str) -> super::TaskFilterFieldState {
         let mut field = super::TaskFilterFieldState::new(
             super::TaskFilterFieldSpec {
+                completes: false,
                 key: "due".to_string(),
                 label: "Due".to_string(),
                 kind: TaskFieldFilterKind::Date,
@@ -6223,6 +6942,7 @@ mod tests {
         // pass over 20k tasks. `prepare` is what holds it still.
         let mut field = super::TaskFilterFieldState::new(
             super::TaskFilterFieldSpec {
+                completes: false,
                 key: "title".to_string(),
                 label: "Title".to_string(),
                 kind: TaskFieldFilterKind::String,
@@ -6234,13 +6954,13 @@ mod tests {
         );
         field.value.set_text_at_end("^ship");
 
-        let compiled = super::PreparedMatcher::for_field(&field, crate::domain::date::today());
+        let compiled = super::PreparedMatcher::for_field(&field, crate::domain::date::today(), None);
         assert!(matches!(compiled, super::PreparedMatcher::Regex(Some(_))));
 
         // And a pattern that cannot compile matches nothing, rather than
         // reading as "no filter" and letting everything through.
         field.value.set_text_at_end("(unclosed");
-        let broken = super::PreparedMatcher::for_field(&field, crate::domain::date::today());
+        let broken = super::PreparedMatcher::for_field(&field, crate::domain::date::today(), None);
         assert!(matches!(broken, super::PreparedMatcher::Regex(None)));
 
         let record = TaskRecord::new("t1", "Ship it");
@@ -7707,6 +8427,7 @@ mod tests {
         EditContext {
             today: Some(crate::domain::CivilDate::new(2026, 6, 1).expect("a real day")),
             current_user_gid: Some("user-alex".to_string()),
+            ..EditContext::default()
         }
     }
 
@@ -7726,8 +8447,9 @@ mod tests {
         let edits = state
             .commit_cell_edit(&edit_context())
             .expect("the edit commits");
-        state.apply_edits_locally(&edits);
-        edits
+        state.apply_edits_locally(&edits.fields);
+        state.apply_project_edits_locally(&edits.projects);
+        edits.fields
     }
 
     #[test]
@@ -7864,6 +8586,7 @@ mod tests {
         let edits = state
             .commit_cell_edit(&edit_context())
             .expect("a state always resolves")
+            .fields
             .iter()
             .map(|edit| edit.gid.clone())
             .collect::<Vec<_>>();
@@ -7990,7 +8713,8 @@ mod tests {
         state.cell_edit_cycle_value(1);
         let edits = state
             .commit_cell_edit(&edit_context())
-            .expect("the picked option resolves");
+            .expect("the picked option resolves")
+            .fields;
 
         assert_eq!(
             edits[0].field,
@@ -8056,15 +8780,458 @@ mod tests {
         );
     }
 
+    /// The project candidates a `p1`-loaded fixture would be offered.
+    fn project_context() -> EditContext {
+        EditContext {
+            projects: vec![
+                ("p1".to_string(), "Inbox".to_string()),
+                ("p2".to_string(), "Backlog".to_string()),
+            ],
+            ..edit_context()
+        }
+    }
+
     #[test]
-    fn the_projects_column_says_it_is_not_editable_yet() {
+    fn the_projects_column_opens_on_the_projects_the_task_is_in() {
         let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship it", false)]);
         state.move_column(crate::domain::PROJECTS_COLUMN as i64);
 
+        state
+            .begin_cell_edit(&project_context())
+            .expect("the completion editor opens");
+
+        assert!(state.cell_edit_is_complete());
         assert_eq!(
-            state.begin_cell_edit(&edit_context()),
-            Err("project membership is not editable yet".to_string())
+            state.cell_edit_view().expect("an open editor").text,
+            "Inbox",
+            "the names, not the gids the write will use"
         );
+    }
+
+    #[test]
+    fn a_project_is_added_and_the_one_it_replaces_is_removed() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship it", false)]);
+        state.move_column(crate::domain::PROJECTS_COLUMN as i64);
+        state
+            .begin_cell_edit(&project_context())
+            .expect("the completion editor opens");
+
+        // Delete the project it is in, then complete a different one.
+        state.cell_edit_pop_char();
+        for ch in "back".chars() {
+            state.cell_edit_push_char(ch);
+        }
+        assert!(state.cell_edit_complete(1));
+
+        let edits = state
+            .commit_cell_edit(&project_context())
+            .expect("the project resolves");
+
+        assert!(edits.fields.is_empty(), "membership is not a task field");
+        assert_eq!(
+            edits.projects,
+            vec![
+                crate::domain::ProjectEdit::add("t1", "p2", "Backlog"),
+                crate::domain::ProjectEdit::remove("t1", "p1", "Inbox"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_task_removed_from_the_project_in_view_leaves_the_table_at_once() {
+        // The cache is keyed by the target that loaded the task, so the
+        // record is still in `p1`'s cached page — the rebuild has to drop it
+        // rather than wait for a refresh that nothing is going to ask for.
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship it", false)]);
+        assert_eq!(state.table().task_count(), 1);
+
+        state.apply_project_edits_locally(&[crate::domain::ProjectEdit::remove(
+            "t1", "p1", "Inbox",
+        )]);
+
+        assert_eq!(state.table().task_count(), 0);
+    }
+
+    #[test]
+    fn emptying_the_projects_cell_is_refused_rather_than_sent() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship it", false)]);
+        state.move_column(crate::domain::PROJECTS_COLUMN as i64);
+        state
+            .begin_cell_edit(&project_context())
+            .expect("the completion editor opens");
+        state.cell_edit_clear();
+
+        assert_eq!(
+            state.commit_cell_edit(&project_context()),
+            Err("a task has to be in at least one project".to_string())
+        );
+        assert!(state.cell_edit_open(), "and the editor stays open");
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_project_commits_nothing_and_says_so() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship it", false)]);
+        state.move_column(crate::domain::PROJECTS_COLUMN as i64);
+        state
+            .begin_cell_edit(&project_context())
+            .expect("the completion editor opens");
+        for ch in "Nowhere".chars() {
+            state.cell_edit_push_char(ch);
+        }
+
+        assert_eq!(
+            state.commit_cell_edit(&project_context()),
+            Err("no project called Nowhere".to_string())
+        );
+    }
+
+    // --- The `list` match mode -------------------------------------------
+
+    use super::{TaskFieldStringMode, MAX_RECENT_ROWS};
+    use crate::config::{SavedFilterField, SavedFilterSet};
+
+    /// A state holding three tasks assigned to three different people.
+    fn assigned_state() -> TaskState {
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task_due("t1", "Ship it", "Alex Chen", "2026-06-10"),
+            sel_task_due("t2", "Label it", "Jo Park", "2026-06-11"),
+            sel_task_due("t3", "Close it", "Priya Raman", "2026-06-12"),
+        ]);
+        state.set_current_user_gid(Some("user-Jo Park".to_string()));
+        state
+    }
+
+    /// Puts the selected row into `list` mode by cycling the ring to it.
+    fn cycle_to_list(state: &mut TaskState) {
+        for _ in 0..4 {
+            if matches!(
+                state.view.filter_editor.selected_field().map(|f| f.string_mode),
+                Some(TaskFieldStringMode::List)
+            ) {
+                return;
+            }
+            state.filter_cycle_mode();
+        }
+        panic!("the row never offered a list mode");
+    }
+
+    #[test]
+    fn only_the_assignee_row_offers_the_list_mode() {
+        let mut state = assigned_state();
+
+        select_field(&mut state, "assignee");
+        cycle_to_list(&mut state);
+
+        // Every other string row keeps the three modes it had.
+        for key in ["title", "projects"] {
+            select_field(&mut state, key);
+            for _ in 0..3 {
+                state.filter_cycle_mode();
+            }
+            assert!(
+                !matches!(
+                    state.view.filter_editor.selected_field().map(|f| f.string_mode),
+                    Some(TaskFieldStringMode::List)
+                ),
+                "{key} has no directory behind it"
+            );
+        }
+    }
+
+    #[test]
+    fn a_list_row_matches_the_picked_people_exactly_and_ors_them() {
+        let mut state = assigned_state();
+        select_field(&mut state, "assignee");
+        cycle_to_list(&mut state);
+        set_field(&mut state, "assignee", "Alex Chen | Priya Raman");
+        state.refresh_from_cache();
+
+        assert_eq!(visible_gids(&state), vec!["t1", "t3"]);
+    }
+
+    #[test]
+    fn a_list_row_does_not_match_a_name_that_merely_contains_the_text() {
+        // The whole point of having picked from a list: `alex` is a person,
+        // not a pattern.
+        let mut state = assigned_state();
+        select_field(&mut state, "assignee");
+        cycle_to_list(&mut state);
+        set_field(&mut state, "assignee", "Alex");
+        state.refresh_from_cache();
+
+        assert!(visible_gids(&state).is_empty());
+    }
+
+    #[test]
+    fn a_negated_list_row_is_none_of_these() {
+        let mut state = assigned_state();
+        select_field(&mut state, "assignee");
+        cycle_to_list(&mut state);
+        set_field(&mut state, "assignee", "Alex Chen");
+        state.filter_toggle_negate_field();
+        state.refresh_from_cache();
+
+        assert_eq!(visible_gids(&state), vec!["t2", "t3"]);
+    }
+
+    #[test]
+    fn me_in_a_list_row_resolves_to_whoever_is_logged_in() {
+        // Resolved at match time, not when it was picked, so a saved set
+        // stays personal to whoever loads it.
+        let mut state = assigned_state();
+        select_field(&mut state, "assignee");
+        cycle_to_list(&mut state);
+        set_field(&mut state, "assignee", "me");
+        state.refresh_from_cache();
+
+        assert_eq!(visible_gids(&state), vec!["t2"], "Jo is logged in");
+
+        state.set_current_user_gid(Some("user-Alex Chen".to_string()));
+        state.refresh_from_cache();
+        assert_eq!(visible_gids(&state), vec!["t1"], "and now Alex is");
+    }
+
+    #[test]
+    fn the_filter_row_completes_over_the_same_people_the_cell_does() {
+        let mut state = assigned_state();
+        select_field(&mut state, "assignee");
+        cycle_to_list(&mut state);
+
+        let candidates = state.people_candidates(&edit_context());
+        state.filter_edit_begin_with(candidates);
+        assert!(state.filter_autocomplete_open());
+
+        for ch in "pri".chars() {
+            state.filter_push_char(ch);
+        }
+        assert!(state.filter_complete(1));
+        assert_eq!(state.filter_autocomplete_commit(), None);
+        state.refresh_from_cache();
+
+        assert_eq!(
+            state.filter_panel_rows()[1],
+            ("Assignee".to_string(), "Priya Raman".to_string()),
+            "the picked name is the row's value"
+        );
+        assert_eq!(visible_gids(&state), vec!["t3"]);
+    }
+
+    #[test]
+    fn a_filter_name_that_matches_nobody_is_dropped_with_a_message() {
+        let mut state = assigned_state();
+        select_field(&mut state, "assignee");
+        cycle_to_list(&mut state);
+
+        let candidates = state.people_candidates(&edit_context());
+        state.filter_edit_begin_with(candidates);
+        for ch in "nobody".chars() {
+            state.filter_push_char(ch);
+        }
+
+        assert_eq!(
+            state.filter_autocomplete_commit(),
+            Some("no one called nobody".to_string())
+        );
+        assert_eq!(
+            state.filter_panel_rows()[1],
+            ("Assignee".to_string(), String::new()),
+            "and the row is left filtering nothing rather than nothing at all"
+        );
+    }
+
+    #[test]
+    fn a_list_row_saves_and_reloads_through_a_named_set() {
+        let mut state = assigned_state();
+        select_field(&mut state, "assignee");
+        cycle_to_list(&mut state);
+        set_field(&mut state, "assignee", "Alex Chen | me");
+
+        let saved = state.filter_sets_to_saved();
+        let field = saved[0]
+            .fields
+            .iter()
+            .find(|field| field.key == "assignee")
+            .expect("the row is saved");
+        assert_eq!(field.query, "Alex Chen | me");
+        assert_eq!(field.string_mode.as_deref(), Some("list"));
+
+        let mut reloaded = assigned_state();
+        reloaded.filter_sets_load("people", &saved);
+        reloaded.refresh_from_cache();
+        assert_eq!(visible_gids(&reloaded), vec!["t1", "t2"]);
+    }
+
+    #[test]
+    fn a_list_mode_saved_against_a_row_that_cannot_offer_it_parks() {
+        // The same treatment an unknown field key gets: parked rather than
+        // applied as a mode the row cannot mean.
+        let mut state = assigned_state();
+        let _ = &state;
+        let saved = vec![SavedFilterSet {
+            negated: false,
+            fields: vec![SavedFilterField {
+                key: "title".to_string(),
+                query: "Ship it".to_string(),
+                string_mode: Some("list".to_string()),
+                empty: false,
+                negated: false,
+            }],
+        }];
+        state.filter_sets_load("odd", &saved);
+        state.refresh_from_cache();
+
+        assert_eq!(
+            visible_gids(&state),
+            vec!["t1", "t2", "t3"],
+            "nothing was applied"
+        );
+        assert_eq!(
+            state.filter_sets_to_saved(),
+            saved,
+            "and nothing was thrown away either"
+        );
+    }
+
+    // --- Recently edited --------------------------------------------------
+
+    /// The task ids the pane is holding.
+    fn recent_gids(state: &TaskState) -> Vec<&str> {
+        state
+            .recent_table()
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.as_str())
+            .collect()
+    }
+
+    /// Marks `t1` done with the table showing only open tasks, which is the
+    /// shortest edit that hides its own subject.
+    /// The table sorts by title with no dates in play, so `t1` is the first
+    /// row and the one the cursor starts on.
+    fn state_with_an_edit_out_of_view() -> TaskState {
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task("t1", "Alpha", false),
+            sel_task("t2", "Beta", false),
+        ]);
+        state.set_completed_filter(Some(false));
+        state.refresh_from_cache();
+
+        let edits = state.toggle_completed_edits();
+        state.apply_edits_locally(&edits);
+        state
+    }
+
+    #[test]
+    fn a_task_edited_out_of_the_view_lands_in_the_pane_with_the_cursor() {
+        let state = state_with_an_edit_out_of_view();
+
+        assert_eq!(visible_gids(&state), vec!["t2"]);
+        assert_eq!(recent_gids(&state), vec!["t1"]);
+        assert_eq!(state.recent_selected_index(), Some(0));
+        assert!(state.recent_pane_visible());
+    }
+
+    #[test]
+    fn a_task_the_view_still_shows_is_not_in_the_pane() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship it", false)]);
+        state.set_completed_filter(None);
+
+        let edits = state.toggle_completed_edits();
+        state.apply_edits_locally(&edits);
+
+        assert_eq!(visible_gids(&state), vec!["t1"]);
+        assert!(recent_gids(&state).is_empty(), "nothing is hidden");
+        assert!(!state.recent_pane_visible());
+    }
+
+    #[test]
+    fn a_task_that_matches_again_leaves_the_pane() {
+        let mut state = state_with_an_edit_out_of_view();
+        assert_eq!(recent_gids(&state), vec!["t1"]);
+
+        // Widen the filter: the task is back in the table, so the pane has
+        // nothing left to hold.
+        state.set_completed_filter(None);
+        state.refresh_from_cache();
+
+        assert!(recent_gids(&state).is_empty());
+        assert_eq!(state.recent_selected_index(), None);
+        assert!(visible_gids(&state).contains(&"t1"));
+    }
+
+    #[test]
+    fn the_cursor_walks_out_of_the_pane_and_into_the_table() {
+        let mut state = state_with_an_edit_out_of_view();
+        assert_eq!(state.recent_selected_index(), Some(0));
+
+        // The pane sits above the table, so down leaves it and up goes back.
+        state.move_down();
+        assert_eq!(state.recent_selected_index(), None);
+        assert_eq!(state.cursor_task_gid().as_deref(), Some("t2"));
+
+        state.move_up();
+        assert_eq!(state.recent_selected_index(), Some(0));
+        assert_eq!(state.cursor_task_gid().as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn hiding_the_pane_returns_the_cursor_to_the_table() {
+        let mut state = state_with_an_edit_out_of_view();
+
+        state.toggle_recent_pane();
+
+        assert!(!state.recent_pane_visible());
+        assert_eq!(state.recent_selected_index(), None);
+        assert_eq!(state.cursor_task_gid().as_deref(), Some("t2"));
+
+        // And an edit that hides the cursor's task shows it again, toggle or
+        // no toggle: a cursor the user cannot see is not a cursor.
+        let edits = state.toggle_completed_edits();
+        state.apply_edits_locally(&edits);
+
+        assert!(state.recent_pane_visible());
+        assert_eq!(state.cursor_task_gid().as_deref(), Some("t2"));
+    }
+
+    #[test]
+    fn a_task_in_the_pane_can_still_be_edited() {
+        // Its record has left the dataset with the project it was in, so
+        // every edit path has to find it in the cache instead.
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Alpha", false)]);
+        state.apply_project_edits_locally(&[crate::domain::ProjectEdit::remove(
+            "t1", "p1", "Inbox",
+        )]);
+        assert_eq!(recent_gids(&state), vec!["t1"]);
+        assert_eq!(state.recent_selected_index(), Some(0));
+
+        let edits = state.toggle_completed_edits();
+
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].field, TaskFieldEdit::Completed(true));
+        state.apply_edits_locally(&edits);
+        assert_eq!(
+            state.recent_table().rows[0].cells[crate::domain::STATE_COLUMN],
+            "done",
+            "and the pane shows the result"
+        );
+    }
+
+    #[test]
+    fn the_pane_holds_only_the_newest_few_and_counts_the_rest() {
+        let tasks = (0..6)
+            .map(|index| sel_task(&format!("t{index}"), &format!("Task {index}"), false))
+            .collect::<Vec<_>>();
+        let mut state = loaded_state_with_tasks(tasks);
+        state.set_completed_filter(Some(false));
+        state.refresh_from_cache();
+
+        state.select_all_visible_tasks();
+        let edits = state.toggle_completed_edits();
+        state.apply_edits_locally(&edits);
+
+        assert_eq!(recent_gids(&state).len(), MAX_RECENT_ROWS);
+        assert_eq!(state.recent_hidden_count(), 6, "the rest is still counted");
     }
 
     #[test]

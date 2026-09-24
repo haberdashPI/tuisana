@@ -18,7 +18,10 @@ use tuisana::{
         AsanaClient,
     },
     config::{Config, ProjectVisibilityConfig},
-    domain::{Project, TaskFieldEdit, ASSIGNEE_COLUMN, STATE_COLUMN, TITLE_COLUMN},
+    domain::{
+        Project, ProjectEdit, TaskFieldEdit, ASSIGNEE_COLUMN, PROJECTS_COLUMN, STATE_COLUMN,
+        TITLE_COLUMN,
+    },
     input::KeyMap,
 };
 
@@ -56,8 +59,21 @@ fn task(gid: &str, name: &str, assignee: &str, due: &str) -> TaskDto {
 }
 
 fn client() -> FakeAsanaClient {
-    FakeAsanaClient::new(vec![Project::new("project-1", "Inbox", true)])
+    FakeAsanaClient::new(vec![
+        Project::new("project-1", "Inbox", true),
+        // Somewhere to move a task to. It has no tasks of its own, so it
+        // never loads — which is the point: a project you can file into is
+        // not the same as a project you are looking at.
+        Project::new("project-2", "Backlog", false),
+    ])
         .with_current_user_gid("user-alex")
+        .with_users(vec![
+            ("user-alex", "alex"),
+            ("user-jo", "jo"),
+            // In the workspace, on no loaded task: the directory is the only
+            // way to reach them.
+            ("user-priya", "Priya Raman"),
+        ])
         .with_custom_field_settings(
             "project-1",
             vec![ProjectCustomFieldSettingDto {
@@ -103,15 +119,30 @@ struct Session {
 
 impl Session {
     fn start() -> Self {
-        let client = client();
+        Self::start_with(client())
+    }
+
+    /// A session whose backend refuses every write to one task.
+    fn refusing(gid: &str) -> Self {
+        Self::start_with(client().with_update_failure(gid))
+    }
+
+    fn start_with(client: FakeAsanaClient) -> Self {
         // Projects the config never names start hidden, so the one with the
         // fixtures has to be named.
         let mut config = Config::default();
-        config.project_visibility = vec![ProjectVisibilityConfig {
-            gid: "project-1".to_string(),
-            starred: true,
-            hidden: false,
-        }];
+        config.project_visibility = vec![
+            ProjectVisibilityConfig {
+                gid: "project-1".to_string(),
+                starred: true,
+                hidden: false,
+            },
+            ProjectVisibilityConfig {
+                gid: "project-2".to_string(),
+                starred: false,
+                hidden: false,
+            },
+        ];
         let mut app = App::new(config, client.clone());
         app.load_projects().expect("projects load");
         let keymap = app.keymap().expect("keymap builds");
@@ -184,6 +215,138 @@ impl Session {
     fn updates(&self) -> Vec<(String, TaskFieldEdit)> {
         self.client.update_calls()
     }
+
+    fn project_updates(&self) -> Vec<ProjectEdit> {
+        self.client.project_update_calls()
+    }
+
+    /// The task ids the recently-edited pane is holding.
+    fn recent_gids(&self) -> Vec<String> {
+        self.app
+            .tasks
+            .recent_table()
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.clone())
+            .collect()
+    }
+}
+
+#[test]
+fn tab_completes_a_person_no_loaded_task_names() {
+    // The directory built from loaded tasks can only offer people who
+    // already have a task in view, which excludes the most common reason to
+    // reassign one.
+    let mut session = Session::start();
+
+    session.press(KeyCode::Char('l'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('l'), KeyModifiers::CONTROL);
+    session.type_keys("priya");
+    session.press(KeyCode::Tab, KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(session.cell("t1", ASSIGNEE_COLUMN), "Priya Raman");
+    assert_eq!(
+        session.updates(),
+        vec![(
+            "t1".to_string(),
+            TaskFieldEdit::Assignee(Some(tuisana::domain::AssigneeRef::new(
+                "user-priya",
+                "Priya Raman"
+            )))
+        )]
+    );
+}
+
+#[test]
+fn an_emptied_assignee_cell_unassigns_the_task() {
+    let mut session = Session::start();
+
+    session.press(KeyCode::Char('l'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('l'), KeyModifiers::CONTROL);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(session.cell("t1", ASSIGNEE_COLUMN), "");
+    assert_eq!(
+        session.updates(),
+        vec![("t1".to_string(), TaskFieldEdit::Assignee(None))]
+    );
+}
+
+#[test]
+fn a_task_moved_out_of_the_project_in_view_lands_in_the_recently_edited_pane() {
+    let mut session = Session::start();
+
+    // Five columns right is Projects.
+    for _ in 0..PROJECTS_COLUMN {
+        session.press(KeyCode::Char('l'), KeyModifiers::NONE);
+    }
+    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('l'), KeyModifiers::CONTROL);
+    session.type_keys("back");
+    session.press(KeyCode::Tab, KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(
+        session.project_updates(),
+        vec![
+            ProjectEdit::add("t1", "project-2", "Backlog"),
+            ProjectEdit::remove("t1", "project-1", "Inbox"),
+        ],
+        "one request each way, and no task field was touched"
+    );
+    assert!(session.updates().is_empty());
+
+    // The cache is keyed by the project that loaded it, so the row has to be
+    // dropped from the rebuild rather than wait for a refresh.
+    assert!(
+        !session
+            .app
+            .tasks
+            .table()
+            .rows
+            .iter()
+            .any(|row| row.gid == "t1"),
+        "it is not in Inbox any more"
+    );
+    assert_eq!(session.recent_gids(), vec!["t1".to_string()]);
+    assert_eq!(
+        session.app.tasks.recent_selected_index(),
+        Some(0),
+        "and the cursor followed it there"
+    );
+}
+
+#[test]
+fn a_membership_write_that_fails_puts_the_task_back() {
+    let mut session = Session::refusing("t1");
+
+    for _ in 0..PROJECTS_COLUMN {
+        session.press(KeyCode::Char('l'), KeyModifiers::NONE);
+    }
+    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.type_keys("back");
+    session.press(KeyCode::Tab, KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(
+        session.project_updates(),
+        vec![ProjectEdit::add("t1", "project-2", "Backlog")],
+        "nothing was removed, because nothing was replaced"
+    );
+    assert_eq!(
+        session.cell("t1", PROJECTS_COLUMN),
+        "Inbox",
+        "the optimistic add is rolled back"
+    );
+    assert!(session
+        .app
+        .tasks
+        .edit_notice()
+        .is_some_and(|notice| notice.contains("could not update 1 of 1")));
 }
 
 #[test]

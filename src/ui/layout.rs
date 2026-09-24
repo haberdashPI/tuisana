@@ -20,6 +20,8 @@ pub const HINT_HEIGHT: u16 = 1;
 pub const STATUS_HEIGHT: u16 = 1;
 /// Smallest useful top pane: a border, a header row, and a couple of rows.
 const MIN_TOP_PANE_HEIGHT: u16 = 6;
+/// Smallest task pane worth leaving behind: a border and two rows.
+const MIN_TASK_PANE_HEIGHT: u16 = 4;
 
 /// The regions of one drawn frame.
 ///
@@ -32,6 +34,8 @@ pub struct Regions {
     pub header: Rect,
     /// The project list or filter panel.
     pub top_pane: Option<Rect>,
+    /// The recently-edited pane, when it has anything to hold.
+    pub recent_pane: Option<Rect>,
     /// The task table.
     pub task_pane: Option<Rect>,
     /// The one-line contextual hint bar.
@@ -43,7 +47,17 @@ pub struct Regions {
 }
 
 /// Divides a frame into its regions.
-pub fn regions(area: Rect, tasks_visible: bool, pane: &PaneSizeState) -> Regions {
+///
+/// `recent_rows` is how many rows the recently-edited pane has to show; zero
+/// leaves it out entirely. Its height comes out of the task pane rather than
+/// the top one, because it is an aside to the table and not to the project
+/// list.
+pub fn regions(
+    area: Rect,
+    tasks_visible: bool,
+    pane: &PaneSizeState,
+    recent_rows: usize,
+) -> Regions {
     let header = Rect {
         height: HEADER_HEIGHT.min(area.height),
         ..area
@@ -74,15 +88,50 @@ pub fn regions(area: Rect, tasks_visible: bool, pane: &PaneSizeState) -> Regions
     };
 
     let (top_pane, task_pane) = split_body(body, tasks_visible, pane);
+    let (recent_pane, task_pane) = split_recent(task_pane, recent_rows);
 
     Regions {
         header,
         top_pane,
+        recent_pane,
         task_pane,
         hint,
         status,
         body,
     }
+}
+
+/// Takes the recently-edited pane off the top of the task pane.
+///
+/// It sits between the top pane and the table, so the cursor moving from one
+/// list to the other moves one row on screen.
+fn split_recent(task_pane: Option<Rect>, recent_rows: usize) -> (Option<Rect>, Option<Rect>) {
+    let Some(task_pane) = task_pane else {
+        return (None, None);
+    };
+    if recent_rows == 0 {
+        return (None, Some(task_pane));
+    }
+
+    // Two for the pane's own border, and never so much that the table it is
+    // an aside to has nowhere left to draw. How many rows are worth showing
+    // is the pane's own decision, made where the list is built.
+    let wanted = recent_rows as u16 + 2;
+    let height = wanted.min(task_pane.height.saturating_sub(MIN_TASK_PANE_HEIGHT));
+    if height < 3 {
+        return (None, Some(task_pane));
+    }
+
+    let recent = Rect {
+        height,
+        ..task_pane
+    };
+    let tasks = Rect {
+        y: task_pane.y + height,
+        height: task_pane.height - height,
+        ..task_pane
+    };
+    (non_empty(recent), non_empty(tasks))
 }
 
 fn split_body(
@@ -144,7 +193,7 @@ mod tests {
         let pane = PaneSizeState::default();
 
         for tasks_visible in [false, true] {
-            let layout = regions(frame(120, 40), tasks_visible, &pane);
+            let layout = regions(frame(120, 40), tasks_visible, &pane, 0);
 
             assert_eq!(layout.header, Rect::new(0, 0, 120, HEADER_HEIGHT));
             assert_eq!(layout.body, Rect::new(0, 1, 120, 37));
@@ -162,7 +211,7 @@ mod tests {
 
     #[test]
     fn the_top_pane_takes_the_whole_body_when_tasks_are_hidden() {
-        let layout = regions(frame(80, 20), false, &PaneSizeState::default());
+        let layout = regions(frame(80, 20), false, &PaneSizeState::default(), 0);
 
         assert_eq!(layout.top_pane, Some(Rect::new(0, 1, 80, 17)));
         assert_eq!(layout.task_pane, None);
@@ -170,7 +219,7 @@ mod tests {
 
     #[test]
     fn panes_share_the_body_when_tasks_are_visible() {
-        let layout = regions(frame(80, 30), true, &PaneSizeState::default());
+        let layout = regions(frame(80, 30), true, &PaneSizeState::default(), 0);
 
         let top = layout.top_pane.expect("top pane");
         let task = layout.task_pane.expect("task pane");
@@ -183,28 +232,55 @@ mod tests {
     fn minimizing_and_maximizing_drop_the_other_pane_entirely() {
         let mut pane = PaneSizeState::default();
         pane.minimize();
-        let minimized = regions(frame(80, 30), true, &pane);
+        let minimized = regions(frame(80, 30), true, &pane, 0);
         assert_eq!(minimized.top_pane, None);
         assert_eq!(minimized.task_pane.expect("task pane").height, 27);
 
         let mut pane = PaneSizeState::default();
         pane.maximize();
-        let maximized = regions(frame(80, 30), true, &pane);
+        let maximized = regions(frame(80, 30), true, &pane, 0);
         assert_eq!(maximized.top_pane.expect("top pane").height, 27);
         assert_eq!(maximized.task_pane, None);
+    }
+
+    #[test]
+    fn the_recent_pane_takes_its_height_from_the_task_pane() {
+        let pane = PaneSizeState::default();
+        let without = regions(frame(80, 30), true, &pane, 0);
+        let with = regions(frame(80, 30), true, &pane, 2);
+
+        let recent = with.recent_pane.expect("the pane is drawn");
+        assert_eq!(recent.height, 4, "two rows and a border");
+        assert_eq!(with.top_pane, without.top_pane, "the top pane is untouched");
+        assert_eq!(recent.y, without.task_pane.expect("task pane").y);
+        assert_eq!(
+            with.task_pane.expect("task pane").height,
+            without.task_pane.expect("task pane").height - recent.height
+        );
+    }
+
+    #[test]
+    fn the_recent_pane_gives_way_on_a_short_terminal() {
+        let pane = PaneSizeState::default();
+
+        // Nothing left to take it from: the table wins, because the pane is
+        // an aside to it.
+        let cramped = regions(frame(80, 18), true, &pane, 3);
+        assert_eq!(cramped.recent_pane, None);
+        assert!(cramped.task_pane.is_some());
     }
 
     #[test]
     fn a_terminal_too_short_for_a_body_still_places_chrome_in_priority_order() {
         let pane = PaneSizeState::default();
 
-        let one_line = regions(frame(40, 1), true, &pane);
+        let one_line = regions(frame(40, 1), true, &pane, 0);
         assert_eq!(one_line.header.height, 1);
         assert_eq!(one_line.status.height, 0);
         assert_eq!(one_line.top_pane, None);
         assert_eq!(one_line.task_pane, None);
 
-        let three_lines = regions(frame(40, 3), true, &pane);
+        let three_lines = regions(frame(40, 3), true, &pane, 0);
         assert_eq!(three_lines.header.height, 1);
         assert_eq!(three_lines.hint.height, 1);
         assert_eq!(three_lines.status.height, 1);

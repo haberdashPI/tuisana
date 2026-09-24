@@ -5,8 +5,12 @@
 //! these at a time and drives it; the renderer reads [`CellEditView`].
 
 use crate::{
-    app::{calendar::CalendarState, text_edit::TextEdit},
-    domain::CivilDate,
+    app::{
+        autocomplete::{AutocompleteState, Candidate},
+        calendar::CalendarState,
+        text_edit::TextEdit,
+    },
+    domain::{CivilDate, ProjectEdit, TaskEdit},
 };
 
 /// What resolving an edit needs that `TaskState` does not own.
@@ -19,11 +23,63 @@ pub struct EditContext {
     pub today: Option<CivilDate>,
     /// The logged-in user's gid, which is what `me` resolves to.
     pub current_user_gid: Option<String>,
+    /// Every project the session knows about, as `(gid, name)`.
+    ///
+    /// Supplied rather than looked up: the project list belongs to the other
+    /// pane, and an editor that fetched its own candidates would need a
+    /// client to be testable.
+    pub projects: Vec<(String, String)>,
+    /// The workspace directory, as `(gid, name)`.
+    ///
+    /// Empty until `list_users` has answered, which is what makes the
+    /// fallback to the people named by loaded tasks the ordinary case rather
+    /// than an error path.
+    pub people: Vec<(String, String)>,
 }
 
 impl EditContext {
     pub fn today(&self) -> CivilDate {
         self.today.unwrap_or_else(crate::domain::today)
+    }
+
+    /// The projects, as completion candidates.
+    pub(crate) fn project_candidates(&self) -> Vec<Candidate> {
+        self.projects
+            .iter()
+            .map(|(gid, name)| Candidate::new(gid, name))
+            .collect()
+    }
+
+    /// The name this project goes by, or the gid when it is one the session
+    /// never loaded.
+    ///
+    /// A gid is deliberately kept as an item rather than dropped: it is not a
+    /// candidate, so it cannot be typed by accident, and keeping it is what
+    /// stops a commit from quietly removing a task from a project the user
+    /// cannot even see.
+    pub(crate) fn project_name(&self, gid: &str) -> String {
+        self.projects
+            .iter()
+            .find(|(candidate, _)| candidate == gid)
+            .map(|(_, name)| name.clone())
+            .unwrap_or_else(|| gid.to_string())
+    }
+}
+
+/// What a committed cell edit turns into.
+///
+/// Two lists rather than one, because project membership is not a field: the
+/// two halves go to different endpoints and only meet again when their
+/// replies are reconciled.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CommittedEdits {
+    pub fields: Vec<TaskEdit>,
+    pub projects: Vec<ProjectEdit>,
+}
+
+impl CommittedEdits {
+    pub fn is_empty(&self) -> bool {
+        self.fields.is_empty() && self.projects.is_empty()
     }
 }
 
@@ -50,6 +106,11 @@ pub(crate) enum CellEditor {
         text: TextEdit,
         calendar: CalendarState,
     },
+    /// A list of names the backend knows, typed with completion.
+    ///
+    /// `Assignee` and `Projects` differ only in the cap on the list, which is
+    /// why one editor covers both.
+    Complete(AutocompleteState),
 }
 
 /// The cell being edited, and what it will be applied to.
@@ -88,14 +149,32 @@ impl TaskCellEditState {
         match &mut self.editor {
             CellEditor::Text(text) => Some(text),
             CellEditor::Date { text, .. } => Some(text),
+            // The buffer, not the whole value: the items around it are
+            // deleted and walked a item at a time, not a character at a time.
+            CellEditor::Complete(complete) => Some(complete.buffer_mut()),
             CellEditor::Options { .. } => None,
         }
     }
 
-    pub(crate) fn text(&self) -> Option<&TextEdit> {
+    pub(crate) fn complete(&self) -> Option<&AutocompleteState> {
         match &self.editor {
-            CellEditor::Text(text) => Some(text),
-            CellEditor::Date { text, .. } => Some(text),
+            CellEditor::Complete(complete) => Some(complete),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn complete_mut(&mut self) -> Option<&mut AutocompleteState> {
+        match &mut self.editor {
+            CellEditor::Complete(complete) => Some(complete),
+            _ => None,
+        }
+    }
+
+    /// Where the caret sits in the drawn value, if the editor has one.
+    pub(crate) fn caret(&self) -> Option<usize> {
+        match &self.editor {
+            CellEditor::Text(text) | CellEditor::Date { text, .. } => Some(text.caret()),
+            CellEditor::Complete(complete) => Some(complete.caret()),
             CellEditor::Options { .. } => None,
         }
     }
@@ -161,6 +240,7 @@ impl TaskCellEditState {
             }
             CellEditor::Text(text) => text.clear(),
             CellEditor::Date { text, .. } => text.clear(),
+            CellEditor::Complete(complete) => complete.clear(),
         }
     }
 
@@ -169,6 +249,7 @@ impl TaskCellEditState {
         match &self.editor {
             CellEditor::Text(text) => text.text().to_string(),
             CellEditor::Date { text, .. } => text.text().to_string(),
+            CellEditor::Complete(complete) => complete.text(),
             CellEditor::Options { options, cursor, .. } => cursor
                 .and_then(|index| options.get(index))
                 .cloned()

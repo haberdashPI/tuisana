@@ -15,7 +15,7 @@ use crate::{
         AsanaClient, TaskLoadScope, TaskQuery, TaskTarget,
     },
     config::AuthConfig,
-    domain::{Project, TaskFieldEdit},
+    domain::{Project, ProjectEdit, ProjectMembership, TaskFieldEdit},
     error::{Error, Result},
 };
 
@@ -34,6 +34,11 @@ pub trait Transport {
     fn get_json(&self, path: &str, query: &[(&str, String)], token: &str) -> Result<Value>;
     /// Sends a JSON body and returns the response.
     fn put_json(&self, path: &str, body: &Value, token: &str) -> Result<Value>;
+    /// The same, for the endpoints that are verbs rather than fields.
+    ///
+    /// Project membership is `tasks/{gid}/addProject`, not a key in a task
+    /// patch, so it cannot go through [`Transport::put_json`].
+    fn post_json(&self, path: &str, body: &Value, token: &str) -> Result<Value>;
 }
 
 /// Production HTTP transport using `reqwest`.
@@ -87,6 +92,30 @@ impl Transport for ReqwestTransport {
         let response = self
             .client
             .put(url)
+            .bearer_auth(token)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .json(body)
+            .send()
+            .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
+
+        let response = response
+            .error_for_status()
+            .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
+
+        response
+            .json::<Value>()
+            .map_err(|err| Error::Backend(format!("failed to decode asana response: {err}")))
+    }
+
+    fn post_json(&self, path: &str, body: &Value, token: &str) -> Result<Value> {
+        let url = format!(
+            "{}/{}",
+            self.base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+        let response = self
+            .client
+            .post(url)
             .bearer_auth(token)
             .header(reqwest::header::ACCEPT, "application/json")
             .json(body)
@@ -276,6 +305,30 @@ impl<T: Transport> HttpAsanaClient<T> {
             .map_err(|err| Error::Backend(format!("failed to decode section list: {err}")))
     }
 
+    fn list_users_page(&self, offset: Option<&str>) -> Result<CollectionResponse<UserDto>> {
+        let mut query = vec![
+            ("opt_fields", "gid,name".to_string()),
+            ("limit", "100".to_string()),
+        ];
+        // The endpoint is workspace-scoped: without one it answers with every
+        // user the token can see across every workspace, which is a different
+        // question from "who can I assign this to".
+        let workspace = self.workspace_gid.as_deref().ok_or_else(|| {
+            Error::Backend("auth.workspace_gid must be set to list users".to_string())
+        })?;
+        query.push(("workspace", workspace.to_string()));
+        if let Some(offset) = offset {
+            query.push(("offset", offset.to_string()));
+        }
+
+        let json = self
+            .transport
+            .get_json("users", &query, &self.personal_access_token)?;
+
+        serde_json::from_value(json)
+            .map_err(|err| Error::Backend(format!("failed to decode user list: {err}")))
+    }
+
     fn list_custom_field_settings_page(
         &self,
         project_gid: &str,
@@ -426,6 +479,37 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
         Ok(response.data)
     }
 
+    fn list_users(&self) -> Result<Vec<UserDto>> {
+        let mut users = Vec::new();
+        let mut offset: Option<String> = None;
+
+        loop {
+            let page = self.list_users_page(offset.as_deref())?;
+            users.extend(page.data);
+
+            match page.next_page {
+                Some(next_page) => offset = Some(next_page.offset),
+                None => break,
+            }
+        }
+
+        Ok(users)
+    }
+
+    fn update_task_project(&self, edit: &ProjectEdit) -> Result<()> {
+        let verb = match edit.membership {
+            ProjectMembership::Add => "addProject",
+            ProjectMembership::Remove => "removeProject",
+        };
+        let body = serde_json::json!({ "data": { "project": edit.project_gid } });
+        self.transport.post_json(
+            &format!("tasks/{}/{verb}", edit.gid),
+            &body,
+            &self.personal_access_token,
+        )?;
+        Ok(())
+    }
+
     fn current_user_gid(&self) -> Result<String> {
         let json = self.transport.get_json(
             "users/me",
@@ -454,6 +538,8 @@ mod tests {
         requests: RefCell<Vec<(String, Vec<(String, String)>, String)>>,
         /// Every `put_json` call, as `(path, body)`.
         puts: RefCell<Vec<(String, serde_json::Value)>>,
+        /// Every `post_json` call, as `(path, body)`.
+        posts: RefCell<Vec<(String, serde_json::Value)>>,
         responses: RefCell<Vec<serde_json::Value>>,
     }
 
@@ -462,6 +548,7 @@ mod tests {
             Self {
                 requests: RefCell::new(Vec::new()),
                 puts: RefCell::new(Vec::new()),
+                posts: RefCell::new(Vec::new()),
                 responses: RefCell::new(responses),
             }
         }
@@ -492,6 +579,18 @@ mod tests {
             _token: &str,
         ) -> Result<serde_json::Value> {
             self.puts
+                .borrow_mut()
+                .push((path.to_string(), body.clone()));
+            Ok(self.responses.borrow_mut().remove(0))
+        }
+
+        fn post_json(
+            &self,
+            path: &str,
+            body: &serde_json::Value,
+            _token: &str,
+        ) -> Result<serde_json::Value> {
+            self.posts
                 .borrow_mut()
                 .push((path.to_string(), body.clone()));
             Ok(self.responses.borrow_mut().remove(0))
@@ -689,6 +788,59 @@ mod tests {
         ] {
             assert!(opt_fields.contains(field), "{opt_fields} is missing {field}");
         }
+    }
+
+    #[test]
+    fn a_membership_change_posts_to_the_verb_that_names_it() {
+        // Membership is not a field on the task, so it cannot go out as part
+        // of a task patch.
+        let responses = vec![json!({ "data": {} }), json!({ "data": {} })];
+        let client =
+            HttpAsanaClient::with_transport(MockTransport::new(responses), "pat_123", None);
+
+        client
+            .update_task_project(&crate::domain::ProjectEdit::add("t1", "p2", "Backlog"))
+            .expect("the task joins the project");
+        client
+            .update_task_project(&crate::domain::ProjectEdit::remove("t1", "p1", "Inbox"))
+            .expect("and leaves the other");
+
+        let posts = client.transport.posts.borrow();
+        assert_eq!(posts[0].0, "tasks/t1/addProject");
+        assert_eq!(posts[0].1, json!({ "data": { "project": "p2" } }));
+        assert_eq!(posts[1].0, "tasks/t1/removeProject");
+        assert_eq!(posts[1].1, json!({ "data": { "project": "p1" } }));
+    }
+
+    #[test]
+    fn the_user_directory_is_scoped_to_the_workspace() {
+        let transport = MockTransport::new(vec![json!({
+            "data": [{ "gid": "user-1", "name": "Alex Chen" }],
+            "next_page": null
+        })]);
+        let client =
+            HttpAsanaClient::with_transport(transport, "pat_123", Some("ws_42".to_string()));
+
+        let users = client.list_users().expect("the directory loads");
+
+        assert_eq!(users[0].name.as_deref(), Some("Alex Chen"));
+        let requests = client.transport.requests.borrow();
+        assert_eq!(requests[0].0, "users");
+        assert!(requests[0]
+            .1
+            .contains(&("workspace".to_string(), "ws_42".to_string())));
+    }
+
+    /// Without a workspace the endpoint answers with every user the token can
+    /// see anywhere, which is a different question from "who can I assign
+    /// this to".
+    #[test]
+    fn the_user_directory_needs_a_workspace() {
+        let client = HttpAsanaClient::with_transport(MockTransport::new(vec![]), "pat_123", None);
+
+        let err = client.list_users().expect_err("no workspace, no directory");
+
+        assert!(matches!(err, Error::Backend(message) if message.contains("workspace_gid")));
     }
 
     #[test]
