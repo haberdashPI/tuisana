@@ -179,6 +179,21 @@ impl CivilDate {
         (self.weekday_index() + 1) % 7
     }
 
+    /// The Sunday that starts the week this date falls in.
+    ///
+    /// The week turning over on Sunday is the US convention, and it is the one
+    /// both the filter grammar and the table's weekday labels follow, so that a
+    /// name means the same day whichever end it is read from.
+    pub fn week_start(&self) -> Self {
+        self.add_days(-(self.calendar_column() as i64))
+    }
+
+    /// Whether both dates fall in the same [`week_start`](Self::week_start)
+    /// week.
+    pub fn same_week(&self, other: Self) -> bool {
+        self.week_start() == other.week_start()
+    }
+
     /// The `YYYY-MM-DD` form, which is also what the Asana API wants.
     pub fn iso(&self) -> String {
         format!("{:04}-{:02}-{:02}", self.year, self.month, self.day)
@@ -232,12 +247,9 @@ pub fn parse_token(token: &str, today: CivilDate) -> Option<Option<CivilDate>> {
     } else if let Some(index) = weekday_index_from_name(token) {
         // A weekday names a day of the week we are in now, not the next one to
         // come round: on a Thursday, `mon` is the Monday three days back. The
-        // week turns over on Sunday, so the two dates are compared by the
-        // column they would occupy in a Sunday-first calendar, which makes the
-        // delta negative for a day already spent.
-        let column = (index + 1) % 7;
-        let delta = column as i64 - today.calendar_column() as i64;
-        today.add_days(delta)
+        // week turns over on Sunday, so the day is counted from there, which
+        // lands behind today for a day already spent.
+        today.week_start().add_days(((index + 1) % 7) as i64)
     } else {
         // Two components mean `MM-DD` in the current year; three mean a full
         // date. Counting delimiters rather than measuring bytes keeps a

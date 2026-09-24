@@ -108,9 +108,11 @@ Reading the screen:
   filter that keeps up never shows it.
 - `?` opens a grouped help overlay for the current mode. It draws over the panes
   without moving them; press `?` again to dismiss it.
-- Due dates render relatively (`Today`, `Tomorrow`, `Wed`, `Nov 14`). An overdue
-  date is prefixed with `!` and colored red, one due today is yellow, and one
-  within three days takes the accent color.
+- Due dates render relatively (`Today`, `Tomorrow`, `Wed`, `Nov 14`). A weekday
+  name means a day of the week you are in now, which turns over on Sunday, so it
+  can point backwards; anything outside that week gets its date. An overdue date
+  is prefixed with `!` and colored red, one due today is yellow, and one within
+  three days takes the accent color.
 - In the task table the left gutter carries two markers: the cursor (`▍`) and
   multi-selection (`●`). An empty cell shows `—`.
 - `g` draws a Gantt chart beside the task table. With `variant = "mono"` its six

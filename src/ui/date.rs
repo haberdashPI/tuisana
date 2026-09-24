@@ -54,11 +54,15 @@ pub fn format_relative(value: &str, today: CivilDate) -> RelativeDate {
         _ => Urgency::Later,
     };
 
+    // A weekday name means a day of the week we are in now, the same way the
+    // filter grammar reads one: the week turns over on Sunday, so a Monday
+    // already spent still reads `Mon`, and next Wednesday is far enough away to
+    // want its date rather than a name this week has already used.
     let text = match diff {
         0 => "Today".to_string(),
         1 => "Tomorrow".to_string(),
         -1 => "Yesterday".to_string(),
-        2..=6 => date.weekday().to_string(),
+        _ if date.same_week(today) => date.weekday().to_string(),
         _ if date.year == today.year => {
             format!("{} {}", MONTHS[(date.month - 1) as usize], date.day)
         }
@@ -86,6 +90,32 @@ mod tests {
         assert_eq!(format_relative("2026-06-13", today).text, "Sat");
         assert_eq!(format_relative("2026-07-01", today).text, "Jul 1");
         assert_eq!(format_relative("2027-01-04", today).text, "2027-01-04");
+    }
+
+    #[test]
+    fn a_weekday_name_only_ever_means_this_weeks_day() {
+        // A Thursday. Its week runs Sunday the 20th through Saturday the 26th.
+        let today = date(2026, 9, 24);
+
+        assert_eq!(format_relative("2026-09-20", today).text, "Sun");
+        assert_eq!(format_relative("2026-09-22", today).text, "Tue");
+        assert_eq!(format_relative("2026-09-26", today).text, "Sat");
+
+        // Next week's Wednesday must not borrow the name this week's Wednesday
+        // owns, even though it is only six days out.
+        assert_eq!(format_relative("2026-09-30", today).text, "Sep 30");
+        assert_eq!(format_relative("2026-09-27", today).text, "Sep 27");
+        assert_eq!(format_relative("2026-09-19", today).text, "Sep 19");
+    }
+
+    #[test]
+    fn today_tomorrow_and_yesterday_outrank_the_weekday_name() {
+        // A Saturday, so tomorrow falls in the week after this one.
+        let today = date(2026, 9, 26);
+
+        assert_eq!(format_relative("2026-09-26", today).text, "Today");
+        assert_eq!(format_relative("2026-09-27", today).text, "Tomorrow");
+        assert_eq!(format_relative("2026-09-25", today).text, "Yesterday");
     }
 
     #[test]
