@@ -47,15 +47,40 @@ pub(crate) struct CalendarState {
     visible_month: CivilDate,
     /// Today, resolved once on open so the grid cannot shift mid-edit.
     today: CivilDate,
+    /// Whether the field being edited can hold a range at all.
+    ///
+    /// A filter can; a task's due date is one day, and the API has nowhere to
+    /// put a second. It is what decides whether a bare keyword covering more
+    /// than one day is edited as the end of a range or collapsed to the single
+    /// day it would commit as.
+    ranges: bool,
 }
 
 impl CalendarState {
-    /// Opens the picker for a field holding `query`, with the caret at the end.
+    /// Opens the picker on a filter field holding `query`, caret at the end.
     ///
     /// The grid starts on the month the query's active end names, so reopening a
     /// set filter shows where you left off. An empty or unreadable query starts
     /// on the current month.
     pub fn open(field_label: impl Into<String>, query: &str, today: CivilDate) -> Self {
+        Self::new(field_label, query, today, true)
+    }
+
+    /// Opens the picker on a field that holds one day and no range.
+    ///
+    /// A task's due or start date. The difference is only felt on a keyword
+    /// covering more than one day: there is no second end for it to be edited
+    /// as, so it stays the single date it commits as.
+    pub fn open_one_day(field_label: impl Into<String>, value: &str, today: CivilDate) -> Self {
+        Self::new(field_label, value, today, false)
+    }
+
+    fn new(
+        field_label: impl Into<String>,
+        query: &str,
+        today: CivilDate,
+        ranges: bool,
+    ) -> Self {
         let query = query.trim().to_string();
         let caret = query.chars().count();
         let mut state = Self {
@@ -64,6 +89,7 @@ impl CalendarState {
             caret,
             visible_month: today.first_of_month(),
             today,
+            ranges,
         };
         state.follow_text();
         state
@@ -103,18 +129,78 @@ impl CalendarState {
         }
     }
 
-    /// The day the highlight sits on, when the active end names a complete date.
+    /// The day the highlight sits on, when the active end names one.
+    ///
+    /// A name covering more than one day has two edges, and which one the
+    /// highlight takes is the edge that end of the range contributes: the
+    /// first day before the `..`, the last day after it. So the caret sitting
+    /// in `this week` of `this week..next week` puts the highlight on the
+    /// Sunday that opens the range, and moving it into `next week` puts the
+    /// highlight on the Saturday that closes it — in both cases on the day the
+    /// keys would actually be moving.
+    ///
+    /// A bare keyword with no `..` is treated as the end on a field that takes
+    /// a range, because that is the edge a picked date replaces; see
+    /// [`set_active_date`](Self::set_active_date).
     pub fn active_date(&self) -> Option<CivilDate> {
-        date::parse_partial(self.active_text(), self.today).and_then(|partial| partial.day)
+        let span = self.span_in(self.active_text())?;
+        Some(match self.side() {
+            Side::Start => span.start(),
+            Side::End => span.end(),
+            // No `..` to say which edge is meant. On a filter the end is
+            // assumed, because that is the edge a picked date replaces; on a
+            // one-day field there is no end to assume, and the highlight has
+            // to sit on the day the field would actually commit.
+            Side::Whole => match self.ranges {
+                true => span.end(),
+                false => span.start(),
+            },
+        })
     }
 
     /// The range's two ends, or `None` when the query is not a range.
     ///
     /// Either end may be absent, both because a range can be left open and
     /// because it may still be half-typed.
+    ///
+    /// Each end contributes the *outside* of whatever span it names: the first
+    /// day of the one before the `..` and the last day of the one after. That
+    /// is what makes `last week..this week` reach from the Sunday that starts
+    /// last week to the Saturday that ends this one, rather than stopping on
+    /// the Sunday `this week` begins on. [`DateQuery::parse`] reads a written
+    /// range the same way, and this is what the grid shades, so the two have
+    /// to agree — otherwise the overlay draws a narrower range than the filter
+    /// is actually matching.
     pub fn range(&self) -> Option<(Option<CivilDate>, Option<CivilDate>)> {
         let (start, end) = self.query.split_once(RANGE)?;
-        Some((self.date_in(start), self.date_in(end)))
+        Some((
+            self.span_in(start).map(|span| span.start()),
+            self.span_in(end).map(|span| span.end()),
+        ))
+    }
+
+    /// The days the grid should shade, or `None` when there is nothing to
+    /// shade.
+    ///
+    /// A superset of [`range`](Self::range): a written range shades between
+    /// its two ends, and so does a single token that names more than one day,
+    /// because `this month` covers the month whether or not a `..` says so. A
+    /// token naming one day shades nothing — that is what the highlight is
+    /// for.
+    pub fn span(&self) -> Option<(Option<CivilDate>, Option<CivilDate>)> {
+        if let Some(range) = self.range() {
+            return Some(range);
+        }
+        let span = date::parse_span(self.active_text(), self.today).flatten()?;
+        (!span.is_day()).then(|| (Some(span.start()), Some(span.end())))
+    }
+
+    /// The whole query as the filter will read it, for the collapsed summary.
+    ///
+    /// The whole query and not the active end: with the grid hidden this line
+    /// is the only view of the value, and half of a range is not a value.
+    pub fn resolution(&self) -> Option<crate::domain::DateQuery> {
+        crate::domain::DateQuery::parse(&self.query, self.today)
     }
 
     /// Whether the query is a date expression the filter can use.
@@ -296,8 +382,17 @@ impl CalendarState {
     }
 
     /// The complete date named by one side's text, if any.
+    ///
+    /// The first day of its span, so a name covering more than one collapses
+    /// the way it does everywhere a single date is wanted. [`range`](Self::range)
+    /// deliberately does not use this: a range wants each end's outer edge.
     fn date_in(&self, text: &str) -> Option<CivilDate> {
         date::parse_partial(text, self.today).and_then(|partial| partial.day)
+    }
+
+    /// The days one side's text names, if it names any yet.
+    fn span_in(&self, text: &str) -> Option<date::DateSpan> {
+        date::parse_span(text, self.today).flatten()
     }
 
     /// The date named by the end of the range the caret is *not* in.
@@ -328,7 +423,27 @@ impl CalendarState {
     }
 
     /// Replaces the active end's text with a date and shows its month.
+    ///
+    /// A bare keyword covering more than one day is spelled out as a range
+    /// first. `this week` moved on a day has to become
+    /// `2026-08-23..2026-08-30`, because the keyword has nowhere to put "but
+    /// ending a day later" — and overwriting the whole of it with the one
+    /// picked date would throw the week's start away, which is not what
+    /// nudging one edge of it means. The highlight sits on the end edge for
+    /// exactly this reason, so it is the end the picked date lands on.
     fn set_active_date(&mut self, date: CivilDate) {
+        if self.ranges && self.side() == Side::Whole {
+            let span = self.span_in(&self.query);
+            if let Some(span) = span.filter(|span| !span.is_day()) {
+                let start = span.start().iso();
+                let end = date.iso();
+                self.caret = start.chars().count() + RANGE.chars().count() + end.chars().count();
+                self.query = format!("{start}{RANGE}{end}");
+                self.visible_month = date.first_of_month();
+                return;
+            }
+        }
+
         let (start, end) = self.active_span();
         let chars = self.chars();
         let head = chars[..start.min(chars.len())].iter().collect::<String>();
@@ -346,7 +461,12 @@ impl CalendarState {
     /// September and jumping to the other end of a range shows that end's month.
     /// Text that says nothing usable leaves the grid where it is.
     fn follow_text(&mut self) {
-        if let Some(partial) = date::parse_partial(self.active_text(), self.today) {
+        // The highlight's own month first, so a keyword whose active edge
+        // falls outside the month it starts in — `next week` can end in the
+        // next one — shows the square the highlight is actually on.
+        if let Some(date) = self.active_date() {
+            self.visible_month = date.first_of_month();
+        } else if let Some(partial) = date::parse_partial(self.active_text(), self.today) {
             self.visible_month = partial.month;
         } else if let Some(other) = self.other_end_date() {
             // An empty end of a range shows the other end's month, so opening
@@ -640,6 +760,186 @@ mod tests {
             open("..2026-09-30").range(),
             Some((None, Some(date(2026, 9, 30))))
         );
+    }
+
+    #[test]
+    fn a_range_of_keywords_reaches_the_far_edge_of_each_end() {
+        // `..` unions the two spans. Reading both ends as the day they start
+        // on would have cut `last week..this week` short by six days, and the
+        // filter behind it was already matching all fourteen.
+        assert_eq!(
+            open("last week..this week").range(),
+            Some((Some(date(2026, 8, 16)), Some(date(2026, 8, 29))))
+        );
+        assert_eq!(
+            open("last month..this month").range(),
+            Some((Some(date(2026, 7, 1)), Some(date(2026, 8, 31))))
+        );
+        // Mixed ends work the same: only the span the keyword names is wider
+        // than a day, and only that end moves.
+        assert_eq!(
+            open("2026-08-01..this week").range(),
+            Some((Some(date(2026, 8, 1)), Some(date(2026, 8, 29))))
+        );
+        assert_eq!(
+            open("this week..2026-08-31").range(),
+            Some((Some(date(2026, 8, 23)), Some(date(2026, 8, 31)))),
+            "the start end still contributes its first day"
+        );
+        // An open end names nothing, so there is no span to take an edge of.
+        assert_eq!(
+            open("this week..").range(),
+            Some((Some(date(2026, 8, 23)), None))
+        );
+        assert_eq!(
+            open("..this week").range(),
+            Some((None, Some(date(2026, 8, 29))))
+        );
+    }
+
+    #[test]
+    fn the_highlight_takes_the_edge_of_a_keyword_that_its_end_contributes() {
+        // `this week` is Aug 23-29 and `next week` is Aug 30 - Sep 5. Which
+        // day of each the highlight sits on is the day the keys would move,
+        // and that is the edge its own end of the range hands to the filter.
+        let mut state = open("this week..next week");
+
+        assert_eq!(state.side(), Side::End);
+        assert_eq!(
+            state.active_date(),
+            Some(date(2026, 9, 5)),
+            "the end contributes its last day"
+        );
+
+        state.jump_to_start();
+        assert_eq!(state.side(), Side::Start);
+        assert_eq!(
+            state.active_date(),
+            Some(date(2026, 8, 23)),
+            "the start contributes its first"
+        );
+
+        // A one-day name has one edge, so neither end changes it.
+        let mut single = open("today..tomorrow");
+        assert_eq!(single.active_date(), Some(date(2026, 8, 25)));
+        single.jump_to_start();
+        assert_eq!(single.active_date(), Some(date(2026, 8, 24)));
+    }
+
+    #[test]
+    fn a_bare_keyword_is_edited_as_the_end_of_the_range_it_already_is() {
+        // With no `..` there is no caret to say which edge is meant, so the
+        // end is assumed: that is the edge a picked date replaces.
+        let mut state = open("this week");
+
+        assert_eq!(state.side(), Side::Whole);
+        assert_eq!(state.active_date(), Some(date(2026, 8, 29)));
+
+        // Moving it spells the week out, keeping the start it came with. The
+        // keyword has nowhere to hold "but ending a day later".
+        state.move_days(1);
+        assert_eq!(state.query(), "2026-08-23..2026-08-30");
+        assert_eq!(state.side(), Side::End, "and the caret is on the end it moved");
+        assert_eq!(state.active_date(), Some(date(2026, 8, 30)));
+
+        // Moving again edits that end alone, leaving the start alone.
+        state.move_days(1);
+        assert_eq!(state.query(), "2026-08-23..2026-08-31");
+    }
+
+    #[test]
+    fn a_one_day_field_keeps_the_highlight_on_the_day_it_would_commit() {
+        // A task date is one day, so `this week` there commits the Sunday it
+        // starts on. Highlighting the Saturday would show a day the write was
+        // never going to send, and nudging it into a range would make the
+        // field uncommittable outright.
+        let mut cell = CalendarState::open_one_day("Due", "this week", today());
+
+        assert_eq!(cell.active_date(), Some(date(2026, 8, 23)));
+        assert_eq!(cell.visible_month(), date(2026, 8, 1));
+
+        cell.move_days(1);
+        assert_eq!(
+            cell.query(),
+            "2026-08-24",
+            "one date, not a range the API has nowhere to put"
+        );
+
+        // A filter field is the one that spells the week out instead.
+        let mut filter = open("this week");
+        filter.move_days(1);
+        assert_eq!(filter.query(), "2026-08-23..2026-08-30");
+    }
+
+    #[test]
+    fn a_bare_one_day_keyword_stays_one_date() {
+        // Only a name covering more than one day has a start worth keeping.
+        // `today` moved is a different day, not a range out of nowhere.
+        let mut state = open("today");
+        state.move_days(1);
+        assert_eq!(state.query(), "2026-08-25");
+
+        let mut typed = open("2026-09-15");
+        typed.move_days(-1);
+        assert_eq!(typed.query(), "2026-09-14");
+    }
+
+    #[test]
+    fn the_grid_shows_the_month_the_highlight_landed_in() {
+        // `next week` runs Aug 30 - Sep 5, so its end edge is in September
+        // while the week starts in August. The highlight has to be on screen.
+        let state = open("next week");
+
+        assert_eq!(state.active_date(), Some(date(2026, 9, 5)));
+        assert_eq!(state.visible_month(), date(2026, 9, 1));
+    }
+
+    #[test]
+    fn a_keyword_naming_a_whole_month_reports_it_as_a_span() {
+        let state = open("this month");
+
+        assert_eq!(
+            state.span(),
+            Some((Some(date(2026, 8, 1)), Some(date(2026, 8, 31)))),
+            "the grid shades the month the keyword names"
+        );
+        assert_eq!(state.range(), None, "but it is not a two-ended range");
+        assert_eq!(state.visible_month(), date(2026, 8, 1));
+        assert!(state.parses());
+
+        let year = open("next year");
+        assert_eq!(
+            year.span(),
+            Some((Some(date(2027, 1, 1)), Some(date(2027, 12, 31))))
+        );
+
+        // A single day shades nothing; the highlight is what marks it.
+        assert_eq!(open("today").span(), None);
+        assert_eq!(open("2026-09-15").span(), None);
+        assert_eq!(open("").span(), None);
+    }
+
+    #[test]
+    fn a_keyword_is_resolved_for_the_summary_shown_in_place_of_the_grid() {
+        use crate::domain::DateQuery;
+
+        assert_eq!(
+            open("tue").resolution(),
+            Some(DateQuery::Exact(date(2026, 8, 25)))
+        );
+        assert_eq!(
+            open("last month").resolution(),
+            Some(DateQuery::Range {
+                start: Some(date(2026, 7, 1)),
+                end: Some(date(2026, 7, 31)),
+            })
+        );
+        assert_eq!(
+            open("today-5").resolution(),
+            Some(DateQuery::Exact(date(2026, 8, 19)))
+        );
+        assert_eq!(open("").resolution(), None);
+        assert_eq!(open("zz").resolution(), None);
     }
 
     #[test]

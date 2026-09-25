@@ -12,7 +12,9 @@ mod task_edit;
 
 /// Calendar dates, the filter date grammar, and the local-timezone `today`.
 pub use date::{
-    month_name, today, CivilDate, DateQuery, PartialDate, CALENDAR_WEEKDAYS, MONTHS, WEEKDAYS,
+    is_date_char, month_name, today, CivilDate, DateQuery, DateSpan, DateUnit, PartialDate,
+    CALENDAR_WEEKDAYS,
+    MONTHS, WEEKDAYS,
 };
 /// Gantt chart colour assignment and timeline arithmetic.
 pub use gantt::{

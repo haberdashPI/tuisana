@@ -7,27 +7,27 @@
 ┃    State     labels    —                                                     ┃
 ┃    Projects  contains  —                                                     ┃
 ┃    Priority  labels    —                                                     ┃
-┃                                                                              ┃
 ┏ Help · calendar mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃Move the date                              Edit the text                      ┃
-┃h/l         day                            0-9 - ..    typed into the filter f┃
-┃k/j         month                          left/right  move the caret         ┃
-┃t           jump to today                  bksp        delete                 ┃
-┃⏎           pick and close                 ^a          go to the start date   ┃
-┃d           clear the field                ^e          go to the end date     ┃
-┃esc         close                                                             ┃
-┃                                           Date syntax                        ┃
-┃                                           exact       YYYY-MM-DD or MM-DD    ┃
-┃                                           range       start..end             ┃
-┃                                           open range  start.. or ..end       ┃
+┃Move the date                              Date syntax                        ┃
+┃h/l         day                            exact       YYYY-MM-DD or MM-DD    ┃
+┃k/j         month                          day         today, tomorrow, yester┃
+┃t           jump to today                  weekday     mon .. sun             ┃
+┃⏎           pick and close                 week        this / last / next week┃
+┃d           clear the field                month       this / last / next mont┃
+┃esc         close                          year        this / last / next year┃
+┃;           show/hide the grid             offset      today-5, next month+2  ┃
+┃            keys above need the grid       range       start..end             ┃
+┃            hiding it keys the names       open range  start.. or ..end       ┃
 ┃                                                                              ┃
-┃                                           App                                ┃
-┃                                           ?           close this help        ┃
+┃Edit the text                              App                                ┃
+┃0-9 - + ..  typed into the filter field    ?           close this help        ┃
+┃left/right  move the caret                                                    ┃
+┃bksp        delete                                                            ┃
+┃^a          go to the start date                                              ┃
+┃^e          go to the end date                                                ┃
 ┃                                                                              ┃
 ┃                                                                        ? to c┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-│   Reconcile the freight invoices                │ Robin Fox    │  Oct 30 │ Se│
-│   Close out packaging vendor contract           │ Alex Chen    │  Nov 14 │  O│
 │   Close the quarter's shipping report           │ Priya Raman  │  Dec 18 │  N│
 │                                                                              │
 │                                                                              │
@@ -36,5 +36,5 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-h/l day   k/j month   t today   left/right caret   ⏎ pick   d clear
+h/l day   k/j month   t today   ; hide grid   left/right caret   ⏎ pick
  CALENDAR

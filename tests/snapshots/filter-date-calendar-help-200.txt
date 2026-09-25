@@ -7,27 +7,27 @@
 ┃    State     labels    —                                                                                                                                                                             ┃
 ┃    Projects  contains  —                                                                                                                                                                             ┃
 ┃    Priority  labels    —                                                                                                                                                                             ┃
-┃                                                                                                                                                                                                      ┃
 ┃                                                         ┏ Help · calendar mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                                                         ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃Move the date                              Edit the text                          ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-┌ Tasks ──────────────────────────────────────────────────┃h/l         day                            0-9 - ..    typed into the filter field┃─────────────────────────────────────── 11 tasks · row 1 ┐
-│   Task                                                  ┃k/j         month                          left/right  move the caret             ┃Due▲ │  Start │ St │ Projects           │ Priority       │
-│                                                         ┃t           jump to today                  bksp        delete                     ┃                                                         │
-│▌Northwind BTX 4412 ─────────────────────────────────────┃⏎           pick and close                 ^a          go to the start date       ┃─────────────────────────────────────────────────────────│
-│                                                         ┃d           clear the field                ^e          go to the end date         ┃                                                         │
-│   Study Kit Design ·····································┃esc         close                                                                 ┃·························································│
-│▍  Draft the assay validation protocol                   ┃                                           Date syntax                            ┃l 10 │ Jun 15 │ ○  │ Northwind BTX 4412 │ High           │
-│   Review shipment requirements doc                      ┃                                           exact       YYYY-MM-DD or MM-DD        ┃g 19 │  Aug 3 │ ○  │ Northwind BTX 4412 │ High           │
-│   Ship release candidate to the study team              ┃                                           range       start..end                 ┃oday │ Aug 10 │ ○  │ Northwind BTX 4412 │ High           │
-│   Confirm carrier pickup window with the vendor         ┃                                           open range  start.. or ..end           ┃ Wed │ Aug 17 │ ○  │ Northwind BTX 4412 │ —              │
-│   Update the sample intake SOP                          ┃                                                                                  ┃ep 4 │ Aug 20 │ ○  │ Northwind BTX 4412 │ Medium         │
-│   Qualify the second reagent supplier                   ┃                                           App                                    ┃p 12 │  Jul 1 │ ○  │ Northwind BTX 4412 │ Medium         │
-│                                                         ┃                                           ?           close this help            ┃                                                         │
-│   Shipment ·············································┃                                                                                  ┃·························································│
-│   Book the courier for the pilot run                    ┃                                                                        ? to close┃p 15 │  Sep 1 │ ○  │ Northwind BTX 4412 │ Low            │
-│   Label the retention samples                           ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ct 9 │      — │ ○  │ Northwind BTX 4412 │ Medium         │
-│   Reconcile the freight invoices                                                                                        │ Robin Fox    │  Oct 30 │ Sep 20 │ ○  │ Northwind BTX 4412 │ Low            │
-│   Close out packaging vendor contract                                                                                   │ Alex Chen    │  Nov 14 │  Oct 1 │ ○  │ Northwind BTX 4412 │ Low            │
+┃                                                         ┃Move the date                              Date syntax                            ┃                                                         ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃h/l         day                            exact       YYYY-MM-DD or MM-DD        ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌ Tasks ──────────────────────────────────────────────────┃k/j         month                          day         today, tomorrow, yesterday ┃─────────────────────────────────────── 11 tasks · row 1 ┐
+│   Task                                                  ┃t           jump to today                  weekday     mon .. sun                 ┃Due▲ │  Start │ St │ Projects           │ Priority       │
+│                                                         ┃⏎           pick and close                 week        this / last / next week    ┃                                                         │
+│▌Northwind BTX 4412 ─────────────────────────────────────┃d           clear the field                month       this / last / next month   ┃─────────────────────────────────────────────────────────│
+│                                                         ┃esc         close                          year        this / last / next year    ┃                                                         │
+│   Study Kit Design ·····································┃;           show/hide the grid             offset      today-5, next month+2      ┃·························································│
+│▍  Draft the assay validation protocol                   ┃            keys above need the grid       range       start..end                 ┃l 10 │ Jun 15 │ ○  │ Northwind BTX 4412 │ High           │
+│   Review shipment requirements doc                      ┃            hiding it keys the names       open range  start.. or ..end           ┃g 19 │  Aug 3 │ ○  │ Northwind BTX 4412 │ High           │
+│   Ship release candidate to the study team              ┃                                                                                  ┃oday │ Aug 10 │ ○  │ Northwind BTX 4412 │ High           │
+│   Confirm carrier pickup window with the vendor         ┃Edit the text                              App                                    ┃ Wed │ Aug 17 │ ○  │ Northwind BTX 4412 │ —              │
+│   Update the sample intake SOP                          ┃0-9 - + ..  typed into the filter field    ?           close this help            ┃ep 4 │ Aug 20 │ ○  │ Northwind BTX 4412 │ Medium         │
+│   Qualify the second reagent supplier                   ┃left/right  move the caret                                                        ┃p 12 │  Jul 1 │ ○  │ Northwind BTX 4412 │ Medium         │
+│                                                         ┃bksp        delete                                                                ┃                                                         │
+│   Shipment ·············································┃^a          go to the start date                                                  ┃·························································│
+│   Book the courier for the pilot run                    ┃^e          go to the end date                                                    ┃p 15 │  Sep 1 │ ○  │ Northwind BTX 4412 │ Low            │
+│   Label the retention samples                           ┃                                                                                  ┃ct 9 │      — │ ○  │ Northwind BTX 4412 │ Medium         │
+│   Reconcile the freight invoices                        ┃                                                                        ? to close┃t 30 │ Sep 20 │ ○  │ Northwind BTX 4412 │ Low            │
+│   Close out packaging vendor contract                   ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛v 14 │  Oct 1 │ ○  │ Northwind BTX 4412 │ Low            │
 │   Close the quarter's shipping report                                                                                   │ Priya Raman  │  Dec 18 │  Nov 2 │ ○  │ Northwind BTX 4412 │ Low            │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -36,5 +36,5 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-h/l day   k/j month   t today   left/right caret   ⏎ pick   d clear   esc close
+h/l day   k/j month   t today   ; hide grid   left/right caret   ⏎ pick   d clear   esc close
  CALENDAR

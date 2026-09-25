@@ -360,12 +360,23 @@ fn calendar_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::CalendarCommit], "pick and close"),
                 Hint::new(&[Action::CalendarClear], "clear the field"),
                 Hint::new(&[Action::CalendarClose], "close"),
+                Hint::new(&[Action::CalendarToggleGrid], "show/hide the grid"),
+                // Said plainly, because the keys above are letters and the
+                // ones in a day name are the same letters. Hiding the grid is
+                // how `tue` gets typed at all.
+                //
+                // Kept under the width the overlay's two columns share: one
+                // long entry here squeezes the Date syntax column next to it
+                // down to nothing.
+                Hint::literal("", "keys above need the grid"),
+                Hint::literal("", "hiding it keys the names"),
             ],
         ),
         HelpGroup::new(
             "Edit the text",
             vec![
-                Hint::literal("0-9 - ..", "typed into the filter field"),
+                // The whole of what types with the grid up; a name needs it hidden.
+                Hint::literal("0-9 - + ..", "typed into the filter field"),
                 Hint::new(
                     &[Action::FilterCaretLeft, Action::FilterCaretRight],
                     "move the caret",
@@ -379,6 +390,12 @@ fn calendar_groups() -> Vec<HelpGroup> {
             "Date syntax",
             vec![
                 Hint::literal("exact", "YYYY-MM-DD or MM-DD"),
+                Hint::literal("day", "today, tomorrow, yesterday"),
+                Hint::literal("weekday", "mon .. sun"),
+                Hint::literal("week", "this / last / next week"),
+                Hint::literal("month", "this / last / next month"),
+                Hint::literal("year", "this / last / next year"),
+                Hint::literal("offset", "today-5, next month+2"),
                 Hint::literal("range", "start..end"),
                 Hint::literal("open range", "start.. or ..end"),
             ],

@@ -68,6 +68,12 @@ pub struct HintContext {
     pub on_label_filter: bool,
     /// The date being picked is a range, so it has two ends to move between.
     pub on_date_range: bool,
+    /// The date picker's month grid has been put away, so the keys that steer
+    /// it type instead and the bar must not claim otherwise.
+    ///
+    /// Negated, like the flag behind it, so the derived `Default` is the grid
+    /// the picker actually opens with.
+    pub calendar_grid_hidden: bool,
     /// The chart's timeline has been scrolled or zoomed off its fitted window.
     pub timeline_windowed: bool,
     /// The filter panel holds more than one set, so there are tabs to move
@@ -169,14 +175,27 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
             Hint::literal("esc", "cancel"),
         ],
         Mode::Calendar => {
-            let mut hints = vec![
-                Hint::new(&[Action::CalendarPrevDay, Action::CalendarNextDay], "day"),
-                Hint::new(
-                    &[Action::CalendarPrevMonth, Action::CalendarNextMonth],
-                    "month",
-                ),
-                Hint::new(&[Action::CalendarToday], "today"),
-            ];
+            // The grid's keys are letters, and with the grid hidden they are
+            // typing letters instead. Leaving them on the bar would advertise
+            // a `t` that no longer jumps to today.
+            let mut hints = match context.calendar_grid_hidden {
+                true => Vec::new(),
+                false => vec![
+                    Hint::new(&[Action::CalendarPrevDay, Action::CalendarNextDay], "day"),
+                    Hint::new(
+                        &[Action::CalendarPrevMonth, Action::CalendarNextMonth],
+                        "month",
+                    ),
+                    Hint::new(&[Action::CalendarToday], "today"),
+                ],
+            };
+            hints.push(Hint::new(
+                &[Action::CalendarToggleGrid],
+                match context.calendar_grid_hidden {
+                    false => "hide grid",
+                    true => "show grid",
+                },
+            ));
             // The range keys only mean anything once there are two ends, so they
             // appear only when the query has a `..` in it — and a task date
             // is one day, so it never has them.
@@ -198,7 +217,9 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
                 false => ("pick", "close", "clear"),
             };
             hints.push(Hint::new(&[Action::CalendarCommit], commit));
-            hints.push(Hint::new(&[Action::CalendarClear], clear));
+            if !context.calendar_grid_hidden {
+                hints.push(Hint::new(&[Action::CalendarClear], clear));
+            }
             hints.push(Hint::new(&[Action::CalendarClose], close));
             hints
         }
@@ -858,6 +879,43 @@ mod tests {
         assert!(filter.iter().any(|hint| hint.label == "pick"));
         assert!(cell.iter().any(|hint| hint.label == "save"));
         assert!(cell.iter().any(|hint| hint.label == "cancel"));
+    }
+
+    /// The grid's keys are letters, and with the grid put away they are typing
+    /// letters. A bar still offering `t today` would be describing a key that
+    /// now writes a `t`.
+    #[test]
+    fn the_calendar_hints_drop_the_grid_keys_once_the_grid_is_hidden() {
+        let shown = hints_for(Mode::Calendar, HintContext::default());
+        let hidden = hints_for(
+            Mode::Calendar,
+            HintContext {
+                calendar_grid_hidden: true,
+                ..HintContext::default()
+            },
+        );
+
+        let labels = |hints: &[Hint]| {
+            hints
+                .iter()
+                .map(|hint| hint.label)
+                .collect::<Vec<_>>()
+        };
+
+        assert!(labels(&shown).contains(&"day"));
+        assert!(labels(&shown).contains(&"month"));
+        assert!(labels(&shown).contains(&"today"));
+        assert!(labels(&shown).contains(&"clear"));
+        assert!(labels(&shown).contains(&"hide grid"));
+
+        for gone in ["day", "month", "today", "clear"] {
+            assert!(!labels(&hidden).contains(&gone), "{gone} no longer works");
+        }
+        assert!(labels(&hidden).contains(&"show grid"), "and it can come back");
+        // The keys that are not letters keep working either way.
+        assert!(labels(&hidden).contains(&"pick"));
+        assert!(labels(&hidden).contains(&"close"));
+        assert!(labels(&hidden).contains(&"caret"));
     }
 
     #[test]

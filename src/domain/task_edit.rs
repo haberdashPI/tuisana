@@ -234,6 +234,13 @@ impl TaskFieldEdit {
 /// has one due date, and `2026-09-01..2026-09-08` is a sensible *filter* and a
 /// nonsensical due date. Everything else goes through the same grammar the
 /// filter panel's date fields use, normalized to `YYYY-MM-DD`.
+///
+/// Normalizing is the point where a name stops being a name. A *filter* keeps
+/// the word and re-reads it every time it runs, so `tomorrow` still means
+/// tomorrow next week; a task date is one day the API is told about, so it is
+/// fixed against the `today` the edit was made on and never moves again. A
+/// name covering more than one day — `this month` — commits as the day it
+/// starts on, since a task has nowhere to put the rest.
 pub fn parse_date_value(text: &str, today: CivilDate) -> Result<Option<String>, String> {
     let text = text.trim();
     if text.is_empty() {

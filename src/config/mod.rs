@@ -908,6 +908,10 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("j", Mode::Calendar, "calendar_next_month"),
         Bind::with_mode("t", Mode::Calendar, "calendar_today"),
         Bind::with_mode("d", Mode::Calendar, "calendar_clear"),
+        // Punctuation on purpose. Every key above is a letter that also
+        // appears in a day name, so hiding the grid has to be reachable by a
+        // key that does not: `;` is never part of a date.
+        Bind::with_mode(";", Mode::Calendar, "calendar_toggle_grid"),
         Bind::with_mode("enter", Mode::Calendar, "calendar_commit"),
         Bind::with_mode("esc", Mode::Calendar, "calendar_close"),
         // Readline's motion keys, so editing the date text feels like editing

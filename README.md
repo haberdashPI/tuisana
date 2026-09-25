@@ -124,7 +124,29 @@ Reading the screen:
   move the highlight to match. Its grid runs `Su Mo Tu We Th Fr Sa` — the Gantt
   chart's weekends and week boundaries still count from Monday, because a work
   week and a calendar grid are read differently.
+- With the grid up only the characters of a written date type: digits, `-`,
+  `+`, and `.`. Every letter is either a key that steers the grid or one stroke
+  of a name whose other strokes are.
+- `;` puts the grid away and brings it back. Hidden, the keys that steer it —
+  `h`, `l`, `j`, `k`, `t`, `d` — go back to being letters, which is what lets a
+  name like `tue` or `next month` be typed at all. In the grid's place the
+  overlay shows the dates the text resolves to and a key to the names, since
+  that is the one state they can be typed in. The choice is remembered for the
+  next date you edit.
 - A date range shades the days between its two ends, with both ends picked out.
+  So does a name that covers more than one day: `this month` shades its month.
+  The shading is the union of the two ends' spans, which is what the filter
+  matches — `last week..this week` shades all fourteen days.
+- The highlight sits on the edge the caret's end of the range contributes: its
+  first day before the `..`, its last day after it. So the caret in `this week`
+  of `this week..next week` highlights the Sunday the range opens on, and moving
+  it past the `..` highlights the Saturday it closes on — in both cases the day
+  the keys are about to move.
+- A bare name with no `..` is edited as the *end*, and moving it spells the name
+  out: nudging `this week` on a day gives `2026-08-23..2026-08-30`, keeping the
+  start it came with. A name covering a single day (`today`) just becomes that
+  other day. On a task's date cell, which holds one day and no range, a name
+  instead highlights — and commits — the day it starts on.
 
 ### Dates and time zones
 
@@ -144,8 +166,29 @@ Date filters accept:
 | a date in the current year | `09-15` |
 | a keyword | `today`, `tomorrow`, `yesterday` |
 | a weekday of the current week (Sunday-first) | `mon`, `friday` |
+| a whole week, Sunday to Saturday | `this week`, `last week`, `next week` |
+| a whole month | `this month`, `last month`, `next month` |
+| a whole year | `this year`, `last year`, `next year` |
+| an offset, in the name's own unit | `today-5`, `next month+2`, `mon+7` |
 | an inclusive range | `2026-09-01..2026-09-30` |
 | a range open on one side | `today..`, `..2026-12-31` |
+
+A name that covers more than one day is a range on its own: `this month` matches
+every day of the month. Written between two of them, `..` unions their spans
+rather than joining their first days — each end contributes its *outer* edge, so
+`last month..this month` runs from the first of one to the last of the other and
+`last week..this week` covers both weeks whole. An offset steps in the unit its name is written in, so
+`today-5` is five days back and `this month-1` is another spelling of
+`last month`. Case and the space are ignored, so `ThisMonth` works too. `+` is
+never a date separator and can offset a written date (`2026-09-15+5`); `-` is,
+so it only offsets a name.
+
+**Names are re-read every time.** A filter stores the word, not the date it
+resolved to, so a saved filter of `due: this month` means October in October.
+A *task* date does the opposite: typing `tomorrow` into a due-date cell sends
+the day it resolved to on the spot and it never moves again, because Asana
+stores a date and not an expression. A name covering a span commits as the day
+it starts on there, since a task has one due date and nowhere to put the rest.
 
 A `due` filter is also pushed to the API as `due_on.after` / `due_on.before`, so
 narrowing it reduces what gets downloaded. With more than one filter set the
@@ -269,6 +312,7 @@ All bindable commands:
 - `calendar_commit`
 - `calendar_close`
 - `calendar_clear`
+- `calendar_toggle_grid`
 - `calendar_jump_to_start`
 - `calendar_jump_to_end`
 

@@ -254,6 +254,12 @@ pub enum Action {
     CalendarJumpToEnd,
     /// Clear the field the calendar is editing, then close it.
     CalendarClear,
+    /// Show or hide the calendar's month grid.
+    ///
+    /// Hiding it also disables the keys that drive it, which is the point:
+    /// `t` and `h` are `today` and "back one day" while the grid is up, and
+    /// they are also the first two letters of `thursday`.
+    CalendarToggleGrid,
     ToggleTaskSelection,
     SelectAllVisibleTasks,
     InvertTaskSelection,
@@ -422,6 +428,7 @@ impl Action {
             "calendar_jump_to_start" => Ok(Self::CalendarJumpToStart),
             "calendar_jump_to_end" => Ok(Self::CalendarJumpToEnd),
             "calendar_clear" => Ok(Self::CalendarClear),
+            "calendar_toggle_grid" => Ok(Self::CalendarToggleGrid),
             "toggle_task_selection" => Ok(Self::ToggleTaskSelection),
             "select_all_visible_tasks" => Ok(Self::SelectAllVisibleTasks),
             "invert_task_selection" => Ok(Self::InvertTaskSelection),
@@ -506,6 +513,23 @@ impl Action {
         matches!(
             self,
             Action::TaskEditCycleValue(_) | Action::TaskEditClear
+        )
+    }
+
+    /// Returns `true` for the keys that drive the calendar's month grid.
+    ///
+    /// Every one of them is a plain letter by default, and every one of those
+    /// letters appears in a day name. With the grid hidden they are routed to
+    /// the text instead, which is what lets `tue` be typed.
+    pub fn is_calendar_grid_action(&self) -> bool {
+        matches!(
+            self,
+            Action::CalendarPrevDay
+                | Action::CalendarNextDay
+                | Action::CalendarPrevMonth
+                | Action::CalendarNextMonth
+                | Action::CalendarToday
+                | Action::CalendarClear
         )
     }
 
@@ -660,6 +684,7 @@ impl Display for Action {
             Action::CalendarJumpToStart => "calendar_jump_to_start",
             Action::CalendarJumpToEnd => "calendar_jump_to_end",
             Action::CalendarClear => "calendar_clear",
+            Action::CalendarToggleGrid => "calendar_toggle_grid",
             Action::ToggleTaskSelection => "toggle_task_selection",
             Action::SelectAllVisibleTasks => "select_all_visible_tasks",
             Action::InvertTaskSelection => "invert_task_selection",

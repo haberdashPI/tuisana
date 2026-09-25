@@ -64,6 +64,18 @@ a convention.
   knows calendar mode belongs to whichever editor opened the picker; every
   routing decision (`TaskState::apply_action`, raw filter-field typing, the
   focused border) reads it rather than re-deriving it from the mode.
+- A date filter stores the **text**, not the date it resolved to.
+  `DateQuery::parse` runs against `date::today()` on every rebuild, so a saved
+  `this month` means October in October. A task date does the opposite:
+  `parse_date_value` pins it at commit time, because Asana stores a date and
+  not an expression. The one grammar is in `src/domain/date.rs`; `parse_span`
+  is the whole of it, and `parse_token` is that with a multi-day span collapsed
+  to its first day for the callers that can only hold one date.
+- Calendar mode's grid keys are **plain letters that also spell day names**, so
+  `TaskState::calendar_grid_visible` gates them: with the grid hidden,
+  `handle_key_event_inner` routes `Action::is_calendar_grid_action` to
+  `handle_calendar_input` instead of firing it. Adding a key to that mode means
+  deciding which side of that gate it belongs on.
 - The filter panel holds one or more `TaskFilterSet`s, ORed together: fields AND
   within a set, sets OR between them. `restore_queries` is what carries the set
   list, the active tab, and every query across the rebuild each streamed project

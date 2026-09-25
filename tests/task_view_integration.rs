@@ -525,6 +525,150 @@ fn flipping_months_in_the_calendar_lands_on_the_month_edges() {
     assert_eq!(due, "2026-05-31");
 }
 
+/// Hiding the grid hands its letters back to the text, which is the only way a
+/// day name can be typed: `t`, `h`, `j`, `k`, and `d` all steer the grid, and
+/// between them they cover every weekday name there is.
+#[test]
+fn hiding_the_calendar_grid_lets_a_day_name_be_typed() {
+    std::env::set_var("TUISANA_TODAY", "2026-06-10");
+
+    let client = FakeAsanaClient::new(vec![Project::new("project-1", "Inbox", true)])
+        .with_sections(
+            "project-1",
+            vec![SectionDto {
+                gid: "section-1".to_string(),
+                name: "Today".to_string(),
+            }],
+        )
+        .with_tasks("project-1", vec![make_task()]);
+
+    let mut app = App::new(Config::default(), client);
+    app.load_projects().expect("projects load");
+
+    let key = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+    let mut open_picker = vec![
+        key(' '),
+        key('t'),
+        key('f'),
+        key('j'),
+        key('j'),
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    ];
+    // `;` puts the grid away, and then every letter is just a letter. `d`
+    // would otherwise have cleared the field and closed the picker outright.
+    open_picker.push(key(';'));
+    open_picker.extend("wednesday".chars().map(key));
+    open_picker.push(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut source = ScriptedSource {
+        keys: open_picker,
+        wait_before_next: false,
+    };
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    wait_for_task_data(&mut app);
+
+    fn due(app: &App<FakeAsanaClient>) -> String {
+        app.tasks
+            .filter_panel_rows()
+            .into_iter()
+            .find(|(label, _)| label == "Due")
+            .map(|(_, query)| query)
+            .expect("the Due row exists")
+    }
+    assert_eq!(due(&app), "wednesday", "every letter landed in the text");
+    assert!(!app.tasks.calendar_open(), "enter committed and closed it");
+    assert_eq!(
+        app.tasks.table().task_count(),
+        1,
+        "the pinned today is a Wednesday, which is the task's due date"
+    );
+    assert!(
+        !app.tasks.calendar_grid_visible(),
+        "and the picker is remembered as collapsed for next time"
+    );
+
+    // Showing the grid again puts the letters back to work: `t` is `today`
+    // rather than the first letter of anything.
+    let mut source = ScriptedSource {
+        keys: vec![
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            key(';'),
+            key('t'),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        ],
+        wait_before_next: false,
+    };
+    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    wait_for_task_data(&mut app);
+
+    assert!(app.tasks.calendar_grid_visible());
+    assert_eq!(due(&app), "2026-06-10", "`t` jumped the highlight to today");
+}
+
+/// The mirror of the test above: with the grid up, the only characters that
+/// reach the text are the ones a written date is made of.
+///
+/// A letter there is always half a keyword — its other letters steer the grid —
+/// so letting it land would leave the field holding text the user never got to
+/// finish, over a date the same keystrokes had already moved.
+#[test]
+fn the_calendar_grid_only_takes_the_characters_of_a_written_date() {
+    std::env::set_var("TUISANA_TODAY", "2026-06-10");
+
+    let client = FakeAsanaClient::new(vec![Project::new("project-1", "Inbox", true)])
+        .with_sections(
+            "project-1",
+            vec![SectionDto {
+                gid: "section-1".to_string(),
+                name: "Today".to_string(),
+            }],
+        )
+        .with_tasks("project-1", vec![make_task()]);
+
+    let mut app = App::new(Config::default(), client);
+    app.load_projects().expect("projects load");
+
+    let key = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+    let mut keys = vec![
+        key(' '),
+        key('t'),
+        key('f'),
+        key('j'),
+        key('j'),
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    ];
+    // `a`, `b`, `q`, and `z` are all unbound in calendar mode, so nothing else
+    // claims them — before this rule they typed. Interleaved with the range so
+    // a dropped character would show up as a gap rather than a shorter tail.
+    keys.extend("2026a-06b-01..q2026-06-30z".chars().map(key));
+
+    let mut source = ScriptedSource {
+        keys,
+        wait_before_next: false,
+    };
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    wait_for_task_data(&mut app);
+
+    let due = app
+        .tasks
+        .filter_panel_rows()
+        .into_iter()
+        .find(|(label, _)| label == "Due")
+        .map(|(_, query)| query)
+        .expect("the Due row exists");
+    assert_eq!(
+        due, "2026-06-01..2026-06-30",
+        "the digits, dashes, and dots landed and the letters did not"
+    );
+    assert!(app.tasks.calendar_grid_visible(), "the grid was up throughout");
+}
+
 /// Four tasks spread across the year, for the filter-set tests: one due within
 /// a week of the pinned today, one four months out, one in between, and one
 /// with no due date at all.

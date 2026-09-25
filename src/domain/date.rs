@@ -224,49 +224,242 @@ pub fn today() -> CivilDate {
     }
 }
 
-/// Resolves one date token from a filter query.
+/// The granularity a named date token counts in.
+///
+/// It is what an offset steps by, which is the whole reason it is tracked:
+/// `today-5` is five *days* back, and `this month-1` is one *month* back. A
+/// single unit for both would make one of those two wrong.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DateUnit {
+    Day,
+    Week,
+    Month,
+    Year,
+}
+
+/// The stretch of days one token names.
+///
+/// Most tokens name a single day, but `this week`, `this month`, and
+/// `this year` name a whole one, and a filter that matched only their first day would be useless.
+/// Stored as an anchor plus a unit rather than as two dates, so an offset can
+/// be applied in the unit the token was written in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DateSpan {
+    /// Any day inside the span; the bounds are derived from it and the unit.
+    pub anchor: CivilDate,
+    pub unit: DateUnit,
+}
+
+impl DateSpan {
+    /// A span of exactly one day.
+    pub fn day(anchor: CivilDate) -> Self {
+        Self {
+            anchor,
+            unit: DateUnit::Day,
+        }
+    }
+
+    /// The whole week `anchor` falls in, Sunday through Saturday.
+    pub fn week(anchor: CivilDate) -> Self {
+        Self {
+            anchor,
+            unit: DateUnit::Week,
+        }
+    }
+
+    /// The whole month `anchor` falls in.
+    pub fn month(anchor: CivilDate) -> Self {
+        Self {
+            anchor,
+            unit: DateUnit::Month,
+        }
+    }
+
+    /// The whole year `anchor` falls in.
+    pub fn year(anchor: CivilDate) -> Self {
+        Self {
+            anchor,
+            unit: DateUnit::Year,
+        }
+    }
+
+    /// The first day the span covers.
+    pub fn start(&self) -> CivilDate {
+        match self.unit {
+            DateUnit::Day => self.anchor,
+            DateUnit::Week => self.anchor.week_start(),
+            DateUnit::Month => self.anchor.first_of_month(),
+            DateUnit::Year => CivilDate {
+                year: self.anchor.year,
+                month: 1,
+                day: 1,
+            },
+        }
+    }
+
+    /// The last day the span covers.
+    pub fn end(&self) -> CivilDate {
+        match self.unit {
+            DateUnit::Day => self.anchor,
+            DateUnit::Week => self.anchor.week_start().add_days(6),
+            DateUnit::Month => CivilDate {
+                day: self.anchor.days_in_month(),
+                ..self.anchor
+            },
+            DateUnit::Year => CivilDate {
+                year: self.anchor.year,
+                month: 12,
+                day: 31,
+            },
+        }
+    }
+
+    /// Whether the span is a single day, which is what decides whether a query
+    /// built from it is [`DateQuery::Exact`] or a range.
+    pub fn is_day(&self) -> bool {
+        self.unit == DateUnit::Day
+    }
+
+    /// This span moved by `delta` of its own unit.
+    fn shift(self, delta: i64) -> Self {
+        let anchor = match self.unit {
+            DateUnit::Day => self.anchor.add_days(delta),
+            DateUnit::Week => self.anchor.add_days(delta * 7),
+            DateUnit::Month => self.anchor.add_months(delta),
+            DateUnit::Year => self.anchor.add_months(delta * 12),
+        };
+        Self { anchor, ..self }
+    }
+}
+
+/// The largest offset a token may carry, in its own unit.
+///
+/// Not a limit anyone will meet on purpose. It is here because `add_days`
+/// walks straight into an integer overflow on a pasted `today-99999999999`,
+/// and because a year outside `CivilDate`'s four digits is not a date the API
+/// would take anyway.
+const MAX_OFFSET: i64 = 10_000;
+
+/// Resolves one date token from a filter query to the days it covers.
 ///
 /// Returns `None` when the token is not a date at all, and `Some(None)` for an
 /// empty token, which a range uses to mean "no bound on this side".
 ///
-/// Accepted forms, in order: empty, `today`, `tomorrow`, `yesterday`, a weekday
-/// name (that day of the current week, which may already be past), `MM-DD` in
-/// the current year, and a full `YYYY-MM-DD`.
-pub fn parse_token(token: &str, today: CivilDate) -> Option<Option<CivilDate>> {
-    let token = token.trim();
+/// Accepted forms, in order: empty, a name, a name or date with an offset
+/// (`today-5`, `next month+2`), `MM-DD` in the current year, and a full
+/// `YYYY-MM-DD`. Whitespace inside a token is ignored, so `this month` and
+/// `thismonth` are the same thing.
+///
+/// The names are: `today`, `tomorrow`, `yesterday`, any weekday of the current
+/// week, and `this`/`last`/`next` followed by `week`, `month`, or `year`.
+pub fn parse_span(token: &str, today: CivilDate) -> Option<Option<DateSpan>> {
+    let token = token
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
     if token.is_empty() {
         return Some(None);
     }
 
-    let resolved = if token.eq_ignore_ascii_case("today") {
-        today
-    } else if token.eq_ignore_ascii_case("tomorrow") {
-        today.add_days(1)
-    } else if token.eq_ignore_ascii_case("yesterday") {
-        today.add_days(-1)
-    } else if let Some(index) = weekday_index_from_name(token) {
-        // A weekday names a day of the week we are in now, not the next one to
-        // come round: on a Thursday, `mon` is the Monday three days back. The
-        // week turns over on Sunday, so the day is counted from there, which
-        // lands behind today for a day already spent.
-        today.week_start().add_days(((index + 1) % 7) as i64)
-    } else {
-        // Two components mean `MM-DD` in the current year; three mean a full
-        // date. Counting delimiters rather than measuring bytes keeps a
-        // multi-byte token from taking the wrong branch.
-        let parts = token.split('-').collect::<Vec<_>>();
-        match parts.as_slice() {
-            [month, day] => CivilDate::new(
-                today.year,
-                month.parse().ok()?,
-                day.parse().ok()?,
-            )?,
-            [_, _, _] => CivilDate::parse(token)?,
-            _ => return None,
+    // The whole token first, so an offset is only ever looked for in text that
+    // is not already a date. `2026-09-15` would otherwise be read as September
+    // 2026 minus fifteen of something.
+    if let Some(span) = base_span(&token, today) {
+        return Some(Some(span));
+    }
+
+    let (head, delta) = split_offset(&token)?;
+    let span = base_span(head, today)?.shift(delta);
+    // `add_days` and `add_months` do not police the year, and a date outside
+    // four digits is not one Asana would take.
+    (1..=9999).contains(&span.anchor.year).then_some(Some(span))
+}
+
+/// Resolves one date token from a filter query.
+///
+/// The first day of whatever [`parse_span`] makes of the token, which is the
+/// token itself for every form that names a single day. A span that covers
+/// more than one — `this month`, `next year` — collapses to the day it starts
+/// on, because the callers that reach for this want one date: a task has one
+/// due date, and the calendar grid highlights one square.
+pub fn parse_token(token: &str, today: CivilDate) -> Option<Option<CivilDate>> {
+    Some(parse_span(token, today)?.map(|span| span.start()))
+}
+
+/// Resolves a token carrying no offset.
+///
+/// Takes text already lowercased and stripped of whitespace, which is what
+/// lets the names be matched against one spelling apiece.
+fn base_span(token: &str, today: CivilDate) -> Option<DateSpan> {
+    let span = match token {
+        "today" => DateSpan::day(today),
+        "tomorrow" => DateSpan::day(today.add_days(1)),
+        "yesterday" => DateSpan::day(today.add_days(-1)),
+        "thisweek" => DateSpan::week(today),
+        "lastweek" => DateSpan::week(today.add_days(-7)),
+        "nextweek" => DateSpan::week(today.add_days(7)),
+        "thismonth" => DateSpan::month(today),
+        "lastmonth" => DateSpan::month(today.add_months(-1)),
+        "nextmonth" => DateSpan::month(today.add_months(1)),
+        "thisyear" => DateSpan::year(today),
+        "lastyear" => DateSpan::year(today.add_months(-12)),
+        "nextyear" => DateSpan::year(today.add_months(12)),
+        _ => {
+            if let Some(index) = weekday_index_from_name(token) {
+                // A weekday names a day of the week we are in now, not the next
+                // one to come round: on a Thursday, `mon` is the Monday three
+                // days back. The week turns over on Sunday, so the day is
+                // counted from there, which lands behind today for a day
+                // already spent.
+                DateSpan::day(today.week_start().add_days(((index + 1) % 7) as i64))
+            } else {
+                // Two components mean `MM-DD` in the current year; three mean a
+                // full date. Counting delimiters rather than measuring bytes
+                // keeps a multi-byte token from taking the wrong branch.
+                let parts = token.split('-').collect::<Vec<_>>();
+                DateSpan::day(match parts.as_slice() {
+                    [month, day] => {
+                        CivilDate::new(today.year, month.parse().ok()?, day.parse().ok()?)?
+                    }
+                    [_, _, _] => CivilDate::parse(token)?,
+                    _ => return None,
+                })
+            }
         }
     };
+    Some(span)
+}
 
-    Some(Some(resolved))
+/// Splits a trailing `+N` or `-N` off a token.
+///
+/// `-` is also the date separator, so a minus offset is only read off a token
+/// whose head is a *name*: `today-5` is five days back, and `2026-06-10-01` is
+/// still the nonsense it always was rather than the ninth of June. `+` is
+/// never a separator, so it needs no such rule and `2026-06-10+5` works.
+fn split_offset(token: &str) -> Option<(&str, i64)> {
+    let index = token.rfind(['+', '-']).filter(|index| *index > 0)?;
+    let (head, offset) = token.split_at(index);
+    let digits = &offset[1..];
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let plus = offset.starts_with('+');
+    if !plus && !head.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        return None;
+    }
+    let magnitude = digits.parse::<i64>().ok().filter(|n| *n <= MAX_OFFSET)?;
+    Some((head, if plus { magnitude } else { -magnitude }))
+}
+
+/// Whether a character can appear in a written date, as opposed to a name.
+///
+/// The digits, the `-` that separates a date's parts and signs an offset, the
+/// `+` that signs the other direction, and the `.` of a range. Everything a
+/// query needs once the keywords are set aside — which is what the calendar
+/// picker does while its grid has the letters.
+pub fn is_date_char(ch: char) -> bool {
+    ch.is_ascii_digit() || matches!(ch, '-' | '+' | '.')
 }
 
 /// A parsed date filter query: either a single date or an inclusive range.
@@ -284,6 +477,12 @@ pub enum DateQuery {
 impl DateQuery {
     /// Parses a whole filter query, returning `None` when it is not a date
     /// expression. An empty query has nothing to match and is also `None`.
+    ///
+    /// A token that names more than one day is a range even without a `..`:
+    /// `this month` is the whole month, and `last month..this month` runs from
+    /// the first of one to the last of the other. Each end of a written range
+    /// contributes the outside of its own span, which is the reading that
+    /// makes a range of two months cover both of them whole.
     pub fn parse(query: &str, today: CivilDate) -> Option<Self> {
         let query = query.trim();
         if query.is_empty() {
@@ -291,11 +490,18 @@ impl DateQuery {
         }
 
         if let Some((start, end)) = query.split_once("..") {
-            let start = parse_token(start, today)?;
-            let end = parse_token(end, today)?;
+            let start = parse_span(start, today)?.map(|span| span.start());
+            let end = parse_span(end, today)?.map(|span| span.end());
             Some(Self::Range { start, end })
         } else {
-            Some(Self::Exact(parse_token(query, today)??))
+            let span = parse_span(query, today)??;
+            Some(match span.is_day() {
+                true => Self::Exact(span.start()),
+                false => Self::Range {
+                    start: Some(span.start()),
+                    end: Some(span.end()),
+                },
+            })
         }
     }
 
@@ -405,7 +611,7 @@ fn weekday_index_from_name(value: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_token, CivilDate, DateQuery};
+    use super::{parse_span, parse_token, CivilDate, DateQuery};
 
     fn date(year: i32, month: u32, day: u32) -> CivilDate {
         CivilDate::new(year, month, day).expect("a real date")
@@ -546,6 +752,203 @@ mod tests {
         assert_eq!(parse_token("sun", sunday), Some(Some(sunday)));
         assert_eq!(parse_token("mon", sunday), Some(Some(date(2026, 8, 31))));
         assert_eq!(parse_token("sat", sunday), Some(Some(date(2026, 9, 5))));
+    }
+
+    #[test]
+    fn a_week_names_the_sunday_to_saturday_it_falls_in() {
+        // A Monday, so every bound below has to reach back over a Sunday
+        // rather than starting where today does.
+        let today = date(2026, 8, 24);
+        let span = |token: &str| {
+            parse_span(token, today)
+                .expect("a date token")
+                .expect("not empty")
+        };
+
+        let week = span("this week");
+        assert_eq!(week.start(), date(2026, 8, 23), "Sunday starts the week");
+        assert_eq!(week.end(), date(2026, 8, 29), "and Saturday ends it");
+        assert!(!week.is_day());
+
+        assert_eq!(span("last week").start(), date(2026, 8, 16));
+        assert_eq!(span("last week").end(), date(2026, 8, 22));
+        assert_eq!(span("next week").start(), date(2026, 8, 30));
+        assert_eq!(span("next week").end(), date(2026, 9, 5));
+
+        // An offset steps whole weeks, so the two spellings agree the way
+        // `this month-1` and `last month` do.
+        assert_eq!(span("this week-1"), span("last week"));
+        assert_eq!(span("this week+1"), span("next week"));
+        assert_eq!(span("this week+2").start(), date(2026, 9, 6));
+
+        assert_eq!(span("ThisWeek"), span("this  week"));
+
+        // A Sunday is the first day of its own week, not the last of the one
+        // before: the bounds must not slide back seven days.
+        let sunday = date(2026, 8, 30);
+        let from_sunday = parse_span("this week", sunday)
+            .expect("a date token")
+            .expect("not empty");
+        assert_eq!(from_sunday.start(), sunday);
+        assert_eq!(from_sunday.end(), date(2026, 9, 5));
+    }
+
+    #[test]
+    fn a_week_covers_every_day_between_its_ends() {
+        let today = date(2026, 8, 24);
+        let query = DateQuery::parse("this week", today).expect("parses");
+
+        assert!(query.matches("2026-08-23"));
+        assert!(query.matches("2026-08-26"));
+        assert!(query.matches("2026-08-29"));
+        assert!(!query.matches("2026-08-22"));
+        assert!(!query.matches("2026-08-30"));
+    }
+
+    #[test]
+    fn a_month_or_a_year_names_every_day_in_it() {
+        let today = date(2026, 8, 24);
+        let span = |token: &str| {
+            parse_span(token, today)
+                .expect("a date token")
+                .expect("not empty")
+        };
+
+        let month = span("this month");
+        assert_eq!(month.start(), date(2026, 8, 1));
+        assert_eq!(month.end(), date(2026, 8, 31), "to the last day, not the first");
+        assert!(!month.is_day());
+
+        assert_eq!(span("last month").start(), date(2026, 7, 1));
+        assert_eq!(span("last month").end(), date(2026, 7, 31));
+        assert_eq!(span("next month").start(), date(2026, 9, 1));
+        assert_eq!(span("next month").end(), date(2026, 9, 30));
+
+        assert_eq!(span("this year").start(), date(2026, 1, 1));
+        assert_eq!(span("this year").end(), date(2026, 12, 31));
+        assert_eq!(span("last year").start(), date(2025, 1, 1));
+        assert_eq!(span("next year").end(), date(2027, 12, 31));
+
+        // The spelling is forgiving: case and the space are both noise.
+        assert_eq!(span("ThisMonth"), span("this  month"));
+    }
+
+    #[test]
+    fn an_offset_steps_in_the_unit_the_token_was_written_in() {
+        let today = date(2026, 8, 24);
+        let span = |token: &str| {
+            parse_span(token, today)
+                .expect("a date token")
+                .expect("not empty")
+        };
+
+        // Days for a day token.
+        assert_eq!(span("today-5").start(), date(2026, 8, 19));
+        assert_eq!(span("today+5").start(), date(2026, 8, 29));
+        assert_eq!(span("tomorrow-1").start(), today);
+        assert_eq!(span("mon+7").start(), date(2026, 8, 31));
+
+        // Months for a month token, which is what makes the two spellings of
+        // last month agree.
+        assert_eq!(span("this month-1"), span("last month"));
+        assert_eq!(span("this month+1"), span("next month"));
+        assert_eq!(span("next month+1").start(), date(2026, 10, 1));
+
+        // And years for a year token.
+        assert_eq!(span("this year-1"), span("last year"));
+        assert_eq!(span("this year+2").start(), date(2028, 1, 1));
+
+        // `+` is never a date separator, so it reads as an offset even on a
+        // written date. `-` is, so it does not.
+        assert_eq!(span("2026-08-24+1").start(), date(2026, 8, 25));
+        assert_eq!(parse_span("2026-08-24-1", today), None);
+    }
+
+    #[test]
+    fn a_span_of_more_than_a_day_filters_as_a_range() {
+        let today = date(2026, 8, 24);
+
+        assert_eq!(
+            DateQuery::parse("this month", today),
+            Some(DateQuery::Range {
+                start: Some(date(2026, 8, 1)),
+                end: Some(date(2026, 8, 31)),
+            })
+        );
+        assert_eq!(
+            DateQuery::parse("today", today),
+            Some(DateQuery::Exact(today)),
+            "a single day is still exact"
+        );
+
+        // Each end of a written range gives the outside of its own span, so
+        // two months cover both of them whole.
+        assert_eq!(
+            DateQuery::parse("last month..this month", today),
+            Some(DateQuery::Range {
+                start: Some(date(2026, 7, 1)),
+                end: Some(date(2026, 8, 31)),
+            })
+        );
+        assert_eq!(
+            DateQuery::parse("today..next month", today),
+            Some(DateQuery::Range {
+                start: Some(today),
+                end: Some(date(2026, 9, 30)),
+            })
+        );
+
+        let month = DateQuery::parse("this month", today).expect("parses");
+        assert!(month.matches("2026-08-01"));
+        assert!(month.matches("2026-08-31"));
+        assert!(!month.matches("2026-09-01"));
+    }
+
+    #[test]
+    fn named_times_are_measured_against_the_day_they_are_resolved_on() {
+        // The same query, read on two days, names two different spans. This is
+        // what makes a saved filter mean "this month" rather than "August".
+        let query = "this month";
+
+        let august = DateQuery::parse(query, date(2026, 8, 24)).expect("parses");
+        let september = DateQuery::parse(query, date(2026, 9, 2)).expect("parses");
+
+        assert!(august.matches("2026-08-15"));
+        assert!(!august.matches("2026-09-15"));
+        assert!(september.matches("2026-09-15"));
+        assert!(!september.matches("2026-08-15"));
+
+        assert_eq!(
+            parse_token("today", date(2026, 8, 24)),
+            Some(Some(date(2026, 8, 24)))
+        );
+        assert_eq!(
+            parse_token("today", date(2026, 8, 25)),
+            Some(Some(date(2026, 8, 25)))
+        );
+    }
+
+    #[test]
+    fn a_multi_day_span_collapses_to_its_first_day_for_a_single_date() {
+        let today = date(2026, 8, 24);
+
+        assert_eq!(parse_token("this month", today), Some(Some(date(2026, 8, 1))));
+        assert_eq!(parse_token("next year", today), Some(Some(date(2027, 1, 1))));
+    }
+
+    #[test]
+    fn an_offset_that_runs_off_the_calendar_is_refused() {
+        let today = date(2026, 8, 24);
+
+        // Past the four digits a date field holds.
+        assert_eq!(parse_span("next year+9999", today), None);
+        // Past the cap, before any arithmetic can overflow.
+        assert_eq!(parse_span("today-99999", today), None);
+        assert_eq!(parse_span("today-99999999999999999999", today), None);
+        // Not an offset at all.
+        assert_eq!(parse_span("today-", today), None);
+        assert_eq!(parse_span("today-x", today), None);
+        assert_eq!(parse_span("-5", today), None);
     }
 
     #[test]

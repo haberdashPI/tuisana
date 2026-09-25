@@ -879,14 +879,15 @@ fn filter_date_calendar_after_flipping_two_months_forward() {
 
 #[test]
 fn filter_date_calendar_with_unusable_text() {
-    // `a`, `b`, and `c` are unbound in calendar mode, so they type rather than
-    // navigating. The overlay has to say the text is unusable, because the old
-    // behavior was to silently filter the table to nothing.
+    // Letters only reach the text with the grid put away, so `;` either side
+    // of them is what gets `abc` typed at all. The overlay has to say the text
+    // is unusable, because the old behavior was to silently filter the table
+    // to nothing.
     assert_snapshot("filter-date-calendar-invalid", || {
         vec![
             enter_task_mode(),
             open_due_calendar(),
-            vec![key('a'), key('b'), key('c')],
+            vec![key(';'), key('a'), key('b'), key('c'), key(';')],
         ]
     });
 }
@@ -914,6 +915,36 @@ fn filter_date_calendar_editing_the_start_of_a_range() {
             open_due_calendar(),
             "2026-08-10..2026-08-20".chars().map(key).collect(),
             vec![ctrl('a'), key('h')],
+        ]
+    });
+}
+
+#[test]
+fn filter_date_calendar_shading_a_whole_month_from_a_keyword() {
+    // `this month` names the month, not its first day, so the grid shades all
+    // of it — the same shading a written `2026-08-01..2026-08-31` earns.
+    assert_snapshot("filter-date-calendar-this-month", || {
+        vec![
+            enter_task_mode(),
+            open_due_calendar(),
+            vec![key(';')],
+            "this month".chars().map(key).collect(),
+            vec![key(';')],
+        ]
+    });
+}
+
+#[test]
+fn filter_date_calendar_with_the_grid_hidden() {
+    // `;` puts the grid away and hands its letters back to the text, which is
+    // the only way `tue` can be typed: `t` is `today` while the grid is up.
+    // What is left is the resolved value, so the keyword is still legible.
+    assert_snapshot("filter-date-calendar-typed", || {
+        vec![
+            enter_task_mode(),
+            open_due_calendar(),
+            vec![key(';')],
+            "tue".chars().map(key).collect(),
         ]
     });
 }

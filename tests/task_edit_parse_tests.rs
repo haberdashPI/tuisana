@@ -21,9 +21,19 @@ fn a_date_parses_every_form_the_picker_accepts_and_normalizes_it() {
     for (input, expected) in [
         ("today", "2026-06-01"),
         ("tomorrow", "2026-06-02"),
+        ("yesterday", "2026-05-31"),
+        ("today-5", "2026-05-27"),
+        ("today+5", "2026-06-06"),
         ("09-28", "2026-09-28"),
         ("2026-09-28", "2026-09-28"),
         (" 2026-09-28 ", "2026-09-28"),
+        // A name covering a whole span commits as the day it starts on: a
+        // task has one date and nowhere to put the rest of the month.
+        ("this month", "2026-06-01"),
+        ("next month", "2026-07-01"),
+        ("last month", "2026-05-01"),
+        ("next year", "2027-01-01"),
+        ("this month-1", "2026-05-01"),
     ] {
         assert_eq!(
             parse_date_value(input, today()),
@@ -31,6 +41,25 @@ fn a_date_parses_every_form_the_picker_accepts_and_normalizes_it() {
             "{input}"
         );
     }
+}
+
+/// A filter keeps the word and re-reads it; a task date is fixed on the day it
+/// was set. The two are the same grammar and deliberately not the same
+/// lifetime — Asana stores a date, not an expression.
+#[test]
+fn a_task_date_is_fixed_against_the_day_it_was_edited_on() {
+    let june = CivilDate::new(2026, 6, 1).expect("a real date");
+    let july = CivilDate::new(2026, 7, 1).expect("a real date");
+
+    assert_eq!(
+        parse_date_value("tomorrow", june),
+        Ok(Some("2026-06-02".to_string()))
+    );
+    assert_eq!(
+        parse_date_value("tomorrow", july),
+        Ok(Some("2026-07-02".to_string())),
+        "the same word, resolved a month later, is a different date"
+    );
 }
 
 #[test]

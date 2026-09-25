@@ -36,5 +36,5 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-h/l day   k/j month   t today   left/right caret   ⏎ pick   d clear
+h/l day   k/j month   t today   ; hide grid   left/right caret   ⏎ pick
  CALENDAR                                                               1 filter

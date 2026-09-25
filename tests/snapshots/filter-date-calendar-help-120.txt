@@ -7,27 +7,27 @@
 ┃    State     labels    —                                                                                             ┃
 ┃    Projects  contains  —                                                                                             ┃
 ┃    Priority  labels    —                                                                                             ┃
-┃                                                                                                                      ┃
 ┃                 ┏ Help · calendar mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                 ┃
-┗━━━━━━━━━━━━━━━━━┃Move the date                              Edit the text                          ┃━━━━━━━━━━━━━━━━━┛
-┌ Tasks ──────────┃h/l         day                            0-9 - ..    typed into the filter field┃ 1 · columns 0/1 ┐
-│   Task          ┃k/j         month                          left/right  move the caret             ┃        │ Priorit│
-│                 ┃t           jump to today                  bksp        delete                     ┃                 │
-│▌Northwind BTX 44┃⏎           pick and close                 ^a          go to the start date       ┃─────────────────│
-│                 ┃d           clear the field                ^e          go to the end date         ┃                 │
-│   Study Kit Desi┃esc         close                                                                 ┃·················│
-│▍  Draft the assa┃                                           Date syntax                            ┃TX 4412 │ High   │
-│   Review shipmen┃                                           exact       YYYY-MM-DD or MM-DD        ┃TX 4412 │ High   │
-│   Ship release c┃                                           range       start..end                 ┃TX 4412 │ High   │
-│   Confirm carrie┃                                           open range  start.. or ..end           ┃TX 4412 │ —      │
-│   Update the sam┃                                                                                  ┃TX 4412 │ Medium │
-│   Qualify the se┃                                           App                                    ┃TX 4412 │ Medium │
-│                 ┃                                           ?           close this help            ┃                 │
-│   Shipment ·····┃                                                                                  ┃·················│
-│   Book the couri┃                                                                        ? to close┃TX 4412 │ Low    │
-│   Label the rete┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛TX 4412 │ Medium │
-│   Reconcile the freight invoices                │ Robin Fox    │  Oct 30 │ Sep 20 │ ○  │ Northwind BTX 4412 │ Low    │
-│   Close out packaging vendor contract           │ Alex Chen    │  Nov 14 │  Oct 1 │ ○  │ Northwind BTX 4412 │ Low    │
+┃                 ┃Move the date                              Date syntax                            ┃                 ┃
+┗━━━━━━━━━━━━━━━━━┃h/l         day                            exact       YYYY-MM-DD or MM-DD        ┃━━━━━━━━━━━━━━━━━┛
+┌ Tasks ──────────┃k/j         month                          day         today, tomorrow, yesterday ┃ 1 · columns 0/1 ┐
+│   Task          ┃t           jump to today                  weekday     mon .. sun                 ┃        │ Priorit│
+│                 ┃⏎           pick and close                 week        this / last / next week    ┃                 │
+│▌Northwind BTX 44┃d           clear the field                month       this / last / next month   ┃─────────────────│
+│                 ┃esc         close                          year        this / last / next year    ┃                 │
+│   Study Kit Desi┃;           show/hide the grid             offset      today-5, next month+2      ┃·················│
+│▍  Draft the assa┃            keys above need the grid       range       start..end                 ┃TX 4412 │ High   │
+│   Review shipmen┃            hiding it keys the names       open range  start.. or ..end           ┃TX 4412 │ High   │
+│   Ship release c┃                                                                                  ┃TX 4412 │ High   │
+│   Confirm carrie┃Edit the text                              App                                    ┃TX 4412 │ —      │
+│   Update the sam┃0-9 - + ..  typed into the filter field    ?           close this help            ┃TX 4412 │ Medium │
+│   Qualify the se┃left/right  move the caret                                                        ┃TX 4412 │ Medium │
+│                 ┃bksp        delete                                                                ┃                 │
+│   Shipment ·····┃^a          go to the start date                                                  ┃·················│
+│   Book the couri┃^e          go to the end date                                                    ┃TX 4412 │ Low    │
+│   Label the rete┃                                                                                  ┃TX 4412 │ Medium │
+│   Reconcile the ┃                                                                        ? to close┃TX 4412 │ Low    │
+│   Close out pack┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛TX 4412 │ Low    │
 │   Close the quarter's shipping report           │ Priya Raman  │  Dec 18 │  Nov 2 │ ○  │ Northwind BTX 4412 │ Low    │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -36,5 +36,5 @@
 │                                                                                                                      │
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-h/l day   k/j month   t today   left/right caret   ⏎ pick   d clear   esc close
+h/l day   k/j month   t today   ; hide grid   left/right caret   ⏎ pick   d clear   esc close
  CALENDAR

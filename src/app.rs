@@ -733,6 +733,21 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                     .modifiers
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
+                // With the grid up only the characters of a written date get
+                // through. Every letter there either steers the grid or is one
+                // stroke of a name whose other strokes do, so an `a` landing in
+                // the text could only ever be half a keyword — and the half
+                // that did not land moved the date out from under it. The key
+                // to the names is drawn once the grid is put away, which is
+                // also when they can be typed in full.
+                //
+                // Swallowed rather than passed on, so a rejected letter cannot
+                // fall through to the task-cell editor underneath.
+                if self.tasks.calendar_grid_visible()
+                    && !crate::domain::is_date_char(c)
+                {
+                    return Ok(true);
+                }
                 self.tasks.filter_calendar_push_char(c);
                 Ok(true)
             }
@@ -1188,6 +1203,10 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 self.tasks.filter_calendar_today();
                 return Ok(None);
             }
+            Action::CalendarToggleGrid => {
+                self.tasks.toggle_calendar_grid();
+                return Ok(None);
+            }
             Action::FilterDoneEditing => {
                 self.finish_filter_completion();
                 self.tasks.filter_calendar_close();
@@ -1633,6 +1652,22 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                             | crossterm::event::KeyModifiers::ALT)
                 {
                     self.handle_task_edit_input(event)?;
+                    return Ok(None);
+                }
+                // The mirror of that rule for the date picker: with the
+                // month grid hidden its navigation letters are not navigation
+                // at all, they are the letters of `tuesday`. A rebinding onto
+                // a modifier keeps working, since only a plain character is
+                // ambiguous.
+                if action.is_calendar_grid_action()
+                    && matches!(self.mode, Mode::Calendar)
+                    && !self.tasks.calendar_grid_visible()
+                    && !event
+                        .modifiers
+                        .intersects(crossterm::event::KeyModifiers::CONTROL
+                            | crossterm::event::KeyModifiers::ALT)
+                {
+                    self.handle_calendar_input(event)?;
                     return Ok(None);
                 }
                 if action.is_label_filter_action() {

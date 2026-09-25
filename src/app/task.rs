@@ -117,6 +117,13 @@ struct TaskViewState {
     pending_column_scroll: bool,
     /// The edit in progress, if any.
     cell_edit: Option<TaskCellEditState>,
+    /// Set once the user has hidden the date picker's month grid.
+    ///
+    /// Not `calendar_grid_visible`, because the grid is shown by default and a
+    /// derived `Default` would then have to be written out by hand. It is
+    /// remembered across openings: someone who prefers typing `next month` to
+    /// steering a cursor prefers it the second time too.
+    calendar_grid_hidden: bool,
     /// Tasks edited this session, newest first.
     ///
     /// Not persisted and not capped by time: "what I was just doing" is not
@@ -2460,6 +2467,20 @@ impl TaskState {
         self.calendar().is_some()
     }
 
+    /// Whether the picker is showing its month grid.
+    ///
+    /// Also the answer to whether the grid's navigation keys do anything:
+    /// with it hidden they type into the date text instead.
+    pub fn calendar_grid_visible(&self) -> bool {
+        !self.view.calendar_grid_hidden
+    }
+
+    /// Shows or hides the month grid, for whichever picker is open and every
+    /// one opened after it.
+    pub(crate) fn toggle_calendar_grid(&mut self) {
+        self.view.calendar_grid_hidden = !self.view.calendar_grid_hidden;
+    }
+
     /// Whether the open picker belongs to a task cell rather than a filter row.
     ///
     /// `enter` and `esc` mean different things in the two: one commits a
@@ -4187,7 +4208,7 @@ impl TaskState {
                 let value = value.unwrap_or_default();
                 CellEditor::Date {
                     text: TextEdit::new(value.clone()),
-                    calendar: CalendarState::open(label, &value, ctx.today()),
+                    calendar: CalendarState::open_one_day(label, &value, ctx.today()),
                 }
             }
             crate::domain::STATE_COLUMN => CellEditor::Options {

@@ -237,7 +237,10 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                 help_overlay::render(frame, regions.body, &theme, keymap, mode);
             } else if let Some(dialog) = app.tasks.gantt().dialog() {
                 gantt_order::render(frame, regions.body, &theme, keymap, dialog);
-            } else if let Some(view) = calendar::calendar_view(app.tasks.calendar()) {
+            } else if let Some(view) = calendar::calendar_view(
+                app.tasks.calendar(),
+                app.tasks.calendar_grid_visible(),
+            ) {
                 calendar::render(frame, regions.body, &theme, &view);
             } else if let Some(view) = completion::completion_view(&app.tasks) {
                 completion::render(frame, regions.body, &theme, &view);
@@ -341,6 +344,7 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
         can_scroll: task_view.is_some_and(|view| view.max_scroll > 0),
         on_label_filter: app.tasks.filter_selected_is_labels(),
         on_date_range: app.tasks.calendar_is_range(),
+        calendar_grid_hidden: !app.tasks.calendar_grid_visible(),
         timeline_windowed: app.tasks.gantt().timeline_windowed(),
         many_filter_sets: app.tasks.filter_set_position().1 > 1,
         filter_sets_sidebar: app.tasks.filter_sets_sidebar_visible(),
