@@ -100,6 +100,15 @@ pub struct HintContext {
     pub has_recent_edits: bool,
 }
 
+/// The three forward cuts, as one hint.
+///
+/// One entry rather than three: they are the same idea at three sizes, and
+/// the bar has room for a trio of keys but not for three labels.
+const CUT_HINT: Hint = Hint::new(
+    &[Action::TextCutChar, Action::TextCutWord, Action::TextCutToEnd],
+    "cut",
+);
+
 /// Hints shown on the right of the bar in every mode.
 const GLOBAL_HINTS: &[Hint] = &[
     Hint::new(&[Action::Refresh], "refresh"),
@@ -366,6 +375,7 @@ fn task_edit_hints(context: HintContext) -> Vec<Hint> {
         "ends",
     ));
     hints.push(Hint::literal("bksp", "delete"));
+    hints.push(CUT_HINT);
     hints
 }
 
@@ -404,6 +414,7 @@ fn filter_edit_hints(context: HintContext) -> Vec<Hint> {
             "word",
         ));
         hints.push(Hint::literal("bksp", "delete"));
+        hints.push(CUT_HINT);
         hints.push(Hint::new(&[Action::ClearSearch], "clear"));
     }
     hints

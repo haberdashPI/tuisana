@@ -342,6 +342,12 @@ fn text_editing_group() -> HelpGroup {
                 "start / end of line",
             ),
             Hint::literal("bksp", "delete at the caret"),
+            Hint::new(&[Action::TextCutChar], "cut a character"),
+            Hint::new(&[Action::TextCutWord], "cut a word"),
+            Hint::new(&[Action::TextCutToEnd], "cut to end of line"),
+            // Said once for all three, rather than on each of them: what
+            // makes a cut different from a delete is where the text goes.
+            Hint::literal("", "cuts go to the clipboard"),
         ],
     )
 }
@@ -695,6 +701,31 @@ mod tests {
                 .map(|group| group.title)
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// The cuts are documented wherever the motions are, which is both modes
+    /// that get the shared text-editing group.
+    #[test]
+    fn the_text_editing_help_lists_the_cut_keys_in_every_mode_that_has_them() {
+        let theme = Theme::default();
+        for mode in [Mode::FilterEdit, Mode::TaskEdit] {
+            let resolved = resolve(groups_for(mode), &keymap(), mode, &theme);
+            let (_, entries) = resolved
+                .iter()
+                .find(|(title, _)| *title == "Text editing")
+                .unwrap_or_else(|| panic!("{mode:?} shows the text-editing group"));
+
+            for (keys, label) in [
+                ("^d", "cut a character"),
+                ("M-d", "cut a word"),
+                ("^k", "cut to end of line"),
+            ] {
+                assert!(
+                    entries.iter().any(|(bound, shown)| bound == keys && *shown == label),
+                    "{mode:?} help shows {keys} as {label}: {entries:?}"
+                );
+            }
+        }
     }
 
     #[test]

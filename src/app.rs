@@ -22,6 +22,7 @@ pub mod text_edit;
 use self::gantt::MoveTo;
 use self::project_list::ProjectListState;
 use self::task::TaskState;
+use self::text_edit::TextCut;
 
 /// Internal state for the top pane's size and transient maximize/minimize mode.
 ///
@@ -708,6 +709,21 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             TextMotion::Start => self.tasks.filter_caret_to_start(),
             TextMotion::End => self.tasks.filter_caret_to_end(),
         }
+    }
+
+    /// Runs one of the shared cuts on whichever buffer is being typed into,
+    /// and answers the command that puts what came out on the clipboard.
+    ///
+    /// Split the same way [`App::move_text_caret`] is, because the same two
+    /// panes are behind it. A cut that took nothing answers `None`: `ctrl-d`
+    /// at the end of a line should leave the clipboard holding whatever it
+    /// already held rather than emptying it.
+    fn cut_text(&mut self, cut: TextCut) -> Option<AppCommand> {
+        let taken = match self.tasks.cell_edit_open() {
+            true => self.tasks.cell_edit_cut(cut),
+            false => self.tasks.filter_cut(cut),
+        };
+        (!taken.is_empty()).then_some(AppCommand::CopyToClipboard(taken))
     }
 
     /// Handle typed characters while the date picker is open.
@@ -1418,6 +1434,17 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 self.move_text_caret(TextMotion::End);
                 return Ok(None);
             }
+            // Not `Ok(None)`: the cut hands back what it took, and the
+            // clipboard is the runtime's to write.
+            Action::TextCutChar => {
+                return Ok(self.cut_text(TextCut::Char));
+            }
+            Action::TextCutWord => {
+                return Ok(self.cut_text(TextCut::Word));
+            }
+            Action::TextCutToEnd => {
+                return Ok(self.cut_text(TextCut::ToEnd));
+            }
             // Deliberately not early returns: both send a write, and the tail
             // is what keeps the fetch decision running after an action, for
             // the same reason `FilterSetLoad` falls through to it.
@@ -2049,7 +2076,7 @@ mod tests {
         },
         config::{Config, ProjectVisibilityConfig, TopPaneState},
         domain::{GanttColorKey, Project},
-        input::{Action, KeyBinding},
+        input::{Action, AppCommand, KeyBinding},
     };
 
     use super::{App, PaneSizeState};
@@ -2263,6 +2290,17 @@ mod tests {
         let keymap = app.keymap().expect("bindings parse");
         app.handle_key_event(&keymap, KeyEvent::new(code, KeyModifiers::NONE), 10)
             .expect("key handled");
+    }
+
+    /// `press`, for the keys whose command is the point of the test.
+    fn press_with(
+        app: &mut App<FakeAsanaClient>,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+    ) -> Option<AppCommand> {
+        let keymap = app.keymap().expect("bindings parse");
+        app.handle_key_event(&keymap, KeyEvent::new(code, modifiers), 10)
+            .expect("key handled")
     }
 
     fn settle(app: &mut App<FakeAsanaClient>) {
@@ -3839,6 +3877,42 @@ mod tests {
         press(&mut app, KeyCode::Char('c'));
         assert_eq!(app.tasks.filter_panel_rows()[0].1, "ship");
         assert!(app.tasks.filter_summary().contains("comp"));
+    }
+
+    /// The whole path a cut takes: the bound key, the buffer it edits, and the
+    /// command that carries what it took out to the clipboard.
+    #[test]
+    fn the_cut_keys_edit_the_filter_field_and_hand_the_text_to_the_clipboard() {
+        let mut app = gantt_app();
+        press(&mut app, KeyCode::Char('t'));
+        settle(&mut app);
+        press(&mut app, KeyCode::Char('f'));
+        press(&mut app, KeyCode::Enter); // open the Title row
+        for ch in "ship it".chars() {
+            press(&mut app, KeyCode::Char(ch));
+        }
+
+        // `alt-b` back over "it", then `ctrl-k` takes the rest of the line.
+        press_with(&mut app, KeyCode::Char('b'), KeyModifiers::ALT);
+        assert_eq!(
+            press_with(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL),
+            Some(AppCommand::CopyToClipboard("it".to_string()))
+        );
+        assert_eq!(app.tasks.filter_panel_rows()[0].1, "ship ");
+
+        // Nothing ahead of the caret: no command, so the clipboard keeps what
+        // the cut above put there.
+        assert_eq!(
+            press_with(&mut app, KeyCode::Char('d'), KeyModifiers::CONTROL),
+            None
+        );
+
+        press_with(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_eq!(
+            press_with(&mut app, KeyCode::Char('d'), KeyModifiers::ALT),
+            Some(AppCommand::CopyToClipboard("ship".to_string()))
+        );
+        assert_eq!(app.tasks.filter_panel_rows()[0].1, " ");
     }
 
     #[test]

@@ -17,7 +17,7 @@ use crate::{
         task_edit::{
             CellEditView, CellEditor, CommittedEdits, EditContext, TaskCellEditState,
         },
-        text_edit::TextEdit,
+        text_edit::{TextCut, TextEdit},
     },
     asana::{
         dto::{CustomFieldDto, CustomFieldValueDto, TaskDto},
@@ -937,6 +937,27 @@ impl TaskFilterEditorState {
             }
             change(&mut field.value);
         }
+    }
+
+    /// Cuts forward from the selected field's caret, answering what came out.
+    ///
+    /// Routed the way typing is rather than the way a motion is: a cut
+    /// changes the text, so on a `list` row it has to go into the completion
+    /// editor that owns it — writing into the row underneath would be undone
+    /// by the next sync. A labels row is rebuilt from its chips, so there is
+    /// nothing there to cut.
+    fn cut(&mut self, cut: TextCut) -> String {
+        let mut taken = String::new();
+        if self.with_autocomplete(|state| taken = state.cut(cut)) {
+            return taken;
+        }
+        let Some(field) = self.selected_field_mut() else {
+            return taken;
+        };
+        if matches!(field.spec.kind, TaskFieldFilterKind::Labels) {
+            return taken;
+        }
+        field.value.cut(cut)
     }
 
     /// Puts the caret at the end of the selected field's text.
@@ -2410,6 +2431,20 @@ impl TaskState {
         self.view
             .filter_editor
             .with_selected_text(TextEdit::jump_end);
+    }
+
+    /// Cuts forward from the selected filter field's caret, answering what
+    /// came out for the caller to put on the clipboard.
+    ///
+    /// Refilters like any other change to a query, and only when something
+    /// was actually cut: a `ctrl-k` at the end of a field has changed nothing
+    /// to refilter on.
+    pub(crate) fn filter_cut(&mut self, cut: TextCut) -> String {
+        let taken = self.view.filter_editor.cut(cut);
+        if !taken.is_empty() {
+            self.refresh_table();
+        }
+        taken
     }
 
     /// Whether the selected filter row picks its values from a directory.
@@ -4756,6 +4791,21 @@ impl TaskState {
         }
     }
 
+    /// Cuts forward from the open cell editor's caret, answering what came
+    /// out for the caller to put on the clipboard.
+    pub fn cell_edit_cut(&mut self, cut: TextCut) -> String {
+        // Through the completion editor when there is one, the way
+        // `cell_edit_pop_char` is: it owns the typed text and the `tab` cycle
+        // over it, which the plain buffer knows nothing about.
+        if let Some(complete) = self.view.cell_edit.as_mut().and_then(|edit| edit.complete_mut()) {
+            return complete.cut(cut);
+        }
+        if let Some(text) = self.view.cell_edit.as_mut().and_then(|edit| edit.text_mut()) {
+            return text.cut(cut);
+        }
+        String::new()
+    }
+
     pub fn cell_edit_clear(&mut self) {
         if let Some(edit) = self.view.cell_edit.as_mut() {
             edit.clear_value();
@@ -5197,7 +5247,7 @@ mod tests {
 
     use super::{
         prefer_selected_projects, TaskDataset, TaskFieldFilterKind, TaskFilterEditorState,
-        TaskState, TaskStatus,
+        TaskState, TaskStatus, TextCut,
     };
 
     fn task(
@@ -8685,6 +8735,59 @@ mod tests {
         }
     }
 
+    /// The three cuts, in the cell editor they are bound in.
+    #[test]
+    fn the_cuts_take_text_out_of_the_open_cell_and_hand_it_back() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship the release", false)]);
+        state.begin_cell_edit(&edit_context()).expect("the cell opens");
+
+        // The caret opens at the end of the value, so park it mid-line the
+        // way `alt-b` would.
+        state.cell_edit_move_word(-1);
+        assert_eq!(state.cell_edit_cut(TextCut::Char), "r");
+        assert_eq!(state.cell_edit_view().expect("open").text, "Ship the elease");
+
+        state.cell_edit_jump_start();
+        assert_eq!(state.cell_edit_cut(TextCut::Word), "Ship");
+        assert_eq!(state.cell_edit_view().expect("open").text, " the elease");
+
+        assert_eq!(state.cell_edit_cut(TextCut::ToEnd), " the elease");
+        assert_eq!(state.cell_edit_view().expect("open").text, "");
+        assert_eq!(
+            state.cell_edit_cut(TextCut::ToEnd),
+            "",
+            "an empty line has nothing to put on the clipboard"
+        );
+    }
+
+    /// A completion editor keeps its items and cuts only the typed text, so
+    /// `ctrl-k` cannot silently drop a picked project.
+    #[test]
+    fn a_cut_in_a_completion_editor_takes_the_typed_text_and_leaves_the_items() {
+        let mut state = loaded_state_with_tasks(vec![sel_task("t1", "Ship it", false)]);
+        state.move_column(crate::domain::PROJECTS_COLUMN as i64);
+        state
+            .begin_cell_edit(&project_context())
+            .expect("the completion editor opens");
+
+        for ch in "back".chars() {
+            state.cell_edit_push_char(ch);
+        }
+        assert_eq!(state.cell_edit_cut(TextCut::ToEnd), "", "the caret is at the end");
+
+        // A completion editor's caret steps one place per call, since the
+        // stops past the buffer's ends are whole items.
+        for _ in 0.."back".len() {
+            state.cell_edit_move_caret(-1);
+        }
+        assert_eq!(state.cell_edit_cut(TextCut::Word), "back");
+        assert_eq!(
+            state.cell_edit_view().expect("open").text,
+            "Inbox",
+            "the project it was already in is still there"
+        );
+    }
+
     #[test]
     fn a_failed_field_resolution_keeps_the_editor_open() {
         let mut state = loaded_state_with_tasks(vec![sel_task_due("t1", "Ship it", "alex", "2026-06-10")]);
@@ -9073,6 +9176,75 @@ mod tests {
             "the picked name is the row's value"
         );
         assert_eq!(visible_gids(&state), vec!["t3"]);
+    }
+
+    /// The same three cuts in the filter panel, where a changed query also
+    /// has to refilter the table.
+    #[test]
+    fn a_cut_in_a_filter_field_refilters_the_table() {
+        let mut state = assigned_state();
+        select_field(&mut state, "assignee");
+        state.filter_edit_begin();
+        for ch in "Priya Raman".chars() {
+            state.filter_push_char(ch);
+        }
+        state.refresh_from_cache();
+        assert_eq!(visible_gids(&state), vec!["t3"]);
+
+        // Cut the surname off, leaving a prefix that still matches only Priya.
+        state.filter_move_word(-1);
+        assert_eq!(state.filter_cut(TextCut::ToEnd), "Raman");
+        assert_eq!(
+            state.filter_panel_rows()[1],
+            ("Assignee".to_string(), "Priya ".to_string())
+        );
+        assert_eq!(visible_gids(&state), vec!["t3"], "refiltered without a reload");
+
+        state.filter_caret_to_start();
+        assert_eq!(state.filter_cut(TextCut::Char), "P");
+        assert_eq!(state.filter_cut(TextCut::Word), "riya");
+        assert_eq!(
+            state.filter_panel_rows()[1],
+            ("Assignee".to_string(), " ".to_string())
+        );
+    }
+
+    /// A `list` row is typed into through its completion editor, so a cut has
+    /// to go there too: writing into the row underneath would be overwritten
+    /// by the next sync.
+    #[test]
+    fn a_cut_on_a_list_filter_row_goes_through_its_completion_editor() {
+        let mut state = assigned_state();
+        select_field(&mut state, "assignee");
+        cycle_to_list(&mut state);
+
+        let candidates = state.people_candidates(&edit_context());
+        state.filter_edit_begin_with(candidates);
+        for ch in "priya".chars() {
+            state.filter_push_char(ch);
+        }
+
+        for _ in 0.."riya".len() {
+            state.filter_move_caret(-1);
+        }
+        assert_eq!(state.filter_cut(TextCut::Word), "riya");
+        assert_eq!(
+            state.filter_panel_rows()[1],
+            ("Assignee".to_string(), "p".to_string()),
+            "the row shows what the completion editor holds"
+        );
+
+        // And the editor is still the one being typed into: a completion off
+        // the shortened prefix lands.
+        for ch in "ri".chars() {
+            state.filter_push_char(ch);
+        }
+        assert!(state.filter_complete(1));
+        assert_eq!(state.filter_autocomplete_commit(), None);
+        assert_eq!(
+            state.filter_panel_rows()[1],
+            ("Assignee".to_string(), "Priya Raman".to_string())
+        );
     }
 
     #[test]

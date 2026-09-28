@@ -337,6 +337,12 @@ pub enum Action {
     TextCaretStart,
     /// Move the text caret to the end of the line.
     TextCaretEnd,
+    /// Cut the character under the caret to the clipboard.
+    TextCutChar,
+    /// Cut from the caret to the end of the word ahead of it.
+    TextCutWord,
+    /// Cut from the caret to the end of the line.
+    TextCutToEnd,
 }
 
 impl Action {
@@ -469,6 +475,9 @@ impl Action {
             "text_caret_word_forward" => Ok(Self::TextCaretWordForward),
             "text_caret_start" => Ok(Self::TextCaretStart),
             "text_caret_end" => Ok(Self::TextCaretEnd),
+            "text_cut_char" => Ok(Self::TextCutChar),
+            "text_cut_word" => Ok(Self::TextCutWord),
+            "text_cut_to_end" => Ok(Self::TextCutToEnd),
             // The one piece of string handling in the action layer: nine
             // load commands would otherwise be nine variants that differ only
             // by a number.
@@ -721,6 +730,9 @@ impl Display for Action {
             Action::TextCaretWordForward => "text_caret_word_forward",
             Action::TextCaretStart => "text_caret_start",
             Action::TextCaretEnd => "text_caret_end",
+            Action::TextCutChar => "text_cut_char",
+            Action::TextCutWord => "text_cut_word",
+            Action::TextCutToEnd => "text_cut_to_end",
         };
         f.write_str(name)
     }
@@ -890,6 +902,9 @@ mod tests {
             Action::TextCaretWordForward,
             Action::TextCaretStart,
             Action::TextCaretEnd,
+            Action::TextCutChar,
+            Action::TextCutWord,
+            Action::TextCutToEnd,
         ] {
             assert_eq!(
                 Action::from_command(&action.to_string()).expect("parses"),

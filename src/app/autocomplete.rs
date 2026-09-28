@@ -19,7 +19,7 @@
 //! - **The value is a list.** `Assignee` caps it at one and `Projects` does
 //!   not, which is the only difference between the two.
 
-use crate::app::text_edit::TextEdit;
+use crate::app::text_edit::{TextCut, TextEdit};
 
 /// What separates two items when the list is rendered as one string.
 const ITEM_SEPARATOR: &str = ", ";
@@ -219,6 +219,21 @@ impl AutocompleteState {
         }
         self.item_caret -= 1;
         self.items.remove(self.item_caret);
+    }
+
+    /// Cuts forward from the caret in the typed text, answering what came out.
+    ///
+    /// The buffer only, unlike [`AutocompleteState::delete_back`]: the items
+    /// around it are whole values rather than text, so `ctrl-k` at the end of
+    /// what is typed takes nothing rather than swallowing the ones after it.
+    pub fn cut(&mut self, cut: TextCut) -> String {
+        let taken = self.buffer.cut(cut);
+        // Only when something came out: a cut that took nothing has not
+        // changed the prefix a `tab` cycle is walking.
+        if !taken.is_empty() {
+            self.cycle = None;
+        }
+        taken
     }
 
     /// Moves the caret, within the typed text first and between the items at

@@ -334,6 +334,9 @@ All bindable commands:
 - `text_caret_word_forward`
 - `text_caret_start`
 - `text_caret_end`
+- `text_cut_char`
+- `text_cut_word`
+- `text_cut_to_end`
 - `filter_require_empty`
 - `clear_search`
 - `search_fuzzy`
@@ -355,6 +358,9 @@ All bindable commands:
 - `text_caret_word_forward`
 - `text_caret_start`
 - `text_caret_end`
+- `text_cut_char`
+- `text_cut_word`
+- `text_cut_to_end`
 
 **Task mode**
 
@@ -614,6 +620,9 @@ dropped or delayed keystroke.
 - `left`/`right`, or `ctrl-b`/`ctrl-f`, to move the caret through the value
 - `alt-b`/`alt-f` to move a word, `ctrl-a`/`ctrl-e` to jump to the ends
 - `backspace` to delete the character before the caret
+- `ctrl-d` to cut the character at the caret, `alt-d` to cut the word ahead of
+  it, `ctrl-k` to cut to the end of the line. All three put what they removed on
+  the system clipboard, so a cut can be pasted back
 - `enter` to confirm the edit and return to filter browse mode
 - `esc` to discard the edit, close the panel, and return to task mode
 - `ctrl-z`, `ctrl-s`, `ctrl-r` to switch match mode, `ctrl-l` to clear
@@ -680,10 +689,16 @@ column, and each one is the filter panel's editor for that kind of field:
 
 | Column | Editor | Keys |
 | --- | --- | --- |
-| `Task`, text and number custom fields | a text field with a caret | type, `backspace`, the motions above |
+| `Task`, text and number custom fields | a text field with a caret | type, `backspace`, the motions above, `ctrl-d`/`alt-d`/`ctrl-k` to cut |
 | `Due`, `Start` | the date picker | `h`/`l` day, `j`/`k` month, `t` today, `d` clear |
 | `State`, enum custom fields | a value picker | `j`/`k` through the options, `d` for no value |
 | `Assignee`, `Projects` | completion over the names that exist | type to filter, `tab`/`shift-tab` to complete, `backspace` to delete an item, `ctrl-l` to clear |
+
+The three cuts are the deletions the word and line motions imply, and they work
+in every field that has those motions — the filter panel and the cell editor
+alike. Each one takes what it removed to the system clipboard. In a completing
+field they cut the text being typed and leave the items already picked alone,
+which is what `backspace` is for.
 
 `enter` commits and `esc` throws the edit away, exactly as in the filter panel.
 Two differences, both because a task holds a value where a filter holds a

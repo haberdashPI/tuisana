@@ -902,6 +902,12 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("alt-f", Mode::FilterEdit, "text_caret_word_forward"),
         Bind::with_mode("ctrl-a", Mode::FilterEdit, "text_caret_start"),
         Bind::with_mode("ctrl-e", Mode::FilterEdit, "text_caret_end"),
+        // Readline's three forward cuts, which are the deletions the motions
+        // above imply: each one takes what it removes to the clipboard, so a
+        // cut can be pasted back.
+        Bind::with_mode("ctrl-d", Mode::FilterEdit, "text_cut_char"),
+        Bind::with_mode("alt-d", Mode::FilterEdit, "text_cut_word"),
+        Bind::with_mode("ctrl-k", Mode::FilterEdit, "text_cut_to_end"),
         Bind::with_mode("h", Mode::Calendar, "calendar_prev_day"),
         Bind::with_mode("l", Mode::Calendar, "calendar_next_day"),
         Bind::with_mode("k", Mode::Calendar, "calendar_prev_month"),
@@ -973,6 +979,11 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("alt-f", Mode::TaskEdit, "text_caret_word_forward"),
         Bind::with_mode("ctrl-a", Mode::TaskEdit, "text_caret_start"),
         Bind::with_mode("ctrl-e", Mode::TaskEdit, "text_caret_end"),
+        // The same three cuts, so a cell editor and a filter field still read
+        // the same keys.
+        Bind::with_mode("ctrl-d", Mode::TaskEdit, "text_cut_char"),
+        Bind::with_mode("alt-d", Mode::TaskEdit, "text_cut_word"),
+        Bind::with_mode("ctrl-k", Mode::TaskEdit, "text_cut_to_end"),
         // Completion, on the two cells whose values are names the backend
         // knows. `tab` is free in every mode: nothing else reads it.
         Bind::with_mode("tab", Mode::TaskEdit, "complete_next_candidate"),
@@ -1853,11 +1864,44 @@ name = "Mine"
             (KeyBinding::Alt('f'), Action::TextCaretWordForward),
             (KeyBinding::Ctrl('a'), Action::TextCaretStart),
             (KeyBinding::Ctrl('e'), Action::TextCaretEnd),
+            (KeyBinding::Ctrl('d'), Action::TextCutChar),
+            (KeyBinding::Alt('d'), Action::TextCutWord),
+            (KeyBinding::Ctrl('k'), Action::TextCutToEnd),
         ] {
             assert_eq!(
                 keymap.action_for(&key, Mode::TaskEdit),
                 Some(&action),
                 "{key:?} in task-edit mode"
+            );
+        }
+    }
+
+    /// The cuts are bound wherever the motions are, because they are the
+    /// deletions those motions imply: a field that can move a word can cut
+    /// one.
+    #[test]
+    fn the_cut_keys_are_the_same_in_every_text_editing_mode() {
+        let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
+            .expect("default bindings parse");
+
+        for mode in [Mode::FilterEdit, Mode::TaskEdit] {
+            for (key, action) in [
+                (KeyBinding::Ctrl('d'), Action::TextCutChar),
+                (KeyBinding::Alt('d'), Action::TextCutWord),
+                (KeyBinding::Ctrl('k'), Action::TextCutToEnd),
+            ] {
+                assert_eq!(
+                    keymap.action_for(&key, mode),
+                    Some(&action),
+                    "{key:?} in {mode:?}"
+                );
+            }
+            // `d` still types, and still clears a value picker, which is why
+            // cutting a word needs the alt- pair.
+            assert_ne!(
+                keymap.action_for(&KeyBinding::Char('d'), mode),
+                Some(&Action::TextCutWord),
+                "{mode:?}"
             );
         }
     }

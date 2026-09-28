@@ -584,6 +584,24 @@ key = "ctrl-e"
 mode = "task_edit"
 command = "text_caret_end"
 
+# The three forward cuts, which are the deletions the motions above imply.
+# Each one puts what it removed on the system clipboard.
+
+[[bind]]
+key = "ctrl-d"
+mode = "task_edit"
+command = "text_cut_char"
+
+[[bind]]
+key = "alt-d"
+mode = "task_edit"
+command = "text_cut_word"
+
+[[bind]]
+key = "ctrl-k"
+mode = "task_edit"
+command = "text_cut_to_end"
+
 # The Assignee filter row has a fourth match mode, "list": its values are
 # picked from the workspace directory rather than typed as a pattern. These
 # are the same two keys the cell editor completes with.
@@ -617,6 +635,21 @@ command = "text_caret_start"
 key = "ctrl-e"
 mode = "filter_edit"
 command = "text_caret_end"
+
+[[bind]]
+key = "ctrl-d"
+mode = "filter_edit"
+command = "text_cut_char"
+
+[[bind]]
+key = "alt-d"
+mode = "filter_edit"
+command = "text_cut_word"
+
+[[bind]]
+key = "ctrl-k"
+mode = "filter_edit"
+command = "text_cut_to_end"
 
 # Pressing enter on the Due or Start filter opens a calendar overlay. These are
 # its keys; "calendar" mode does not fall back to global bindings, so digits and
