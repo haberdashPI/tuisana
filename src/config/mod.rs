@@ -946,7 +946,7 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode(".", Mode::Task, "toggle_section_grouping"),
         Bind::with_mode("s", Mode::Task, "cycle_task_sort"),
         Bind::with_mode("^", Mode::Task, "toggle_task_sort_direction"),
-        Bind::with_mode("enter", Mode::Task, "open"),
+        Bind::with_mode("o", Mode::Task, "open"),
         Bind::with_mode("space", Mode::Task, "toggle_task_selection"),
         Bind::with_mode("a", Mode::Task, "select_all_visible_tasks"),
         Bind::with_mode("i", Mode::Task, "invert_task_selection"),
@@ -957,11 +957,13 @@ fn default_bindings() -> Vec<Bind> {
         // The same letter the filter pane uses for its sidebar: both are
         // "show me the panel beside this one".
         Bind::with_mode("b", Mode::Task, "toggle_recent_pane"),
-        // The column cursor and the cell editor. `h`, `l`, `e`, and `d` are
-        // all free in task mode, and `Mode::Any` binds none of them.
+        // The column cursor and the cell editor. `h`, `l`, and `d` are all
+        // free in task mode, and `Mode::Any` binds none of them. Editing the
+        // cell under the cursor is what `enter` means everywhere else in the
+        // app, so it means that here too, and opening in Asana takes `o`.
         Bind::with_mode("h", Mode::Task, "task_column_prev"),
         Bind::with_mode("l", Mode::Task, "task_column_next"),
-        Bind::with_mode("e", Mode::Task, "begin_task_edit"),
+        Bind::with_mode("enter", Mode::Task, "begin_task_edit"),
         Bind::with_mode("d", Mode::Task, "toggle_task_completed"),
         Bind::with_mode("enter", Mode::TaskEdit, "commit_task_edit"),
         Bind::with_mode("esc", Mode::TaskEdit, "cancel_task_edit"),
@@ -1821,7 +1823,8 @@ name = "Mine"
         for (key, action) in [
             (KeyBinding::Char('h'), Action::TaskColumnPrev),
             (KeyBinding::Char('l'), Action::TaskColumnNext),
-            (KeyBinding::Char('e'), Action::BeginTaskEdit),
+            (KeyBinding::Enter, Action::BeginTaskEdit),
+            (KeyBinding::Char('o'), Action::Open),
             (KeyBinding::Char('d'), Action::ToggleTaskCompleted),
             (KeyBinding::Char('b'), Action::ToggleRecentPane),
         ] {

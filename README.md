@@ -668,7 +668,8 @@ left alone.
 - `s` to cycle the task sort field, `^` to flip between ascending and descending
 - `[` and `]` to move by section
 - `{` and `}` to move by project
-- `h`/`l` to move the column cursor, `e` to edit the cell under it
+- `h`/`l` to move the column cursor, `enter` to edit the cell under it
+- `o` to open the selected task in Asana
 - `d` to mark the task — or the whole selection — done
 - `g` to draw the Gantt chart and switch to gantt mode
 
@@ -684,7 +685,7 @@ The cursor is only drawn in task and task-edit modes. In gantt mode `h` and `l`
 already scroll the timeline, and a cursor you cannot move is a cursor that lies
 about what the keys do.
 
-`e` opens the cell under the cursor. Which editor you get depends on the
+`enter` opens the cell under the cursor. Which editor you get depends on the
 column, and each one is the filter panel's editor for that kind of field:
 
 | Column | Editor | Keys |
@@ -744,7 +745,7 @@ table holds those tasks:
   first, and is not persisted.
 - The cursor moves into it when a rebuild would otherwise lose the task it was
   following, and the pane shows itself when that happens whatever the toggle
-  says. `j` and `k` walk between the two lists; `e`, `d`, and `space` work in
+  says. `j` and `k` walk between the two lists; `enter`, `d`, and `space` work in
   the pane exactly as they do in the table.
 - `b` shows or hides it. With nothing in it, it is not drawn at all.
 
@@ -764,7 +765,7 @@ opposite of the reference row's state, so a mixed selection ends up uniform and
 a second press puts it back.
 
 **Titles are the exception.** Setting three tasks to the same title is not a
-bulk edit, so `e` on the `Task` column with more than one task selected is
+bulk edit, so `enter` on the `Task` column with more than one task selected is
 refused, and says why.
 
 **What goes over the wire.** An edit is applied locally the moment you commit

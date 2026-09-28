@@ -4,7 +4,7 @@
 │▍   ★ Platform Infrastructure                                                                                                                                                                         │
 │    ☆ Backlog                                                      ┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                                                                   │
 │                                                                   ┃Tasks                            View                         ┃                                                                   │
-│                                                                   ┃⏎           open in Asana        g           gantt chart      ┃                                                                   │
+│                                                                   ┃o           open in Asana        g           gantt chart      ┃                                                                   │
 │                                                                   ┃␣           select               f           filter panel     ┃                                                                   │
 │                                                                   ┃a           select all           c           open / done / all┃                                                                   │
 │                                                                   ┃i           invert               z           subtasks         ┃                                                                   │
@@ -22,7 +22,7 @@
 ┃   Confirm carrier pickup window with the vendor                   ┃                                 t           tasks            ┃     │     Wed │ Aug 17 │ ○  │ Northwind BTX 4412 │ —              ┃
 ┃   Update the sample intake SOP                                    ┃Edit                             m           toggle tasks     ┃rez  │   Sep 4 │ Aug 20 │ ○  │ Northwind BTX 4412 │ Medium         ┃
 ┃   Qualify the second reagent supplier                             ┃h/l         column cursor                                     ┃z    │  Sep 12 │  Jul 1 │ ○  │ Northwind BTX 4412 │ Medium         ┃
-┃                                                                   ┃e           edit the cell        Panes                        ┃                                                                   ┃
+┃                                                                   ┃⏎           edit the cell        Panes                        ┃                                                                   ┃
 ┃   Shipment ·······················································┃d           open / done          0           restore          ┃···································································┃
 ┃   Book the courier for the pilot run                              ┃                                                              ┃or   │  Sep 15 │  Sep 1 │ ○  │ Northwind BTX 4412 │ Low            ┃
 ┃   Label the retention samples                                     ┃                                 App                          ┃     │   Oct 9 │      — │ ○  │ Northwind BTX 4412 │ Medium         ┃
@@ -36,5 +36,5 @@
 ┃                                                                                                                                                                                                      ┃
 ┃                                                                                                                                                                                                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ␣ select   e edit   d done   h/l column   ⏎ open   f filters   s sort   g gantt   c completed   ? help                                                                     r refresh   q quit
+j/k move   ␣ select   ⏎ edit   d done   h/l column   o open   f filters   s sort   g gantt   c completed   ? help                                                                     r refresh   q quit
  TASK

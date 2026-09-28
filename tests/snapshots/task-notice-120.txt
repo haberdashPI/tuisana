@@ -36,5 +36,5 @@
 ┃                                                                  ┃ a title is edited one task at a time (2 selected) ┃
 ┃                                                                  ┃                                    esc to dismiss ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ␣ select   y copy   e edit   d done   h/l column   ⏎ open   f filters   s sort             r refresh   q quit
+j/k move   ␣ select   y copy   ⏎ edit   d done   h/l column   o open   f filters   s sort             r refresh   q quit
  TASK

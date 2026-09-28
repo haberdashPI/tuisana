@@ -613,7 +613,7 @@ fn task_mode_with_the_column_cursor_moved() {
 #[test]
 fn task_mode_editing_a_long_title() {
     assert_snapshot("task-edit-title", || {
-        let mut keys = vec![key('e')];
+        let mut keys = vec![enter()];
         keys.extend(" and every word after the column runs out".chars().map(key));
         vec![enter_task_mode(), keys]
     });
@@ -630,7 +630,7 @@ fn task_mode_editing_a_value_picker() {
             enter_task_mode(),
             vec![key(' '), key(' ')],
             vec![key('l'), key('l'), key('l'), key('l'), key('l'), key('l')],
-            vec![key('e'), key('j')],
+            vec![enter(), key('j')],
         ]
     });
 }
@@ -645,7 +645,7 @@ fn task_mode_completing_an_assignee() {
     assert_snapshot("task-edit-assignee", || {
         vec![
             enter_task_mode(),
-            vec![key('l'), key('e'), ctrl('l')],
+            vec![key('l'), enter(), ctrl('l')],
             vec![key('a'), tab()],
         ]
     });
@@ -663,9 +663,9 @@ fn task_mode_with_a_notice() {
     assert_snapshot("task-notice", || {
         vec![
             enter_task_mode(),
-            // Two rows selected, then `e` on the title: a title is edited one
-            // task at a time, which is refused rather than done.
-            vec![key(' '), key(' '), key('e')],
+            // Two rows selected, then `enter` on the title: a title is edited
+            // one task at a time, which is refused rather than done.
+            vec![key(' '), key(' '), enter()],
         ]
     });
 }

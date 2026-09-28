@@ -241,7 +241,7 @@ fn tab_completes_a_person_no_loaded_task_names() {
     let mut session = Session::start();
 
     session.press(KeyCode::Char('l'), KeyModifiers::NONE);
-    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
     session.press(KeyCode::Char('l'), KeyModifiers::CONTROL);
     session.type_keys("priya");
     session.press(KeyCode::Tab, KeyModifiers::NONE);
@@ -265,7 +265,7 @@ fn an_emptied_assignee_cell_unassigns_the_task() {
     let mut session = Session::start();
 
     session.press(KeyCode::Char('l'), KeyModifiers::NONE);
-    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
     session.press(KeyCode::Char('l'), KeyModifiers::CONTROL);
     session.press(KeyCode::Enter, KeyModifiers::NONE);
 
@@ -284,7 +284,7 @@ fn a_task_moved_out_of_the_project_in_view_lands_in_the_recently_edited_pane() {
     for _ in 0..PROJECTS_COLUMN {
         session.press(KeyCode::Char('l'), KeyModifiers::NONE);
     }
-    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
     session.press(KeyCode::Char('l'), KeyModifiers::CONTROL);
     session.type_keys("back");
     session.press(KeyCode::Tab, KeyModifiers::NONE);
@@ -331,7 +331,7 @@ fn a_membership_write_that_fails_puts_the_task_back() {
     for _ in 0..PROJECTS_COLUMN {
         session.press(KeyCode::Char('l'), KeyModifiers::NONE);
     }
-    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
     session.type_keys("back");
     session.press(KeyCode::Tab, KeyModifiers::NONE);
     session.press(KeyCode::Enter, KeyModifiers::NONE);
@@ -361,7 +361,7 @@ fn an_assignee_is_retyped_on_the_cursor_row_and_sent_once() {
     session.press(KeyCode::Char('l'), KeyModifiers::NONE);
     assert_eq!(session.app.tasks.selected_column(), ASSIGNEE_COLUMN);
 
-    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
     session.press(KeyCode::Char('l'), KeyModifiers::CONTROL);
     // `j` is the value-picker key in this mode, and types on a text cell.
     session.type_keys("jo");
@@ -411,7 +411,7 @@ fn a_title_is_refused_on_a_selection_and_nothing_is_sent() {
 
     session.press(KeyCode::Char(' '), KeyModifiers::NONE);
     session.press(KeyCode::Char(' '), KeyModifiers::NONE);
-    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
 
     assert_eq!(
         session.app.tasks.edit_notice(),
@@ -429,7 +429,7 @@ fn a_due_date_is_picked_on_the_calendar_and_committed_with_enter() {
     // `l` twice puts the column cursor on Due; `e` opens the picker.
     session.press(KeyCode::Char('l'), KeyModifiers::NONE);
     session.press(KeyCode::Char('l'), KeyModifiers::NONE);
-    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
     assert_eq!(session.app.mode(), tuisana::config::Mode::Calendar);
 
     // `t` is today in the picker, and `enter` sends it.
@@ -452,14 +452,14 @@ fn clearing_a_date_on_the_calendar_sends_the_cleared_value_and_closes() {
     // Put a date on the cell first, so clearing has something to undo.
     session.press(KeyCode::Char('l'), KeyModifiers::NONE);
     session.press(KeyCode::Char('l'), KeyModifiers::NONE);
-    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
     session.press(KeyCode::Char('t'), KeyModifiers::NONE);
     session.press(KeyCode::Enter, KeyModifiers::NONE);
     assert_eq!(session.cell("t1", 2), tuisana::domain::today().iso());
 
     // `d` in the picker clears and saves in one gesture: leaving it open
     // would mean `enter` filled the highlighted day back in.
-    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
     assert_eq!(session.app.mode(), tuisana::config::Mode::Calendar);
     session.press(KeyCode::Char('d'), KeyModifiers::NONE);
 
@@ -480,7 +480,7 @@ fn an_enum_custom_field_offers_the_options_the_project_declares() {
     for _ in 0..6 {
         session.press(KeyCode::Char('l'), KeyModifiers::NONE);
     }
-    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
     assert!(
         session.app.tasks.cell_edit_is_options(),
         "an enum field is a picker: {:?}",
@@ -552,16 +552,16 @@ fn esc_dismisses_the_notice_without_costing_the_key_its_own_job() {
     // the case where `esc` already means something in the same mode.
     session.press(KeyCode::Char(' '), KeyModifiers::NONE);
     session.press(KeyCode::Char(' '), KeyModifiers::NONE);
-    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
     assert!(session.app.tasks.edit_notice().is_some());
 
     session.press(KeyCode::Esc, KeyModifiers::NONE);
     assert_eq!(session.app.tasks.edit_notice(), None);
 
     // And the same press still cancels an open edit, rather than being spent
-    // on the notice: `l` onto Assignee, `e` to open it, then a bad name.
+    // on the notice: `l` onto Assignee, `enter` to open it, then a bad name.
     session.press(KeyCode::Char('l'), KeyModifiers::NONE);
-    session.press(KeyCode::Char('e'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
     session.press(KeyCode::Char('l'), KeyModifiers::CONTROL);
     session.type_keys("nobody");
     session.press(KeyCode::Enter, KeyModifiers::NONE);

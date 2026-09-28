@@ -4,7 +4,7 @@
 │▍   ★ Platform Infrastructure                                                 │
 │    ☆ B┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓       │
 │       ┃Tasks                            View                         ┃       │
-│       ┃⏎           open in Asana        g           gantt chart      ┃       │
+│       ┃o           open in Asana        g           gantt chart      ┃       │
 │       ┃␣           select               f           filter panel     ┃       │
 │       ┃a           select all           c           open / done / all┃       │
 │       ┃i           invert               z           subtasks         ┃       │
@@ -22,7 +22,7 @@
 ┃   Conf┃                                 t           tasks            ┃ed │ Au┃
 ┃   Upda┃Edit                             m           toggle tasks     ┃ 4 │ Au┃
 ┃   Qual┃h/l         column cursor                                     ┃12 │  J┃
-┃       ┃e           edit the cell        Panes                        ┃       ┃
+┃       ┃⏎           edit the cell        Panes                        ┃       ┃
 ┃   Ship┃d           open / done          0           restore          ┃·······┃
 ┃   Book┃                                                              ┃15 │  S┃
 ┃   Labe┃                                 App                          ┃ 9 │   ┃
@@ -36,5 +36,5 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ␣ select   e edit   d done   h/l column   ⏎ open   r refresh   q quit
+j/k move   ␣ select   ⏎ edit   d done   h/l column   o open   r refresh   q quit
  TASK

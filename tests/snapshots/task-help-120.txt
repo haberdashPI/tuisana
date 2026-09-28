@@ -4,7 +4,7 @@
 │▍   ★ Platform Infrastructure                                                                                         │
 │    ☆ Backlog              ┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                           │
 │                           ┃Tasks                            View                         ┃                           │
-│                           ┃⏎           open in Asana        g           gantt chart      ┃                           │
+│                           ┃o           open in Asana        g           gantt chart      ┃                           │
 │                           ┃␣           select               f           filter panel     ┃                           │
 │                           ┃a           select all           c           open / done / all┃                           │
 │                           ┃i           invert               z           subtasks         ┃                           │
@@ -22,7 +22,7 @@
 ┃   Confirm carrier pickup w┃                                 t           tasks            ┃orthwind BTX 4412 │ —      ┃
 ┃   Update the sample intake┃Edit                             m           toggle tasks     ┃orthwind BTX 4412 │ Medium ┃
 ┃   Qualify the second reage┃h/l         column cursor                                     ┃orthwind BTX 4412 │ Medium ┃
-┃                           ┃e           edit the cell        Panes                        ┃                           ┃
+┃                           ┃⏎           edit the cell        Panes                        ┃                           ┃
 ┃   Shipment ···············┃d           open / done          0           restore          ┃···························┃
 ┃   Book the courier for the┃                                                              ┃orthwind BTX 4412 │ Low    ┃
 ┃   Label the retention samp┃                                 App                          ┃orthwind BTX 4412 │ Medium ┃
@@ -36,5 +36,5 @@
 ┃                                                                                                                      ┃
 ┃                                                                                                                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ␣ select   e edit   d done   h/l column   ⏎ open   f filters   s sort                      r refresh   q quit
+j/k move   ␣ select   ⏎ edit   d done   h/l column   o open   f filters   s sort                      r refresh   q quit
  TASK

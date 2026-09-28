@@ -470,9 +470,14 @@ mode = "task"
 command = "task_column_next"
 
 [[bind]]
-key = "e"
+key = "enter"
 mode = "task"
 command = "begin_task_edit"
+
+[[bind]]
+key = "o"
+mode = "task"
+command = "open"
 
 [[bind]]
 key = "d"
