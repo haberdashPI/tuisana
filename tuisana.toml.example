@@ -446,15 +446,14 @@ key = "."
 mode = "task"
 command = "toggle_section_grouping"
 
+# Sorting reads the column cursor: `s` steps the column under it through
+# descending, ascending, and unsorted. Several columns can be sorted at once,
+# and the one sorted most recently leads.
+
 [[bind]]
 key = "s"
 mode = "task"
-command = "cycle_task_sort"
-
-[[bind]]
-key = "^"
-mode = "task"
-command = "toggle_task_sort_direction"
+command = "toggle_column_sort"
 
 # The column cursor and the cell editor. h, l, e, and d are all free in task
 # mode, and the global fallback binds none of them.

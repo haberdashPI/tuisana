@@ -458,16 +458,37 @@ pub enum SubtaskVisibility {
     Hide,
 }
 
-/// The task fields the table can sort or group by.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TaskSortField {
-    Project,
-    Section,
-    Date,
+/// A task-table column that sorting can order by.
+///
+/// A rule names a *column* rather than a task field, because sorting is driven
+/// from the column cursor: `Due` and `Start` are two rules rather than one
+/// date rule, and a custom field is named by the label its header shows —
+/// never by id, which differs from project to project for one field name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TaskSortColumn {
     Title,
     Assignee,
-    Completed,
-    Natural,
+    Due,
+    Start,
+    State,
+    Projects,
+    /// A custom-field column, named by the label its header shows.
+    Custom(String),
+}
+
+impl TaskSortColumn {
+    /// A short label for the settings summary and the status chips.
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Title => "task",
+            Self::Assignee => "assignee",
+            Self::Due => "due",
+            Self::Start => "start",
+            Self::State => "state",
+            Self::Projects => "projects",
+            Self::Custom(name) => name,
+        }
+    }
 }
 
 /// The direction of a sort rule.
@@ -479,12 +500,22 @@ pub enum SortDirection {
     Desc,
 }
 
+impl SortDirection {
+    /// A short label for the settings summary and the status chips.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Asc => "asc",
+            Self::Desc => "desc",
+        }
+    }
+}
+
 /// One sort rule applied to the task table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskSortRule {
-    /// The field to sort by.
-    pub field: TaskSortField,
-    /// The direction for this field.
+    /// The column to sort by.
+    pub column: TaskSortColumn,
+    /// The direction for this column.
     pub direction: SortDirection,
 }
 
@@ -502,7 +533,12 @@ pub struct TaskSort {
     /// "No Project (Assigned to Me)" row stays at the top. A project missing
     /// from the list sorts after every listed one, by name.
     pub project_order: Vec<String>,
-    /// The ordered list of sort rules.
+    /// The active sort rules, most important first.
+    ///
+    /// Empty is the common case: with no rules the table reads in its
+    /// [`compare_default`] order. Rules accumulate one column at a time as the
+    /// user toggles them, and the column toggled on most recently leads, so
+    /// the ones toggled before it break its ties.
     pub rules: Vec<TaskSortRule>,
 }
 
@@ -512,20 +548,7 @@ impl Default for TaskSort {
             group_by_project: true,
             group_by_section: true,
             project_order: Vec::new(),
-            rules: vec![
-                TaskSortRule {
-                    field: TaskSortField::Date,
-                    direction: SortDirection::Asc,
-                },
-                TaskSortRule {
-                    field: TaskSortField::Title,
-                    direction: SortDirection::Asc,
-                },
-                TaskSortRule {
-                    field: TaskSortField::Natural,
-                    direction: SortDirection::Asc,
-                },
-            ],
+            rules: Vec::new(),
         }
     }
 }
@@ -541,67 +564,56 @@ impl TaskSort {
         self.group_by_section = !self.group_by_section;
     }
 
-    /// Cycles the primary sort field through the supported fields.
-    pub fn cycle_primary_field(&mut self) {
-        let next_field = match self.rules.first().map(|rule| rule.field) {
-            Some(TaskSortField::Date) | None => TaskSortField::Title,
-            Some(TaskSortField::Title) => TaskSortField::Assignee,
-            Some(TaskSortField::Assignee) => TaskSortField::Completed,
-            Some(TaskSortField::Completed) => TaskSortField::Natural,
-            Some(TaskSortField::Natural) => TaskSortField::Date,
-            Some(TaskSortField::Project) | Some(TaskSortField::Section) => TaskSortField::Date,
-        };
-
-        if let Some(rule) = self.rules.first_mut() {
-            rule.field = next_field;
-        } else {
-            self.rules.push(TaskSortRule {
-                field: next_field,
-                direction: SortDirection::Asc,
-            });
-        }
-    }
-
-    /// Flips the primary sort rule between ascending and descending.
+    /// Steps one column through the sort cycle: unsorted, descending,
+    /// ascending, unsorted again.
     ///
-    /// Only the primary rule flips. The rules after it are tie-breakers, and
-    /// reversing those too would reorder rows the user never asked about.
-    pub fn toggle_primary_direction(&mut self) {
-        match self.rules.first_mut() {
-            Some(rule) => {
-                rule.direction = match rule.direction {
-                    SortDirection::Asc => SortDirection::Desc,
-                    SortDirection::Desc => SortDirection::Asc,
+    /// Descending comes first because the first question asked of a column is
+    /// usually "which are the biggest" — the latest date, the done ones, the
+    /// highest number. A column being sorted for the first time takes over as
+    /// the primary sort; flipping the direction of a column already in the
+    /// list leaves its priority where it is, so tuning one column of a
+    /// multi-column sort does not reshuffle the others.
+    pub fn toggle_column(&mut self, column: TaskSortColumn) {
+        match self.rules.iter().position(|rule| rule.column == column) {
+            Some(index) => match self.rules[index].direction {
+                SortDirection::Desc => self.rules[index].direction = SortDirection::Asc,
+                SortDirection::Asc => {
+                    self.rules.remove(index);
                 }
-            }
-            // No rules means the implicit date sort, which reads as ascending;
-            // asking to flip it makes that sort explicit and descending.
-            None => self.rules.push(TaskSortRule {
-                field: TaskSortField::Date,
-                direction: SortDirection::Desc,
-            }),
+            },
+            None => self.rules.insert(
+                0,
+                TaskSortRule {
+                    column,
+                    direction: SortDirection::Desc,
+                },
+            ),
         }
     }
 
-    /// The direction of the primary sort rule, ascending when there is none.
-    pub fn primary_direction(&self) -> SortDirection {
+    /// This column's direction and its 1-based place among the rules, when it
+    /// is sorted at all.
+    ///
+    /// The place is what the header draws next to the arrow: with two columns
+    /// sorted, the arrows alone cannot say which one wins.
+    pub fn priority(&self, column: &TaskSortColumn) -> Option<(usize, SortDirection)> {
         self.rules
-            .first()
-            .map(|rule| rule.direction)
-            .unwrap_or(SortDirection::Asc)
+            .iter()
+            .position(|rule| &rule.column == column)
+            .map(|index| (index + 1, self.rules[index].direction))
     }
 
-    /// Returns a short label for the primary sort field.
-    pub fn primary_field_label(&self) -> &'static str {
-        match self.rules.first().map(|rule| rule.field) {
-            Some(TaskSortField::Date) | None => "date",
-            Some(TaskSortField::Title) => "title",
-            Some(TaskSortField::Assignee) => "assignee",
-            Some(TaskSortField::Completed) => "completed",
-            Some(TaskSortField::Natural) => "natural",
-            Some(TaskSortField::Project) => "project",
-            Some(TaskSortField::Section) => "section",
-        }
+    /// The active rules in priority order, as `due desc, assignee asc`.
+    ///
+    /// Empty when nothing is sorted. What "nothing" should read as is the
+    /// caller's call: the chip line leaves it out and the settings summary
+    /// spells it out.
+    pub fn rules_label(&self) -> String {
+        self.rules
+            .iter()
+            .map(|rule| format!("{} {}", rule.column.label(), rule.direction.label()))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -629,19 +641,12 @@ impl TaskTableSettings {
             SubtaskVisibility::Hide => "hide",
         };
 
-        let direction = match self.sort.primary_direction() {
-            SortDirection::Asc => "asc",
-            SortDirection::Desc => "desc",
+        let sort = match self.sort.rules.is_empty() {
+            true => "default".to_string(),
+            false => self.sort.rules_label(),
         };
 
-        format!(
-            "{}; comp {}; sub {}; sort {} {}",
-            grouping,
-            completed,
-            subtasks,
-            self.sort.primary_field_label(),
-            direction
-        )
+        format!("{grouping}; comp {completed}; sub {subtasks}; sort {sort}")
     }
 }
 
@@ -669,12 +674,18 @@ impl TaskTableModel {
         custom_field_definitions: Vec<CustomFieldDefinition>,
         settings: &TaskTableSettings,
     ) -> Self {
-        let mut merged = merge_records(records);
-        merged.sort_by(|left, right| settings.sort.compare(left, right));
-        merged = apply_task_filter(merged, &settings.filter);
-        let merged = arrange_hierarchy(merged, &settings.sort);
+        let custom_field_gids = group_custom_fields_by_name(&custom_field_definitions);
+        let order = RecordOrder {
+            sort: &settings.sort,
+            custom_field_gids: &custom_field_gids,
+        };
 
-        let custom_field_columns = custom_columns(&merged, &custom_field_definitions);
+        let mut merged = merge_records(records);
+        merged.sort_by(|left, right| order.compare(left, right));
+        merged = apply_task_filter(merged, &settings.filter);
+        let merged = arrange_hierarchy(merged, &order);
+
+        let custom_field_columns = custom_columns(&merged, &custom_field_gids);
         let rows = build_rows(&merged, &custom_field_columns, settings);
 
         Self::from_parts(custom_field_columns, rows)
@@ -698,7 +709,8 @@ impl TaskTableModel {
             },
             ..TaskTableSettings::default()
         };
-        let custom_field_columns = custom_columns(&records, &custom_field_definitions);
+        let custom_field_columns =
+            custom_columns(&records, &group_custom_fields_by_name(&custom_field_definitions));
         let rows = build_rows(&records, &custom_field_columns, &ungrouped);
 
         Self::from_parts(custom_field_columns, rows)
@@ -729,6 +741,26 @@ impl TaskTableModel {
             .iter()
             .position(|column| column.name == name)
             .map(|index| offset + index)
+    }
+
+    /// The column a sort rule names for this cell index.
+    ///
+    /// The built-in columns are positional; a custom field resolves to its
+    /// name, so a rule survives the columns shifting when another custom field
+    /// appears or disappears as projects are selected.
+    pub fn sort_column(&self, index: usize) -> Option<TaskSortColumn> {
+        match index {
+            TITLE_COLUMN => Some(TaskSortColumn::Title),
+            ASSIGNEE_COLUMN => Some(TaskSortColumn::Assignee),
+            DUE_COLUMN => Some(TaskSortColumn::Due),
+            START_COLUMN => Some(TaskSortColumn::Start),
+            STATE_COLUMN => Some(TaskSortColumn::State),
+            PROJECTS_COLUMN => Some(TaskSortColumn::Projects),
+            _ => self
+                .custom_field_columns
+                .get(index.saturating_sub(FIRST_CUSTOM_COLUMN))
+                .map(|column| TaskSortColumn::Custom(column.name.clone())),
+        }
     }
 
     /// Counts only the selectable task rows.
@@ -1016,10 +1048,21 @@ fn group_project(record: &TaskRecord) -> &str {
     record.projects.first().map(String::as_str).unwrap_or_default()
 }
 
-impl TaskSort {
+/// Orders records for the table: the groups first, then the sort rules.
+///
+/// It carries the custom-field ids behind each column name as well as the
+/// rules, because a rule names the column the user sorted and a record stores
+/// its custom values by id — one id per project the field exists in.
+struct RecordOrder<'a> {
+    sort: &'a TaskSort,
+    custom_field_gids: &'a [(String, Vec<String>)],
+}
+
+impl RecordOrder<'_> {
     /// Where `project` sits in the project list, or last when it isn't listed.
     fn project_rank(&self, project: &str) -> usize {
-        self.project_order
+        self.sort
+            .project_order
             .iter()
             .position(|listed| listed == project)
             .unwrap_or(usize::MAX)
@@ -1032,7 +1075,7 @@ impl TaskSort {
     /// subtasks down would only decide where an *orphan* — a subtask whose
     /// parent is not on screen — lands among the rows it is grouped with.
     fn compare(&self, left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
-        if self.group_by_project {
+        if self.sort.group_by_project {
             let left_project = group_project(left);
             let right_project = group_project(right);
             // Rank first so groups appear in project-list order; the name is
@@ -1046,21 +1089,80 @@ impl TaskSort {
             }
         }
 
-        if self.group_by_section {
+        if self.sort.group_by_section {
             let ordering = compare_section_key(left, right);
             if ordering != std::cmp::Ordering::Equal {
                 return ordering;
             }
         }
 
-        for rule in &self.rules {
-            let ordering = compare_rule(rule, left, right);
+        for rule in &self.sort.rules {
+            let ordering = self.compare_rule(rule, left, right);
             if ordering != std::cmp::Ordering::Equal {
                 return ordering;
             }
         }
 
-        record_sort_key(left).cmp(&record_sort_key(right))
+        compare_default(left, right)
+    }
+
+    /// Orders two records by one rule: the value each shows in that column.
+    fn compare_rule(
+        &self,
+        rule: &TaskSortRule,
+        left: &TaskRecord,
+        right: &TaskRecord,
+    ) -> std::cmp::Ordering {
+        let direction = rule.direction;
+        match &rule.column {
+            TaskSortColumn::Due => {
+                compare_dates(record_due_date(left), record_due_date(right), direction)
+            }
+            TaskSortColumn::Start => compare_dates(
+                record_start_sort_date(left),
+                record_start_sort_date(right),
+                direction,
+            ),
+            // The one column with no blank to worry about, and the one whose
+            // cell text ("open" / "done") would order the wrong way round:
+            // descending should lead with the done ones.
+            TaskSortColumn::State => directed(left.completed.cmp(&right.completed), direction),
+            TaskSortColumn::Title => compare_values(
+                &sanitize_display_text(&left.name),
+                &sanitize_display_text(&right.name),
+                direction,
+            ),
+            TaskSortColumn::Assignee => compare_values(
+                left.assignee.as_deref().unwrap_or_default(),
+                right.assignee.as_deref().unwrap_or_default(),
+                direction,
+            ),
+            TaskSortColumn::Projects => compare_values(
+                &join_non_empty(&left.projects),
+                &join_non_empty(&right.projects),
+                direction,
+            ),
+            TaskSortColumn::Custom(name) => compare_values(
+                &self.custom_value(left, name),
+                &self.custom_value(right, name),
+                direction,
+            ),
+        }
+    }
+
+    /// The value the named custom-field column shows for this record.
+    ///
+    /// Gathered through the same ids and joined the same way
+    /// [`custom_columns`] builds the cell, so the sort orders by what the user
+    /// can actually read on the row. A name with no column left — the field
+    /// was on a project that has since been deselected — reads as blank, which
+    /// sorts those rows last and leaves the rest of the rules to decide.
+    fn custom_value(&self, record: &TaskRecord, name: &str) -> String {
+        self.custom_field_gids
+            .iter()
+            .find(|(column, _)| column == name)
+            .map(|(_, gids)| custom_field_value(record, gids))
+            .unwrap_or_default()
     }
 }
 
@@ -1078,58 +1180,101 @@ fn compare_section_key(left: &TaskRecord, right: &TaskRecord) -> std::cmp::Order
         })
 }
 
-/// The calendar date a record sorts by: its due date, or its start date when it
-/// has no due date.
+/// The calendar date a record sorts by when nothing is sorted: its due date,
+/// or its start date when it has no due date.
 ///
 /// Records store `YYYY-MM-DD` as it came off the API; the relative "Today" /
 /// "Tomorrow" / "Aug 31" text the table shows is produced at render time and
 /// never reaches here. Parsing to a [`CivilDate`] rather than comparing the
-/// strings means a value the API surprised us with — anything that is not a real
-/// date — is treated as undated instead of ordering somewhere arbitrary.
+/// strings means a value the API surprised us with — anything that is not a
+/// real date — is treated as undated instead of ordering somewhere arbitrary.
 fn record_sort_date(record: &TaskRecord) -> Option<CivilDate> {
-    record
-        .due_date
-        .as_deref()
-        .or(record.start_date.as_deref())
-        .and_then(CivilDate::parse)
+    record_due_date(record).or_else(|| record_start_date(record))
 }
 
-fn compare_rule(rule: &TaskSortRule, left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
-    // Undated tasks sort last in both directions. "No date" is not an early
-    // date, so reversing the sort must not float them above everything that is
-    // actually scheduled.
-    if rule.field == TaskSortField::Date {
-        return match (record_sort_date(left), record_sort_date(right)) {
-            (None, None) => std::cmp::Ordering::Equal,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (Some(left), Some(right)) => match rule.direction {
-                SortDirection::Asc => left.cmp(&right),
-                SortDirection::Desc => right.cmp(&left),
-            },
-        };
+/// The due date as the Due column shows it, parsed.
+fn record_due_date(record: &TaskRecord) -> Option<CivilDate> {
+    record.due_date.as_deref().and_then(CivilDate::parse)
+}
+
+/// The start date as the Start column shows it, parsed.
+fn record_start_date(record: &TaskRecord) -> Option<CivilDate> {
+    record.start_date.as_deref().and_then(CivilDate::parse)
+}
+
+/// The date the Start column sorts by: its start date, or its due date when it
+/// has no start date.
+///
+/// An empty Start cell does not mean "unscheduled". Asana refuses a start date
+/// without a due date, so a task with only a due date is one that starts the
+/// day it is due — and sorting it as blank would sweep every single-day task
+/// to the bottom of the column, away from the dates they share.
+fn record_start_sort_date(record: &TaskRecord) -> Option<CivilDate> {
+    record_start_date(record).or_else(|| record_due_date(record))
+}
+
+/// The order the table reads in with nothing sorted: by date, then by title,
+/// then in the order Asana returned.
+///
+/// It is also the tie-break under every rule the user does set, which is what
+/// keeps the order total — no two rows can swap places between rebuilds.
+fn compare_default(left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
+    compare_dates(
+        record_sort_date(left),
+        record_sort_date(right),
+        SortDirection::Asc,
+    )
+    .then_with(|| {
+        compare_values(
+            &sanitize_display_text(&left.name),
+            &sanitize_display_text(&right.name),
+            SortDirection::Asc,
+        )
+    })
+    .then_with(|| record_sort_key(left).cmp(&record_sort_key(right)))
+}
+
+/// Orders two dates, with the undated last in both directions.
+///
+/// "No date" is not an early date, so reversing the sort must not float the
+/// unscheduled above everything that is actually scheduled.
+fn compare_dates(
+    left: Option<CivilDate>,
+    right: Option<CivilDate>,
+    direction: SortDirection,
+) -> std::cmp::Ordering {
+    match (left, right) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (Some(left), Some(right)) => directed(left.cmp(&right), direction),
     }
+}
 
-    let ordering = match rule.field {
-        TaskSortField::Project => left
-            .projects
-            .first()
-            .cloned()
-            .unwrap_or_default()
-            .cmp(&right.projects.first().cloned().unwrap_or_default()),
-        TaskSortField::Section => compare_section_key(left, right),
-        TaskSortField::Date => unreachable!("handled above so undated rows can ignore direction"),
-        TaskSortField::Title => sanitize_display_text(&left.name).cmp(&sanitize_display_text(&right.name)),
-        TaskSortField::Assignee => left
-            .assignee
-            .clone()
-            .unwrap_or_default()
-            .cmp(&right.assignee.clone().unwrap_or_default()),
-        TaskSortField::Completed => left.completed.cmp(&right.completed),
-        TaskSortField::Natural => left.natural_order.cmp(&right.natural_order),
-    };
+/// Orders two cell values, with the blanks last in both directions.
+///
+/// Blanks follow the same rule the dates do: an unassigned task has no name to
+/// be first or last by, so flipping the direction should not sweep every empty
+/// cell to the top. Values that both read as numbers compare as numbers, so a
+/// numeric custom field puts 9 before 10 rather than after it.
+fn compare_values(left: &str, right: &str, direction: SortDirection) -> std::cmp::Ordering {
+    match (left.trim(), right.trim()) {
+        ("", "") => std::cmp::Ordering::Equal,
+        ("", _) => std::cmp::Ordering::Greater,
+        (_, "") => std::cmp::Ordering::Less,
+        (left, right) => {
+            let ordering = match (left.parse::<f64>(), right.parse::<f64>()) {
+                (Ok(left), Ok(right)) => left.total_cmp(&right),
+                _ => left.cmp(right),
+            };
+            directed(ordering, direction)
+        }
+    }
+}
 
-    match rule.direction {
+/// Applies a rule's direction to the ordering its column produced.
+fn directed(ordering: std::cmp::Ordering, direction: SortDirection) -> std::cmp::Ordering {
+    match direction {
         SortDirection::Asc => ordering,
         SortDirection::Desc => ordering.reverse(),
     }
@@ -1195,7 +1340,7 @@ fn apply_task_filter(records: Vec<TaskRecord>, filter: &TaskFilter) -> Vec<TaskR
 ///
 /// Depth is recomputed from the parent chain that survived rather than trusted
 /// from the loader, so nesting stays relative to the outermost visible task.
-fn arrange_hierarchy(records: Vec<TaskRecord>, sort: &TaskSort) -> Vec<TaskRecord> {
+fn arrange_hierarchy(records: Vec<TaskRecord>, order: &RecordOrder) -> Vec<TaskRecord> {
     let index_by_gid: HashMap<&str, usize> = records
         .iter()
         .enumerate()
@@ -1216,7 +1361,7 @@ fn arrange_hierarchy(records: Vec<TaskRecord>, sort: &TaskSort) -> Vec<TaskRecor
         }
     }
 
-    let by_sort = |left: &usize, right: &usize| sort.compare(&records[*left], &records[*right]);
+    let by_sort = |left: &usize, right: &usize| order.compare(&records[*left], &records[*right]);
     roots.sort_by(by_sort);
     for siblings in children.iter_mut() {
         siblings.sort_by(by_sort);
@@ -1259,25 +1404,36 @@ fn arrange_hierarchy(records: Vec<TaskRecord>, sort: &TaskSort) -> Vec<TaskRecor
 /// One column per distinct custom-field *name*, valued per record.
 fn custom_columns(
     records: &[TaskRecord],
-    custom_field_definitions: &[CustomFieldDefinition],
+    custom_field_gids: &[(String, Vec<String>)],
 ) -> Vec<CustomFieldColumn> {
-    group_custom_fields_by_name(custom_field_definitions)
-        .into_iter()
+    custom_field_gids
+        .iter()
         .map(|(name, gids)| {
             let values = records
                 .iter()
-                .map(|record| {
-                    let values = gids
-                        .iter()
-                        .filter_map(|gid| record.custom_fields.get(gid))
-                        .flat_map(|values| values.iter().cloned())
-                        .collect::<Vec<_>>();
-                    join_non_empty(&values)
-                })
+                .map(|record| custom_field_value(record, gids))
                 .collect();
-            CustomFieldColumn { name, gids, values }
+            CustomFieldColumn {
+                name: name.clone(),
+                gids: gids.clone(),
+                values,
+            }
         })
         .collect()
+}
+
+/// The display value one custom-field column shows for one record.
+///
+/// A field name usually has a separate id per project, so a column gathers
+/// every id it was grouped from — and a task in two of those projects shows
+/// both values joined.
+fn custom_field_value(record: &TaskRecord, gids: &[String]) -> String {
+    let values = gids
+        .iter()
+        .filter_map(|gid| record.custom_fields.get(gid))
+        .flat_map(|values| values.iter().cloned())
+        .collect::<Vec<_>>();
+    join_non_empty(&values)
 }
 
 fn build_rows(
@@ -1359,9 +1515,10 @@ fn build_rows(
 #[cfg(test)]
 mod tests {
     use super::{
-        CivilDate, CustomFieldDefinition, SortDirection, SubtaskVisibility, TaskFilter,
-        TaskRecord, TaskRowKind, TaskSort, TaskSortField, TaskSortRule, TaskTableModel,
-        TaskTableSettings,
+        CivilDate, CustomFieldDefinition, CustomFieldKind, EnumOption, SortDirection,
+        SubtaskVisibility, TaskFilter, TaskRecord, TaskRowKind, TaskSort, TaskSortColumn,
+        TaskSortRule, TaskTableModel, TaskTableSettings, FIRST_CUSTOM_COLUMN, STATE_COLUMN,
+        TITLE_COLUMN,
     };
 
     /// The gids of the task rows a model holds, in table order.
@@ -1647,11 +1804,11 @@ mod tests {
                 project_order: Vec::new(),
                 rules: vec![
                     TaskSortRule {
-                        field: TaskSortField::Completed,
+                        column: TaskSortColumn::State,
                         direction: SortDirection::Asc,
                     },
                     TaskSortRule {
-                        field: TaskSortField::Title,
+                        column: TaskSortColumn::Title,
                         direction: SortDirection::Desc,
                     },
                 ],
@@ -1747,33 +1904,25 @@ mod tests {
         assert_eq!(model.next_section_row_index(second_index, 1), Some(later_index));
     }
 
+    /// The last tie-break in the default order is the order Asana sent, and
+    /// only then the gid — two rows that are alike in every column the user
+    /// can see must not reshuffle themselves by id.
     #[test]
-    fn natural_sort_uses_ingest_order_instead_of_gid_order() {
-        let mut later_gid = TaskRecord::new("z", "Later ingest");
+    fn the_default_order_falls_back_to_ingest_order_rather_than_gid_order() {
+        let mut later_gid = TaskRecord::new("z", "Same title");
         later_gid.projects = vec!["Inbox".to_string()];
         later_gid.sections = vec!["Today".to_string()];
-        later_gid.natural_order = 1;
+        later_gid.natural_order = 0;
 
-        let mut earlier_gid = TaskRecord::new("a", "Earlier ingest");
+        let mut earlier_gid = TaskRecord::new("a", "Same title");
         earlier_gid.projects = vec!["Inbox".to_string()];
         earlier_gid.sections = vec!["Today".to_string()];
-        earlier_gid.natural_order = 0;
+        earlier_gid.natural_order = 1;
 
-        let settings = TaskTableSettings {
-            filter: TaskFilter::default(),
-            sort: TaskSort {
-                group_by_project: true,
-                group_by_section: true,
-                project_order: Vec::new(),
-                rules: vec![TaskSortRule {
-                    field: TaskSortField::Natural,
-                    direction: SortDirection::Asc,
-                }],
-            },
-        };
+        let settings = TaskTableSettings::default();
 
         let model = TaskTableModel::from_records_with_settings(
-            vec![later_gid, earlier_gid],
+            vec![earlier_gid, later_gid],
             vec![],
             &settings,
         );
@@ -1785,7 +1934,7 @@ mod tests {
             .map(|row| row.gid.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(task_rows, vec!["a", "z"]);
+        assert_eq!(task_rows, vec!["z", "a"]);
     }
 
     #[test]
@@ -1807,7 +1956,7 @@ mod tests {
                 group_by_section: false,
                 project_order: Vec::new(),
                 rules: vec![TaskSortRule {
-                    field: TaskSortField::Date,
+                    column: TaskSortColumn::Due,
                     direction: SortDirection::Asc,
                 }],
             },
@@ -1844,7 +1993,7 @@ mod tests {
                 group_by_section: false,
                 project_order: Vec::new(),
                 rules: vec![TaskSortRule {
-                    field: TaskSortField::Date,
+                    column: TaskSortColumn::Due,
                     direction,
                 }],
             },
@@ -1903,10 +2052,18 @@ mod tests {
 
     #[test]
     fn a_value_that_is_not_a_real_date_sorts_with_the_undated() {
+        // One title across all three, so what is left to order the two
+        // unparseable rows is the order Asana sent them in.
+        let same_title = |gid: &str, due: &str, natural_order: usize| {
+            let mut record = TaskRecord::new(gid, "Task");
+            record.due_date = Some(due.to_string());
+            record.natural_order = natural_order;
+            record
+        };
         let records = vec![
-            dated("nonsense", Some("someday"), 0),
-            dated("impossible", Some("2026-02-31"), 1),
-            dated("real", Some("2026-09-01"), 2),
+            same_title("nonsense", "someday", 0),
+            same_title("impossible", "2026-02-31", 1),
+            same_title("real", "2026-09-01", 2),
         ];
 
         assert_eq!(
@@ -1917,7 +2074,40 @@ mod tests {
     }
 
     #[test]
-    fn a_task_with_only_a_start_date_sorts_by_it() {
+    fn the_default_order_reads_a_task_with_only_a_start_date_by_it() {
+        let mut start_only = TaskRecord::new("start", "Start only");
+        start_only.start_date = Some("2026-09-05".to_string());
+
+        let records = vec![
+            start_only,
+            dated("before", Some("2026-09-01"), 1),
+            dated("after", Some("2026-09-10"), 2),
+        ];
+
+        let settings = TaskTableSettings {
+            filter: TaskFilter::default(),
+            sort: TaskSort {
+                group_by_project: false,
+                group_by_section: false,
+                ..TaskSort::default()
+            },
+        };
+
+        let gids = TaskTableModel::from_records_with_settings(records, vec![], &settings)
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(gids, vec!["before", "start", "after"]);
+    }
+
+    #[test]
+    fn the_due_column_sorts_by_the_due_date_it_shows() {
+        // The default order reads a start-only task by its start date, but the
+        // Due column is empty for it, so sorting that column leaves it with
+        // the undated at the bottom.
         let mut start_only = TaskRecord::new("start", "Start only");
         start_only.start_date = Some("2026-09-05".to_string());
 
@@ -1929,46 +2119,286 @@ mod tests {
 
         assert_eq!(
             date_sorted_gids(records, SortDirection::Asc),
-            vec!["before", "start", "after"]
+            vec!["before", "after", "start"]
         );
     }
 
     #[test]
-    fn toggling_the_direction_flips_only_the_primary_rule() {
-        let mut sort = TaskSort::default();
-        assert_eq!(sort.primary_direction(), SortDirection::Asc);
-
-        sort.toggle_primary_direction();
-        assert_eq!(sort.primary_direction(), SortDirection::Desc);
-        assert!(
-            sort.rules[1..]
-                .iter()
-                .all(|rule| rule.direction == SortDirection::Asc),
-            "the tie-breakers keep their direction"
-        );
-
-        sort.toggle_primary_direction();
-        assert_eq!(sort.primary_direction(), SortDirection::Asc);
-    }
-
-    #[test]
-    fn toggling_the_direction_with_no_rules_makes_the_implicit_date_sort_explicit() {
-        let mut sort = TaskSort {
-            group_by_project: false,
-            group_by_section: false,
-            project_order: Vec::new(),
-            rules: vec![],
+    fn the_start_column_reads_an_empty_start_as_the_due_date() {
+        // `single_day` has no start date, so the Start column is blank for it —
+        // but a task Asana lets you save with a due date and no start is one
+        // that starts the day it is due, and that is where it sorts.
+        let dated_pair = |gid: &str, start: Option<&str>, due: &str| {
+            let mut record = TaskRecord::new(gid, gid);
+            record.start_date = start.map(str::to_string);
+            record.due_date = Some(due.to_string());
+            record
+        };
+        let start_sorted = |direction: SortDirection| {
+            let settings = TaskTableSettings {
+                filter: TaskFilter::default(),
+                sort: TaskSort {
+                    group_by_project: false,
+                    group_by_section: false,
+                    rules: vec![TaskSortRule {
+                        column: TaskSortColumn::Start,
+                        direction,
+                    }],
+                    ..TaskSort::default()
+                },
+            };
+            TaskTableModel::from_records_with_settings(
+                vec![
+                    dated_pair("late", Some("2026-09-20"), "2026-09-30"),
+                    dated_pair("single_day", None, "2026-09-10"),
+                    dated_pair("early", Some("2026-09-01"), "2026-09-05"),
+                    TaskRecord::new("undated", "undated"),
+                ],
+                vec![],
+                &settings,
+            )
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.clone())
+            .collect::<Vec<_>>()
         };
 
-        sort.toggle_primary_direction();
+        assert_eq!(
+            start_sorted(SortDirection::Asc),
+            vec!["early", "single_day", "late", "undated"],
+            "the blank start sorts by its due date, between the two real starts"
+        );
+        assert_eq!(
+            start_sorted(SortDirection::Desc),
+            vec!["late", "single_day", "early", "undated"],
+            "and a task with neither date is the only one left at the bottom"
+        );
+    }
 
+    #[test]
+    fn toggling_a_column_cycles_descending_ascending_unsorted() {
+        let mut sort = TaskSort::default();
+        assert!(sort.rules.is_empty(), "nothing is sorted to begin with");
+
+        sort.toggle_column(TaskSortColumn::Due);
         assert_eq!(
             sort.rules,
             vec![TaskSortRule {
-                field: TaskSortField::Date,
+                column: TaskSortColumn::Due,
                 direction: SortDirection::Desc,
             }]
         );
+
+        sort.toggle_column(TaskSortColumn::Due);
+        assert_eq!(
+            sort.rules,
+            vec![TaskSortRule {
+                column: TaskSortColumn::Due,
+                direction: SortDirection::Asc,
+            }]
+        );
+
+        sort.toggle_column(TaskSortColumn::Due);
+        assert!(sort.rules.is_empty(), "the third toggle lets the column go");
+    }
+
+    #[test]
+    fn a_newly_sorted_column_leads_and_a_flip_keeps_its_place() {
+        let mut sort = TaskSort::default();
+
+        sort.toggle_column(TaskSortColumn::Assignee);
+        sort.toggle_column(TaskSortColumn::Due);
+
+        assert_eq!(
+            sort.rules
+                .iter()
+                .map(|rule| rule.column.clone())
+                .collect::<Vec<_>>(),
+            vec![TaskSortColumn::Due, TaskSortColumn::Assignee],
+            "the column toggled most recently leads"
+        );
+        assert_eq!(sort.priority(&TaskSortColumn::Due), Some((1, SortDirection::Desc)));
+        assert_eq!(
+            sort.priority(&TaskSortColumn::Assignee),
+            Some((2, SortDirection::Desc))
+        );
+        assert_eq!(sort.priority(&TaskSortColumn::Title), None);
+
+        // Flipping the trailing column to ascending must not promote it: the
+        // user is tuning one column of a sort they already arranged.
+        sort.toggle_column(TaskSortColumn::Assignee);
+        assert_eq!(
+            sort.priority(&TaskSortColumn::Assignee),
+            Some((2, SortDirection::Asc))
+        );
+        assert_eq!(sort.rules_label(), "due desc, assignee asc");
+
+        sort.toggle_column(TaskSortColumn::Due);
+        sort.toggle_column(TaskSortColumn::Due);
+        assert_eq!(
+            sort.priority(&TaskSortColumn::Assignee),
+            Some((1, SortDirection::Asc)),
+            "dropping the leading column promotes what was behind it"
+        );
+    }
+
+    #[test]
+    fn sorting_two_columns_reads_the_second_only_where_the_first_ties() {
+        let record = |gid: &str, assignee: &str, due: &str| {
+            let mut record = TaskRecord::new(gid, gid);
+            record.assignee = Some(assignee.to_string());
+            record.due_date = Some(due.to_string());
+            record
+        };
+        let records = vec![
+            record("a", "Ada", "2026-09-02"),
+            record("b", "Ada", "2026-09-01"),
+            record("c", "Bo", "2026-09-03"),
+        ];
+
+        let mut sort = TaskSort {
+            group_by_project: false,
+            group_by_section: false,
+            ..TaskSort::default()
+        };
+        // Due first, then assignee: the assignee wins, and the dates only
+        // order the rows that share one.
+        sort.toggle_column(TaskSortColumn::Due);
+        sort.toggle_column(TaskSortColumn::Assignee);
+
+        let settings = TaskTableSettings {
+            filter: TaskFilter::default(),
+            sort,
+        };
+        let gids = TaskTableModel::from_records_with_settings(records, vec![], &settings)
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(gids, vec!["c", "a", "b"]);
+    }
+
+    #[test]
+    fn a_blank_cell_sorts_last_in_both_directions() {
+        let record = |gid: &str, assignee: Option<&str>| {
+            let mut record = TaskRecord::new(gid, gid);
+            record.assignee = assignee.map(str::to_string);
+            record
+        };
+        let assignee_sorted = |direction: SortDirection| {
+            let settings = TaskTableSettings {
+                filter: TaskFilter::default(),
+                sort: TaskSort {
+                    group_by_project: false,
+                    group_by_section: false,
+                    rules: vec![TaskSortRule {
+                        column: TaskSortColumn::Assignee,
+                        direction,
+                    }],
+                    ..TaskSort::default()
+                },
+            };
+            TaskTableModel::from_records_with_settings(
+                vec![
+                    record("unassigned", None),
+                    record("zoe", Some("Zoe")),
+                    record("ada", Some("Ada")),
+                ],
+                vec![],
+                &settings,
+            )
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.clone())
+            .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            assignee_sorted(SortDirection::Asc),
+            vec!["ada", "zoe", "unassigned"]
+        );
+        assert_eq!(
+            assignee_sorted(SortDirection::Desc),
+            vec!["zoe", "ada", "unassigned"],
+            "reversing the sort must not sweep the blanks to the top"
+        );
+    }
+
+    #[test]
+    fn a_custom_column_sorts_by_the_value_it_shows() {
+        // Two projects, one "Points" field in each, so the column gathers two
+        // ids — the sort has to find the value through the same grouping the
+        // column is built from.
+        let record = |gid: &str, field_gid: &str, value: &str| {
+            let mut record = TaskRecord::new(gid, gid);
+            record
+                .custom_fields
+                .insert(field_gid.to_string(), vec![value.to_string()]);
+            record
+        };
+        let definitions = vec![
+            CustomFieldDefinition::new("cf1", "Points").in_project("p1"),
+            CustomFieldDefinition::new("cf2", "Points").in_project("p2"),
+        ];
+        let records = vec![
+            record("nine", "cf1", "9"),
+            record("ten", "cf2", "10"),
+            record("blank", "cf1", ""),
+        ];
+
+        let settings = TaskTableSettings {
+            filter: TaskFilter::default(),
+            sort: TaskSort {
+                group_by_project: false,
+                group_by_section: false,
+                rules: vec![TaskSortRule {
+                    column: TaskSortColumn::Custom("Points".to_string()),
+                    direction: SortDirection::Asc,
+                }],
+                ..TaskSort::default()
+            },
+        };
+
+        let gids = TaskTableModel::from_records_with_settings(records, definitions, &settings)
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            gids,
+            vec!["nine", "ten", "blank"],
+            "numbers compare as numbers, and the empty cell trails both"
+        );
+    }
+
+    #[test]
+    fn the_sort_column_for_a_cell_index_names_the_column_under_it() {
+        let mut record = TaskRecord::new("t1", "Task");
+        record.custom_fields = [("cf1".to_string(), vec!["High".to_string()])]
+            .into_iter()
+            .collect();
+        let definitions = vec![CustomFieldDefinition::new("cf1", "Priority").with_kind(
+            CustomFieldKind::Enum {
+                options: vec![EnumOption::new("o1", "High")],
+            },
+        )];
+        let model = TaskTableModel::from_records(vec![record], definitions);
+
+        assert_eq!(model.sort_column(TITLE_COLUMN), Some(TaskSortColumn::Title));
+        assert_eq!(model.sort_column(STATE_COLUMN), Some(TaskSortColumn::State));
+        assert_eq!(
+            model.sort_column(FIRST_CUSTOM_COLUMN),
+            Some(TaskSortColumn::Custom("Priority".to_string())),
+            "a custom column is named, not positioned, so a rule survives the \
+             columns shifting"
+        );
+        assert_eq!(model.sort_column(FIRST_CUSTOM_COLUMN + 1), None);
     }
 
     #[test]
@@ -1992,7 +2422,7 @@ mod tests {
                 group_by_section: false,
                 project_order: Vec::new(),
                 rules: vec![TaskSortRule {
-                    field: TaskSortField::Date,
+                    column: TaskSortColumn::Due,
                     direction: SortDirection::Asc,
                 }],
             },

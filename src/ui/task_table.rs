@@ -19,7 +19,9 @@ use crate::{
         task::{TaskState, TaskStatus},
         task_edit::CellEditView,
     },
-    domain::{month_name, GanttModel, TaskRowKind, TaskSortField, TimelineView},
+    domain::{
+        month_name, GanttModel, SortDirection, TaskRowKind, TaskSort, TaskTableModel, TimelineView,
+    },
     ui::{
         chrome::{Chip, PaneMessage, Tone},
         date::{self, Urgency},
@@ -112,16 +114,6 @@ impl ColumnRole {
             Self::State => (2, 2),
             Self::Projects => (7, 20),
             Self::Custom => (6, 16),
-        }
-    }
-
-    /// The sort field that orders by this column, if any.
-    fn sort_field(self) -> Option<TaskSortField> {
-        match self {
-            Self::Title => Some(TaskSortField::Title),
-            Self::Assignee => Some(TaskSortField::Assignee),
-            Self::Due => Some(TaskSortField::Date),
-            _ => None,
         }
     }
 }
@@ -315,26 +307,25 @@ pub fn render_task_table(
 ) -> TaskTableView {
     let model = state.table();
     let today = date::today();
-    let sort_field = primary_sort_field(state);
-    let ascending = primary_sort_ascending(state);
+
+    // Every sorted column is marked, not just the first: the sort is built one
+    // column at a time, and a mark on only the leading one would hide the rest
+    // of what the rows are ordered by.
+    let marks = (0..model.columns.len())
+        .map(|index| sort_mark(model, &state.task_settings().sort, index, theme))
+        .collect::<Vec<_>>();
 
     let headers = model
         .columns
         .iter()
         .enumerate()
         .map(|(index, label)| {
-            let role = ColumnRole::for_index(index);
-            let mut header = role.header(label);
-            if role.sort_field() == Some(sort_field) {
-                header.push_str(if ascending {
-                    theme.glyphs.sort_asc
-                } else {
-                    theme.glyphs.sort_desc
-                });
-            }
+            let mut header = ColumnRole::for_index(index).header(label);
+            header.push_str(&marks[index]);
             header
         })
         .collect::<Vec<_>>();
+    let mark_widths = marks.iter().map(|mark| visible_width(mark)).collect::<Vec<_>>();
 
     let rows = model
         .rows
@@ -344,7 +335,7 @@ pub fn render_task_table(
 
     let split = split_pane(
         state,
-        &natural_widths(&headers, &rows),
+        &natural_widths(&headers, &rows, &mark_widths),
         inner_width,
         headers.len(),
     );
@@ -357,7 +348,7 @@ pub fn render_task_table(
         0 => TitleFit::Share(TITLE_SHARE),
         _ => TitleFit::Exact,
     };
-    let column_widths = column_widths(&headers, &rows, split.columns, fit);
+    let column_widths = column_widths(&headers, &rows, &mark_widths, split.columns, fit);
     let total_width = total_width(&column_widths);
     let max_scroll = total_width.saturating_sub(split.columns);
 
@@ -928,16 +919,12 @@ pub fn settings_chips(state: &TaskState) -> Vec<Chip> {
         chips.push(Chip::toned("no subtasks", Tone::Accent));
     }
 
-    // An ascending date sort is the default and needs no chip. Any other field,
-    // or a flipped direction, does — the header arrow alone is easy to miss.
-    let descending = !primary_sort_ascending(state);
-    if primary_sort_field(state) != TaskSortField::Date || descending {
+    // The default order needs no chip. A sorted column does — the header mark
+    // alone is easy to miss, and with several columns sorted the chip is the
+    // one place their priority reads as a sentence.
+    if !settings.sort.rules.is_empty() {
         chips.push(Chip::toned(
-            format!(
-                "sort {} {}",
-                settings.sort.primary_field_label(),
-                if descending { "desc" } else { "asc" }
-            ),
+            format!("sort {}", settings.sort.rules_label()),
             Tone::Accent,
         ));
     }
@@ -1103,24 +1090,27 @@ fn filtering_spinner(elapsed: Duration, theme: &Theme) -> Option<&'static str> {
     )
 }
 
-fn primary_sort_field(state: &TaskState) -> TaskSortField {
-    state
-        .task_settings()
-        .sort
-        .rules
-        .first()
-        .map(|rule| rule.field)
-        .unwrap_or(TaskSortField::Date)
-}
+/// The mark a header carries for its place in the sort, empty when the column
+/// is not sorted.
+///
+/// The rank is drawn only once a second column joins the sort: with one rule
+/// the arrow says everything, and a `1` beside it would be noise.
+fn sort_mark(model: &TaskTableModel, sort: &TaskSort, index: usize, theme: &Theme) -> String {
+    let Some((rank, direction)) = model
+        .sort_column(index)
+        .and_then(|column| sort.priority(&column))
+    else {
+        return String::new();
+    };
 
-fn primary_sort_ascending(state: &TaskState) -> bool {
-    state
-        .task_settings()
-        .sort
-        .rules
-        .first()
-        .map(|rule| matches!(rule.direction, crate::domain::SortDirection::Asc))
-        .unwrap_or(true)
+    let arrow = match direction {
+        SortDirection::Asc => theme.glyphs.sort_asc,
+        SortDirection::Desc => theme.glyphs.sort_desc,
+    };
+    match sort.rules.len() {
+        0 | 1 => arrow.to_string(),
+        _ => format!("{arrow}{rank}"),
+    }
 }
 
 /// Measures each column against its content, clamped to its role's bounds.
@@ -1129,13 +1119,18 @@ fn primary_sort_ascending(state: &TaskState) -> bool {
 /// they get, and the pane split asks this directly so it can size the chart
 /// against the columns' appetite rather than against a title already
 /// stretched to fill the pane.
-fn natural_widths(headers: &[String], rows: &[RenderRow]) -> Vec<usize> {
+fn natural_widths(headers: &[String], rows: &[RenderRow], marks: &[usize]) -> Vec<usize> {
     headers
         .iter()
         .enumerate()
         .map(|(index, header)| {
             let role = ColumnRole::for_index(index);
             let (min, max) = role.width_bounds();
+            // The sort mark is appended to the label, so the ceiling has to
+            // make room for it. The State column's is exactly as wide as its
+            // two-character header, and the arrow would otherwise be the first
+            // thing clipped from the one column that cannot spare a cell.
+            let max = max.saturating_add(marks.get(index).copied().unwrap_or(0));
             let natural = rows
                 .iter()
                 .filter(|row| row.kind.is_task())
@@ -1167,10 +1162,11 @@ enum TitleFit {
 fn column_widths(
     headers: &[String],
     rows: &[RenderRow],
+    marks: &[usize],
     viewport: usize,
     fit: TitleFit,
 ) -> Vec<usize> {
-    let mut widths = natural_widths(headers, rows);
+    let mut widths = natural_widths(headers, rows, marks);
 
     let others: usize = widths.iter().skip(1).copied().sum();
     let separators = COLUMN_SEPARATOR_WIDTH * widths.len().saturating_sub(1);
@@ -1558,7 +1554,7 @@ mod tests {
 
         state.toggle_project_grouping();
         state.toggle_subtask_visibility();
-        state.cycle_sort_field();
+        state.toggle_column_sort();
 
         let chip_texts = |state: &TaskState| {
             settings_chips(state)
@@ -1572,30 +1568,34 @@ mod tests {
             vec![
                 "group by section".to_string(),
                 "no subtasks".to_string(),
-                "sort title asc".to_string(),
+                "sort task desc".to_string(),
             ]
         );
 
-        state.toggle_sort_direction();
-        assert!(chip_texts(&state).contains(&"sort title desc".to_string()));
+        state.toggle_column_sort();
+        assert!(chip_texts(&state).contains(&"sort task asc".to_string()));
     }
 
+    /// The chip is where a multi-column sort reads as a sentence: the header
+    /// marks say which way each column goes, but only in the order the columns
+    /// happen to sit in.
     #[test]
-    fn a_flipped_direction_earns_a_chip_even_on_the_default_sort_field() {
-        // The default ascending date sort is silent, but flipping it has to say
-        // so somewhere other than the header arrow.
+    fn the_sort_chip_lists_every_sorted_column_in_priority_order() {
         let mut state = state_with(vec![task("t1", "One", Some("2026-06-10"), false)]);
         state.set_completed_filter(Some(false));
         assert!(settings_chips(&state).is_empty());
 
-        state.toggle_sort_direction();
+        state.move_column(crate::domain::DUE_COLUMN as i64);
+        state.toggle_column_sort();
+        state.move_column(-(crate::domain::DUE_COLUMN as i64));
+        state.toggle_column_sort();
 
         assert_eq!(
             settings_chips(&state)
                 .iter()
                 .map(|chip| chip.text.clone())
                 .collect::<Vec<_>>(),
-            vec!["sort date desc".to_string()]
+            vec!["sort task desc, due desc".to_string()]
         );
     }
 
@@ -1936,6 +1936,30 @@ mod tests {
 
         assert_eq!(with_cursor.cursor_column, Some(2));
         assert_eq!(without.cursor_column, None, "no cursor outside task mode");
+    }
+
+    /// The State column is as wide as its two-character header and no wider,
+    /// so its mark fits only because a sorted column's ceiling makes room for
+    /// one. Every other column has slack; this is the one that proves it.
+    #[test]
+    fn a_sorted_state_column_still_draws_its_mark() {
+        let mut state = state_with(vec![task("t1", "Ship release", Some("2026-06-10"), false)]);
+        let theme = Theme::default();
+
+        state.move_column(crate::domain::STATE_COLUMN as i64);
+        state.toggle_column_sort();
+
+        let view = render_task_table(&mut state, 120, &theme, None);
+        let header = task_header_line(&view, &theme, 120)
+            .spans
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect::<String>();
+
+        assert!(
+            header.contains(&format!("St{}", theme.glyphs.sort_desc)),
+            "the mark survives the column's width: {header}"
+        );
     }
 
     #[test]

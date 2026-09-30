@@ -3622,13 +3622,17 @@ impl TaskState {
         self.refresh_table();
     }
 
-    pub fn cycle_sort_field(&mut self) {
-        self.view.settings.sort.cycle_primary_field();
-        self.refresh_table();
-    }
-
-    pub fn toggle_sort_direction(&mut self) {
-        self.view.settings.sort.toggle_primary_direction();
+    /// Steps the column under the cursor through the sort cycle.
+    ///
+    /// The column cursor is the whole of the gesture's target, so which column
+    /// is sorted is answered the same way `enter` answers which cell is
+    /// edited. A cursor past the last column — the table is empty, or a custom
+    /// field just went away — sorts nothing rather than guessing a column.
+    pub fn toggle_column_sort(&mut self) {
+        let Some(column) = self.view.table.sort_column(self.selected_column()) else {
+            return;
+        };
+        self.view.settings.sort.toggle_column(column);
         self.refresh_table();
     }
 
@@ -3802,12 +3806,8 @@ impl TaskState {
                 self.toggle_subtask_visibility();
                 None
             }
-            Action::CycleTaskSort => {
-                self.cycle_sort_field();
-                None
-            }
-            Action::ToggleTaskSortDirection => {
-                self.toggle_sort_direction();
+            Action::ToggleColumnSort => {
+                self.toggle_column_sort();
                 None
             }
             Action::ToggleProjectGrouping => {
@@ -5809,15 +5809,21 @@ mod tests {
         assert!(state.filter_summary().contains("grp p:off"));
         assert!(state.filter_summary().contains("grp p:off s:off"));
 
-        state.cycle_sort_field();
-        assert!(state.filter_summary().contains("sort title asc"));
+        // The cursor starts on the Task column, so that is what `s` sorts.
+        assert!(state.filter_summary().contains("sort default"));
 
-        state.toggle_sort_direction();
-        assert!(state.filter_summary().contains("sort title desc"));
+        state.toggle_column_sort();
+        assert!(state.filter_summary().contains("sort task desc"));
+
+        state.toggle_column_sort();
+        assert!(state.filter_summary().contains("sort task asc"));
+
+        state.toggle_column_sort();
+        assert!(state.filter_summary().contains("sort default"));
     }
 
     #[test]
-    fn the_sort_direction_action_reverses_the_visible_rows() {
+    fn the_sort_action_cycles_the_column_under_the_cursor() {
         let mut state = TaskState::default();
         // The visible dataset is rebuilt by project membership, so every record
         // needs to name the loaded project to survive the round trip.
@@ -5850,17 +5856,62 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        assert_eq!(gids(&state), vec!["early", "late", "undated"]);
+        assert_eq!(
+            gids(&state),
+            vec!["early", "late", "undated"],
+            "the default order, with nothing sorted"
+        );
 
-        state.apply_action(&crate::input::Action::ToggleTaskSortDirection, 10, false);
+        state.move_column(crate::domain::DUE_COLUMN as i64);
+        state.apply_action(&crate::input::Action::ToggleColumnSort, 10, false);
         assert_eq!(
             gids(&state),
             vec!["late", "early", "undated"],
-            "the dates reverse and the undated row stays at the bottom"
+            "the first press sorts the Due column descending, and the undated \
+             row stays at the bottom"
         );
 
-        state.apply_action(&crate::input::Action::ToggleTaskSortDirection, 10, false);
+        state.apply_action(&crate::input::Action::ToggleColumnSort, 10, false);
         assert_eq!(gids(&state), vec!["early", "late", "undated"]);
+
+        state.apply_action(&crate::input::Action::ToggleColumnSort, 10, false);
+        assert!(
+            state.task_settings().sort.rules.is_empty(),
+            "the third press hands the table back to its default order"
+        );
+        assert_eq!(gids(&state), vec!["early", "late", "undated"]);
+    }
+
+    /// Two columns sorted, and the one toggled second is the one the rows read
+    /// by — the first is left to break its ties.
+    #[test]
+    fn sorting_a_second_column_puts_it_in_front() {
+        let mut state = TaskState::default();
+        let record = |gid: &str, assignee: &str| {
+            let mut record = crate::domain::TaskRecord::new(gid, gid);
+            record.assignee = Some(assignee.to_string());
+            record.project_gids = vec!["p1".to_string()];
+            record.projects = vec!["Inbox".to_string()];
+            record
+        };
+
+        state.begin_loading(&[Project::new("p1", "Inbox", true)]);
+        state.finish_loading_dataset(TaskDataset {
+            records: vec![record("a", "Ada")],
+            custom_field_definitions: Vec::new(),
+        });
+
+        // The cursor walks from the Task column to Assignee, then one more to
+        // Due, sorting each as it arrives.
+        state.move_column(crate::domain::ASSIGNEE_COLUMN as i64);
+        state.toggle_column_sort();
+        state.move_column(1);
+        state.toggle_column_sort();
+
+        assert_eq!(
+            state.task_settings().sort.rules_label(),
+            "due desc, assignee desc"
+        );
     }
 
     #[test]

@@ -310,7 +310,7 @@ fn task_hints(context: HintContext) -> Vec<Hint> {
     ));
     hints.push(Hint::new(&[Action::Open], "open"));
     hints.push(Hint::new(&[Action::SetFilterMode], "filters"));
-    hints.push(Hint::new(&[Action::CycleTaskSort], "sort"));
+    hints.push(Hint::new(&[Action::ToggleColumnSort], "sort"));
     // Ranked above the view toggles: when columns are off-screen, how to
     // reach them is the most urgent thing the bar can say.
     if context.can_scroll {

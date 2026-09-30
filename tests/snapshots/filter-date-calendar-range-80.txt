@@ -11,7 +11,7 @@
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ┌ Tasks ─────────────────────────────────────── 1 tasks · row 1 · columns 0/27 ┐
-│   Task                             │ Assignee     │    Due▲ │ Start │ St │ Pr│
+│   Task                             │ Assignee     │     Due │ Start │ St │ Pr│
 │                           ┏ Due ━━━━━━━━━━━━ to ┓                            │
 │▌Northwind BTX 4412 ───────┃      Aug 2026       ┃────────────────────────────│
 │                           ┃Su Mo Tu We Th Fr Sa ┃                            │

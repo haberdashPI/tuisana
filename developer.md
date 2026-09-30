@@ -107,6 +107,18 @@ a convention.
   or clearing a date through it is a silent no-op. `confirm_edit` exists for
   the other half of the same problem: without the server's timestamp, a fetch
   that started before the edit comes back looking newer and wins.
+- **Sorting is a column gesture, not a field one.** `s` reads the column cursor
+  and steps that column through descending, ascending, and unsorted, so
+  `TaskSortRule` names a *column* — `Due` and `Start` are separate, and a
+  custom field is named by its label because its id differs per project. The
+  rules are a stack the user builds one column at a time: a column newly
+  sorted goes to the front, a direction flip keeps its place, and everything
+  falls through to `compare_default` (date, then title, then Asana's order),
+  which is both the unsorted order and the tie-break that keeps the ordering
+  total. Grouping is upstream of all of it and still wins. The one column that
+  does not sort by the text in its cell is `Start`: an empty start date sorts
+  as the due date, because Asana will not save a start without a due date, so
+  a blank Start cell means the task starts the day it is due.
 - Reading merges what writing must keep apart. One custom-field *name* usually
   exists once per project, with a different gid in each, and the table shows
   one column for it — so a write resolves the gid from the task's own project,

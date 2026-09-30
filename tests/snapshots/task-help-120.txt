@@ -17,13 +17,13 @@
 ┃                           ┃{/}         jump project         home/end    top / bottom     ┃                           ┃
 ┃   Study Kit Design ·······┃,           group by project                                  ┃···························┃
 ┃▍  Draft the assay validati┃.           group by section     Modes                        ┃orthwind BTX 4412 │ High   ┃
-┃   Review shipment requirem┃s           cycle sort field     p           projects         ┃orthwind BTX 4412 │ High   ┃
-┃   Ship release candidate t┃^           asc / desc           f           filters          ┃orthwind BTX 4412 │ High   ┃
-┃   Confirm carrier pickup w┃                                 t           tasks            ┃orthwind BTX 4412 │ —      ┃
-┃   Update the sample intake┃Edit                             m           toggle tasks     ┃orthwind BTX 4412 │ Medium ┃
-┃   Qualify the second reage┃h/l         column cursor                                     ┃orthwind BTX 4412 │ Medium ┃
-┃                           ┃⏎           edit the cell        Panes                        ┃                           ┃
-┃   Shipment ···············┃d           open / done          0           restore          ┃···························┃
+┃   Review shipment requirem┃s           sort this column     p           projects         ┃orthwind BTX 4412 │ High   ┃
+┃   Ship release candidate t┃                                 f           filters          ┃orthwind BTX 4412 │ High   ┃
+┃   Confirm carrier pickup w┃Edit                             t           tasks            ┃orthwind BTX 4412 │ —      ┃
+┃   Update the sample intake┃h/l         column cursor        m           toggle tasks     ┃orthwind BTX 4412 │ Medium ┃
+┃   Qualify the second reage┃⏎           edit the cell                                     ┃orthwind BTX 4412 │ Medium ┃
+┃                           ┃d           open / done          Panes                        ┃                           ┃
+┃   Shipment ···············┃                                 0           restore          ┃···························┃
 ┃   Book the courier for the┃                                                              ┃orthwind BTX 4412 │ Low    ┃
 ┃   Label the retention samp┃                                 App                          ┃orthwind BTX 4412 │ Medium ┃
 ┃   Reconcile the freight in┃                                 r           refresh          ┃orthwind BTX 4412 │ Low    ┃

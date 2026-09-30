@@ -30,7 +30,7 @@ pub use task::{
     SubtaskVisibility, ASSIGNEE_COLUMN, DUE_COLUMN, FIRST_CUSTOM_COLUMN, PROJECTS_COLUMN,
     START_COLUMN, STATE_COLUMN, TITLE_COLUMN,
     TaskFilter, TaskRecord, TaskRow, TaskRowKind, TaskSort,
-    TaskSortField, TaskSortRule, TaskTableModel, TaskTableSettings, merge_task_record,
+    TaskSortColumn, TaskSortRule, TaskTableModel, TaskTableSettings, merge_task_record,
 };
 /// The write model: one field of one task, and the parsing that builds it.
 pub use task_edit::{

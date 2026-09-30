@@ -11,19 +11,19 @@
 │       ┃x           clear                left/right  scroll columns   ┃       │
 └───────┃^x          clear hidden         b           recently edited  ┃───────┘
 ┏ Tasks ┃y           copy links                                        ┃s 0/41 ┓
-┃   Task┃                                 Move                         ┃e▲ │  S┃
+┃   Task┃                                 Move                         ┃ue │  S┃
 ┃       ┃Group & sort                     j/k         down / up        ┃       ┃
 ┃▌Northw┃[/]         jump section         ^d/^u       page down / up   ┃───────┃
 ┃       ┃{/}         jump project         home/end    top / bottom     ┃       ┃
 ┃   Stud┃,           group by project                                  ┃·······┃
 ┃▍  Draf┃.           group by section     Modes                        ┃10 │ Ju┃
-┃   Revi┃s           cycle sort field     p           projects         ┃19 │  A┃
-┃   Ship┃^           asc / desc           f           filters          ┃ay │ Au┃
-┃   Conf┃                                 t           tasks            ┃ed │ Au┃
-┃   Upda┃Edit                             m           toggle tasks     ┃ 4 │ Au┃
-┃   Qual┃h/l         column cursor                                     ┃12 │  J┃
-┃       ┃⏎           edit the cell        Panes                        ┃       ┃
-┃   Ship┃d           open / done          0           restore          ┃·······┃
+┃   Revi┃s           sort this column     p           projects         ┃19 │  A┃
+┃   Ship┃                                 f           filters          ┃ay │ Au┃
+┃   Conf┃Edit                             t           tasks            ┃ed │ Au┃
+┃   Upda┃h/l         column cursor        m           toggle tasks     ┃ 4 │ Au┃
+┃   Qual┃⏎           edit the cell                                     ┃12 │  J┃
+┃       ┃d           open / done          Panes                        ┃       ┃
+┃   Ship┃                                 0           restore          ┃·······┃
 ┃   Book┃                                                              ┃15 │  S┃
 ┃   Labe┃                                 App                          ┃ 9 │   ┃
 ┃   Reco┃                                 r           refresh          ┃30 │ Se┃

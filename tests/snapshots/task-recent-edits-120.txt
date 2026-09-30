@@ -14,7 +14,7 @@
 ┃▍  Draft the assay validation protocol           │ Priya Raman  │  Jul 10 │ Jun 15 │ ✓  │ Northwind BTX 4412 │ High   ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10 tasks · row 1 · columns 0/1 ┓
-┃   Task                                          │ Assignee     │    Due▲ │  Start │ St │ Projects           │ Priorit┃
+┃   Task                                          │ Assignee     │     Due │  Start │ St │ Projects           │ Priorit┃
 ┃                                                                                                                      ┃
 ┃▌Northwind BTX 4412 ──────────────────────────────────────────────────────────────────────────────────────────────────┃
 ┃                                                                                                                      ┃

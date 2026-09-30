@@ -368,8 +368,7 @@ All bindable commands:
 - `toggle_subtask_visibility`
 - `toggle_project_grouping`
 - `toggle_section_grouping`
-- `cycle_task_sort`
-- `toggle_task_sort_direction`
+- `toggle_column_sort`
 - `move_section_up`
 - `move_section_down`
 - `move_project_up`
@@ -665,7 +664,13 @@ left alone.
 - `c` to toggle the completed filter
 - `z` to toggle subtask visibility
 - `,` to toggle project grouping, `.` to toggle section grouping
-- `s` to cycle the task sort field, `^` to flip between ascending and descending
+- `s` to sort by the column under the cursor: descending, then ascending, then
+  unsorted. Sorting a second column keeps the first as its tie-break, and the
+  column sorted most recently is the one the rows read by — the header marks
+  say which way each one goes and, once there are two, which of them wins. An
+  empty cell sorts last whichever way the column runs, with one exception: a
+  task with no start date sorts by its due date, since a task Asana let you
+  save without a start is one that starts the day it is due
 - `[` and `]` to move by section
 - `{` and `}` to move by project
 - `h`/`l` to move the column cursor, `enter` to edit the cell under it

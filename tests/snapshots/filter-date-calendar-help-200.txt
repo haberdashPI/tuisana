@@ -11,7 +11,7 @@
 ┃                                                         ┃Move the date                              Date syntax                            ┃                                                         ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃h/l         day                            exact       YYYY-MM-DD or MM-DD        ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ┌ Tasks ──────────────────────────────────────────────────┃k/j         month                          day         today, tomorrow, yesterday ┃─────────────────────────────────────── 11 tasks · row 1 ┐
-│   Task                                                  ┃t           jump to today                  weekday     mon .. sun                 ┃Due▲ │  Start │ St │ Projects           │ Priority       │
+│   Task                                                  ┃t           jump to today                  weekday     mon .. sun                 ┃ Due │  Start │ St │ Projects           │ Priority       │
 │                                                         ┃⏎           pick and close                 week        this / last / next week    ┃                                                         │
 │▌Northwind BTX 4412 ─────────────────────────────────────┃d           clear the field                month       this / last / next month   ┃─────────────────────────────────────────────────────────│
 │                                                         ┃esc         close                          year        this / last / next year    ┃                                                         │

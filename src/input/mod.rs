@@ -187,9 +187,10 @@ pub enum Action {
     ToggleSubtaskVisibility,
     ToggleProjectGrouping,
     ToggleSectionGrouping,
-    CycleTaskSort,
-    /// Flip the primary sort rule between ascending and descending.
-    ToggleTaskSortDirection,
+    /// Step the column under the cursor through descending, ascending, and
+    /// unsorted. Several columns sorted at once read in the order they were
+    /// toggled on, most recent first.
+    ToggleColumnSort,
     /// Commit the current filter field edit and return to filter-browse mode.
     FilterDoneEditing,
     /// Discard the current filter field edit, close the filter panel, and go to task mode.
@@ -398,8 +399,7 @@ impl Action {
             "toggle_subtask_visibility" => Ok(Self::ToggleSubtaskVisibility),
             "toggle_project_grouping" => Ok(Self::ToggleProjectGrouping),
             "toggle_section_grouping" => Ok(Self::ToggleSectionGrouping),
-            "cycle_task_sort" => Ok(Self::CycleTaskSort),
-            "toggle_task_sort_direction" => Ok(Self::ToggleTaskSortDirection),
+            "toggle_column_sort" => Ok(Self::ToggleColumnSort),
             "filter_done_editing" => Ok(Self::FilterDoneEditing),
             "filter_cancel_editing" => Ok(Self::FilterCancelEditing),
             "filter_move_label_left" => Ok(Self::FilterMoveLabelLeft),
@@ -507,8 +507,7 @@ impl Action {
                 | Action::ToggleSubtaskVisibility
                 | Action::ToggleProjectGrouping
                 | Action::ToggleSectionGrouping
-                | Action::CycleTaskSort
-                | Action::ToggleTaskSortDirection
+                | Action::ToggleColumnSort
         )
     }
 
@@ -651,8 +650,7 @@ impl Display for Action {
             Action::ToggleSubtaskVisibility => "toggle_subtask_visibility",
             Action::ToggleProjectGrouping => "toggle_project_grouping",
             Action::ToggleSectionGrouping => "toggle_section_grouping",
-            Action::CycleTaskSort => "cycle_task_sort",
-            Action::ToggleTaskSortDirection => "toggle_task_sort_direction",
+            Action::ToggleColumnSort => "toggle_column_sort",
             Action::FilterDoneEditing => "filter_done_editing",
             Action::FilterCancelEditing => "filter_cancel_editing",
             Action::FilterMoveLabelLeft => "filter_move_label_left",

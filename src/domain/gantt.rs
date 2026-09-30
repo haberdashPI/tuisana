@@ -1286,7 +1286,7 @@ mod tests {
     fn a_value_keeps_its_colour_when_the_table_is_re_sorted() {
         // The fallback is alphabetical rather than first-appearance precisely
         // so that re-sorting or filtering never repaints a bar.
-        use crate::domain::{SortDirection, TaskSort, TaskSortField, TaskSortRule, TaskTableSettings};
+        use crate::domain::{SortDirection, TaskSort, TaskSortColumn, TaskSortRule, TaskTableSettings};
 
         let records = vec![
             record("t1", Some("Zoe"), Some("2026-06-01"), Some("2026-06-10")),
@@ -1298,7 +1298,7 @@ mod tests {
             let settings = TaskTableSettings {
                 sort: TaskSort {
                     rules: vec![TaskSortRule {
-                        field: TaskSortField::Title,
+                        column: TaskSortColumn::Title,
                         direction,
                     }],
                     ..TaskSort::default()

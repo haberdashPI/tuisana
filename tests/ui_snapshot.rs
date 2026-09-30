@@ -609,6 +609,22 @@ fn task_mode_with_the_column_cursor_moved() {
     });
 }
 
+/// Two columns sorted, Assignee toggled after Due.
+///
+/// Pins the ranked header marks — the arrow alone cannot say which of two
+/// sorted columns the rows are ordered by — and the chip that spells the same
+/// thing out in words.
+#[test]
+fn task_mode_sorted_by_two_columns() {
+    assert_snapshot("task-sorted-columns", || {
+        vec![
+            enter_task_mode(),
+            vec![key('l'), key('l'), key('s')],
+            vec![key('h'), key('s')],
+        ]
+    });
+}
+
 /// Mid-edit on a title longer than its column, caret at the end.
 #[test]
 fn task_mode_editing_a_long_title() {

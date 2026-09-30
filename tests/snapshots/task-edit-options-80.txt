@@ -11,7 +11,7 @@
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┏ Tasks ━━━━━━━━━━━━ editing 2 · 11 tasks · row 3 · 2 selected · columns 41/41 ┓
-┃        │ Assignee     │    Due▲ │  Start │ St │ Projects           │ Priority┃
+┃        │ Assignee     │     Due │  Start │ St │ Projects           │ Priority┃
 ┃                                                                              ┃
 ┃▌Northwind BTX 4412 ──────────────────────────────────────────────────────────┃
 ┃                                                                              ┃

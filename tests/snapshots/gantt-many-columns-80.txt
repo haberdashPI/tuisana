@@ -11,7 +11,7 @@
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11 tasks · row 1 · columns 0/27 ┓
-┃   Task         │ Assignee     │    Due▲ │  Star │ Jun    Aug▼Sep Oct Nov Dec ┃
+┃   Task         │ Assignee     │     Due │  Star │ Jun    Aug▼Sep Oct Nov Dec ┃
 ┃                                                                              ┃
 ┃▌Northwind BTX 4412 ──────────────────────────── │ ·  ·   ·  ┊·   ·   ·   ·   ┃
 ┃                                                                              ┃
