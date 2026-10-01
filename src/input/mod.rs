@@ -46,7 +46,15 @@ impl FromStr for KeyBinding {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        let normalized = s.trim().to_ascii_lowercase();
+        let trimmed = s.trim();
+        let normalized = trimmed.to_ascii_lowercase();
+        // A single character keeps the case it was written in: since
+        // version 2 of the config format, `J` and `j` are different keys.
+        // Every other form is a name or a modifier prefix, where case is
+        // noise, so those still match on the lowercased string.
+        if let (Some(ch), 1) = (trimmed.chars().next(), trimmed.chars().count()) {
+            return Ok(Self::Char(ch));
+        }
         match normalized.as_str() {
             "enter" => Ok(Self::Enter),
             "esc" | "escape" => Ok(Self::Esc),
@@ -62,7 +70,6 @@ impl FromStr for KeyBinding {
             "pageup" | "page-up" => Ok(Self::PageUp),
             "pagedown" | "page-down" => Ok(Self::PageDown),
             "space" => Ok(Self::Char(' ')),
-            _ if normalized.len() == 1 => Ok(Self::Char(normalized.chars().next().expect("len checked"))),
             _ if normalized.starts_with("ctrl-") && normalized.len() == 6 => {
                 Ok(Self::Ctrl(normalized.chars().last().expect("len checked")))
             }
@@ -116,7 +123,12 @@ impl KeyBinding {
             KeyCode::Char(c) if event.modifiers.contains(KeyModifiers::ALT) => {
                 Some(Self::Alt(c.to_ascii_lowercase()))
             }
-            KeyCode::Char(c) => Some(Self::Char(c.to_ascii_lowercase())),
+            // Case preserved, which makes shift+letter a namespace of its own:
+            // `J` and `j` are different keys. Only the plain character, for
+            // the reason the two arms above lowercase — a terminal cannot
+            // reliably tell `ctrl-J` from `ctrl-j`, so a binding on the
+            // uppercase form would be a binding that never fires.
+            KeyCode::Char(c) => Some(Self::Char(c)),
             KeyCode::Enter => Some(Self::Enter),
             KeyCode::Esc => Some(Self::Esc),
             KeyCode::Backspace => Some(Self::Backspace),
@@ -308,25 +320,51 @@ pub enum Action {
     /// Move the column cursor one column right.
     TaskColumnNext,
     /// Open the editor for the cell under the column cursor.
-    BeginTaskEdit,
+    EditColumn,
     /// Set every target to the opposite of the cursor row's completion.
     ToggleTaskCompleted,
     /// Send the open cell edit.
-    CommitTaskEdit,
+    CommitColumnEdit,
     /// Throw the open cell edit away.
-    CancelTaskEdit,
+    CancelColumnEdit,
     /// Step a value picker, by `1` or `-1`.
     ///
     /// The direction is a payload rather than two variants, following
     /// [`Action::FilterSetLoad`].
-    TaskEditCycleValue(i32),
+    ColumnEditCycleValue(i32),
     /// Empty the cell being edited.
-    TaskEditClear,
+    ColumnEditClear,
     /// Show or hide the recently-edited pane.
     ToggleRecentPane,
+    /// Take the structural keys: edit mode.
+    SetEditMode,
+    /// Back out of whatever is pending: the deletion marks, or edit mode.
+    EditCancel,
+    /// Open a draft task beside the one under the cursor.
+    InsertTask,
+    /// Open a draft task whose parent is the one under the cursor.
+    InsertSubtask,
+    /// Mark the cursor row, or the selection, for deletion. Again unmarks.
+    MarkForDeletion,
+    /// Carry out the marked deletions.
+    DeleteMarkedTasks,
+    /// Open a draft section after the cursor's section.
+    InsertSection,
+    /// Delete the section the cursor is in, when it is empty.
+    DeleteSection,
+    /// Move the task under the cursor one section along, by `1` or `-1`.
+    ///
+    /// The direction is a payload, following [`Action::ColumnEditCycleValue`].
+    MoveTaskToSection(i32),
+    /// Move the highlight through the open completion overlay's candidates.
+    ///
+    /// Distinct from [`Action::CompleteCandidate`], which *replaces* the typed
+    /// text with the candidate it lands on. This only moves the highlight, and
+    /// `enter` is what takes it.
+    HighlightCandidate(i32),
     /// Complete the typed prefix to the next candidate, or the previous one.
     ///
-    /// The direction is a payload, following [`Action::TaskEditCycleValue`].
+    /// The direction is a payload, following [`Action::ColumnEditCycleValue`].
     /// One action for both panes: the cell editor and the filter panel's
     /// `list` row run the same completion state machine.
     CompleteCandidate(i32),
@@ -461,14 +499,26 @@ impl Action {
             "gantt_order_cancel" => Ok(Self::GanttOrderCancel),
             "task_column_prev" => Ok(Self::TaskColumnPrev),
             "task_column_next" => Ok(Self::TaskColumnNext),
-            "begin_task_edit" => Ok(Self::BeginTaskEdit),
+            "edit_column" => Ok(Self::EditColumn),
             "toggle_task_completed" => Ok(Self::ToggleTaskCompleted),
-            "commit_task_edit" => Ok(Self::CommitTaskEdit),
-            "cancel_task_edit" => Ok(Self::CancelTaskEdit),
-            "task_edit_next_value" => Ok(Self::TaskEditCycleValue(1)),
-            "task_edit_prev_value" => Ok(Self::TaskEditCycleValue(-1)),
-            "task_edit_clear" => Ok(Self::TaskEditClear),
+            "commit_column_edit" => Ok(Self::CommitColumnEdit),
+            "cancel_column_edit" => Ok(Self::CancelColumnEdit),
+            "column_edit_next_value" => Ok(Self::ColumnEditCycleValue(1)),
+            "column_edit_prev_value" => Ok(Self::ColumnEditCycleValue(-1)),
+            "column_edit_clear" => Ok(Self::ColumnEditClear),
             "toggle_recent_pane" => Ok(Self::ToggleRecentPane),
+            "set_edit_mode" => Ok(Self::SetEditMode),
+            "edit_cancel" => Ok(Self::EditCancel),
+            "insert_task" => Ok(Self::InsertTask),
+            "insert_subtask" => Ok(Self::InsertSubtask),
+            "mark_for_deletion" => Ok(Self::MarkForDeletion),
+            "delete_marked_tasks" => Ok(Self::DeleteMarkedTasks),
+            "insert_section" => Ok(Self::InsertSection),
+            "delete_section" => Ok(Self::DeleteSection),
+            "move_task_to_next_section" => Ok(Self::MoveTaskToSection(1)),
+            "move_task_to_prev_section" => Ok(Self::MoveTaskToSection(-1)),
+            "highlight_next_candidate" => Ok(Self::HighlightCandidate(1)),
+            "highlight_prev_candidate" => Ok(Self::HighlightCandidate(-1)),
             "complete_next_candidate" => Ok(Self::CompleteCandidate(1)),
             "complete_prev_candidate" => Ok(Self::CompleteCandidate(-1)),
             "text_caret_word_back" => Ok(Self::TextCaretWordBack),
@@ -517,10 +567,10 @@ impl Action {
     /// picker on a State or enum cell, and type their character on any cell
     /// that holds text. They must be routed to `handle_task_edit_input`
     /// rather than straight to `handle_action`.
-    pub fn is_task_edit_value_action(&self) -> bool {
+    pub fn is_column_edit_value_action(&self) -> bool {
         matches!(
             self,
-            Action::TaskEditCycleValue(_) | Action::TaskEditClear
+            Action::ColumnEditCycleValue(_) | Action::ColumnEditClear
         )
     }
 
@@ -593,10 +643,22 @@ impl Display for Action {
                 false => "complete_prev_candidate",
             });
         }
-        if let Action::TaskEditCycleValue(delta) = self {
+        if let Action::MoveTaskToSection(delta) = self {
             return f.write_str(match *delta >= 0 {
-                true => "task_edit_next_value",
-                false => "task_edit_prev_value",
+                true => "move_task_to_next_section",
+                false => "move_task_to_prev_section",
+            });
+        }
+        if let Action::HighlightCandidate(delta) = self {
+            return f.write_str(match *delta >= 0 {
+                true => "highlight_next_candidate",
+                false => "highlight_prev_candidate",
+            });
+        }
+        if let Action::ColumnEditCycleValue(delta) = self {
+            return f.write_str(match *delta >= 0 {
+                true => "column_edit_next_value",
+                false => "column_edit_prev_value",
             });
         }
 
@@ -675,7 +737,9 @@ impl Display for Action {
             Action::FilterSetDelete => "filter_set_delete",
             // Handled above: it carries a position rather than a fixed name.
             Action::FilterSetLoad(_)
-            | Action::TaskEditCycleValue(_)
+            | Action::ColumnEditCycleValue(_)
+            | Action::MoveTaskToSection(_)
+            | Action::HighlightCandidate(_)
             | Action::CompleteCandidate(_) => {
                 unreachable!("handled before the match")
             }
@@ -718,12 +782,20 @@ impl Display for Action {
             Action::GanttOrderCancel => "gantt_order_cancel",
             Action::TaskColumnPrev => "task_column_prev",
             Action::TaskColumnNext => "task_column_next",
-            Action::BeginTaskEdit => "begin_task_edit",
+            Action::EditColumn => "edit_column",
             Action::ToggleTaskCompleted => "toggle_task_completed",
-            Action::CommitTaskEdit => "commit_task_edit",
-            Action::CancelTaskEdit => "cancel_task_edit",
-            Action::TaskEditClear => "task_edit_clear",
+            Action::CommitColumnEdit => "commit_column_edit",
+            Action::CancelColumnEdit => "cancel_column_edit",
+            Action::ColumnEditClear => "column_edit_clear",
             Action::ToggleRecentPane => "toggle_recent_pane",
+            Action::SetEditMode => "set_edit_mode",
+            Action::EditCancel => "edit_cancel",
+            Action::InsertTask => "insert_task",
+            Action::InsertSubtask => "insert_subtask",
+            Action::MarkForDeletion => "mark_for_deletion",
+            Action::DeleteMarkedTasks => "delete_marked_tasks",
+            Action::InsertSection => "insert_section",
+            Action::DeleteSection => "delete_section",
             Action::TextCaretWordBack => "text_caret_word_back",
             Action::TextCaretWordForward => "text_caret_word_forward",
             Action::TextCaretStart => "text_caret_start",
@@ -886,13 +958,13 @@ mod tests {
         for action in [
             Action::TaskColumnPrev,
             Action::TaskColumnNext,
-            Action::BeginTaskEdit,
+            Action::EditColumn,
             Action::ToggleTaskCompleted,
-            Action::CommitTaskEdit,
-            Action::CancelTaskEdit,
-            Action::TaskEditCycleValue(1),
-            Action::TaskEditCycleValue(-1),
-            Action::TaskEditClear,
+            Action::CommitColumnEdit,
+            Action::CancelColumnEdit,
+            Action::ColumnEditCycleValue(1),
+            Action::ColumnEditCycleValue(-1),
+            Action::ColumnEditClear,
             Action::ToggleRecentPane,
             Action::CompleteCandidate(1),
             Action::CompleteCandidate(-1),
@@ -913,17 +985,99 @@ mod tests {
 
         // The direction is a payload, so it needs two names rather than one.
         assert_eq!(
-            Action::TaskEditCycleValue(1).to_string(),
-            "task_edit_next_value"
+            Action::ColumnEditCycleValue(1).to_string(),
+            "column_edit_next_value"
         );
         assert_eq!(
-            Action::TaskEditCycleValue(-1).to_string(),
-            "task_edit_prev_value"
+            Action::ColumnEditCycleValue(-1).to_string(),
+            "column_edit_prev_value"
         );
         assert_eq!(
             Action::CompleteCandidate(1).to_string(),
             "complete_next_candidate"
         );
+    }
+
+    /// The commands milestone 15 added and the six it renamed, through the
+    /// same three places every command has to be added in.
+    #[test]
+    fn every_edit_mode_command_round_trips_through_its_name() {
+        for action in [
+            Action::SetEditMode,
+            Action::EditCancel,
+            Action::InsertTask,
+            Action::InsertSubtask,
+            Action::MarkForDeletion,
+            Action::DeleteMarkedTasks,
+            Action::InsertSection,
+            Action::DeleteSection,
+            Action::MoveTaskToSection(1),
+            Action::MoveTaskToSection(-1),
+            Action::HighlightCandidate(1),
+            Action::HighlightCandidate(-1),
+            Action::EditColumn,
+            Action::CommitColumnEdit,
+            Action::CancelColumnEdit,
+            Action::ColumnEditCycleValue(1),
+            Action::ColumnEditCycleValue(-1),
+            Action::ColumnEditClear,
+        ] {
+            assert_eq!(
+                Action::from_command(&action.to_string()).expect("parses"),
+                action,
+                "{action} did not round trip"
+            );
+        }
+
+        // The §2.1 renames: the version-2 names are what the action layer
+        // accepts, and the version-1 ones are gone.
+        assert_eq!(Action::EditColumn.to_string(), "edit_column");
+        assert_eq!(Action::ColumnEditClear.to_string(), "column_edit_clear");
+        for old in [
+            "begin_task_edit",
+            "commit_task_edit",
+            "cancel_task_edit",
+            "task_edit_next_value",
+            "task_edit_prev_value",
+            "task_edit_clear",
+        ] {
+            assert!(
+                Action::from_command(old).is_err(),
+                "{old} is a version-1 name and the migration is what renames it"
+            );
+        }
+    }
+
+    /// Shift+letter is a namespace of its own from milestone 15 on, which is
+    /// what `J`, `K`, `I`, `S`, and `X` are bound in.
+    #[test]
+    fn an_uppercase_letter_is_a_distinct_key_but_a_ctrl_pair_is_not() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        assert_eq!("J".parse::<KeyBinding>().expect("parses"), KeyBinding::Char('J'));
+        assert_ne!(
+            "J".parse::<KeyBinding>().expect("parses"),
+            "j".parse::<KeyBinding>().expect("parses")
+        );
+        assert_eq!(
+            KeyBinding::from_crossterm_event(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT)),
+            Some(KeyBinding::Char('J'))
+        );
+
+        // A terminal cannot reliably tell `ctrl-J` from `ctrl-j`, so binding
+        // the uppercase form would be binding a key that never fires.
+        assert_eq!(
+            KeyBinding::from_crossterm_event(KeyEvent::new(
+                KeyCode::Char('J'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            )),
+            Some(KeyBinding::Ctrl('j'))
+        );
+        assert_eq!("CTRL-J".parse::<KeyBinding>().expect("parses"), KeyBinding::Ctrl('j'));
+        assert_eq!("ALT-F".parse::<KeyBinding>().expect("parses"), KeyBinding::Alt('f'));
+        // Named keys are names, where case is noise.
+        assert_eq!("ESC".parse::<KeyBinding>().expect("parses"), KeyBinding::Esc);
+        assert_eq!("Space".parse::<KeyBinding>().expect("parses"), KeyBinding::Char(' '));
     }
 
     #[test]

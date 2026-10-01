@@ -10,17 +10,17 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11 tasks · row 1 · columns 0/41 ┓
+┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11 tasks · row 1 · columns 0/50 ┓
 ┃   Task                                          │ Assignee     │     Due │  S┃
 ┃                                                                              ┃
 ┃▌Northwind BTX 4412 ───────┏ Assignee ━━━━━━━━━━━━┓───────────────────────────┃
 ┃                           ┃Alex Chen             ┃                           ┃
-┃   Study Kit Design ·······┃Dana Ruiz             ┃···························┃
+┃   Study Kit Design ·······┃Kim Alvarez           ┃···························┃
 ┃▍  Draft the assay validati┃Jo Park               ┃Alex Chen    │ !Jul 10 │ Ju┃
-┃   Review shipment requirem┃Kim Alvarez           ┃Morgan Ellis │ !Aug 19 │  A┃
-┃   Ship release candidate t┃Morgan Ellis          ┃Alex Chen    │   Today │ Au┃
-┃   Confirm carrier pickup w┃Priya Raman           ┃—            │     Wed │ Au┃
-┃   Update the sample intake┃Sam Okafor            ┃Kim Alvarez  │   Sep 4 │ Au┃
+┃   Review shipment requirem┃Dana Ruiz             ┃Morgan Ellis │ !Aug 19 │  A┃
+┃   Ship release candidate t┃Priya Raman           ┃Alex Chen    │   Today │ Au┃
+┃   Confirm carrier pickup w┃Sam Okafor            ┃—            │     Wed │ Au┃
+┃   Update the sample intake┃Morgan Ellis          ┃Kim Alvarez  │   Sep 4 │ Au┃
 ┃   Qualify the second reage┗━━━━━━━━━━━━━━━━━━━━━━┛Dana Ruiz    │  Sep 12 │  J┃
 ┃                                                                              ┃
 ┃   Shipment ··································································┃
@@ -37,4 +37,4 @@
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ⏎ save   esc cancel   ⇥/⇤ complete   ^l clear   M-b/M-f word   ^a/^e ends
- TASK EDIT
+ COLUMN

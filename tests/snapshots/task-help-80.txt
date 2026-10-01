@@ -2,29 +2,29 @@
 ┌ Projects ────────────────────────────────────────────── 3 shown · 1 selected ┐
 │  ● ★ Northwind BTX 4412                                                      │
 │▍   ★ Platform Infrastructure                                                 │
-│    ☆ B┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓       │
+│    ☆ Backlog                                                                 │
+│       ┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓       │
 │       ┃Tasks                            View                         ┃       │
 │       ┃o           open in Asana        g           gantt chart      ┃       │
 │       ┃␣           select               f           filter panel     ┃       │
 │       ┃a           select all           c           open / done / all┃       │
 │       ┃i           invert               z           subtasks         ┃       │
-│       ┃x           clear                left/right  scroll columns   ┃       │
-└───────┃^x          clear hidden         b           recently edited  ┃───────┘
-┏ Tasks ┃y           copy links                                        ┃s 0/41 ┓
-┃   Task┃                                 Move                         ┃ue │  S┃
-┃       ┃Group & sort                     j/k         down / up        ┃       ┃
-┃▌Northw┃[/]         jump section         ^d/^u       page down / up   ┃───────┃
-┃       ┃{/}         jump project         home/end    top / bottom     ┃       ┃
-┃   Stud┃,           group by project                                  ┃·······┃
-┃▍  Draf┃.           group by section     Modes                        ┃10 │ Ju┃
-┃   Revi┃s           sort this column     p           projects         ┃19 │  A┃
-┃   Ship┃                                 f           filters          ┃ay │ Au┃
-┃   Conf┃Edit                             t           tasks            ┃ed │ Au┃
-┃   Upda┃h/l         column cursor        m           toggle tasks     ┃ 4 │ Au┃
-┃   Qual┃⏎           edit the cell                                     ┃12 │  J┃
-┃       ┃d           open / done          Panes                        ┃       ┃
-┃   Ship┃                                 0           restore          ┃·······┃
-┃   Book┃                                                              ┃15 │  S┃
+└───────┃x           clear                left/right  scroll columns   ┃───────┘
+┏ Tasks ┃^x          clear hidden         b           recently edited  ┃s 0/50 ┓
+┃   Task┃y           copy links                                        ┃ue │  S┃
+┃       ┃                                 Move                         ┃       ┃
+┃▌Northw┃Group & sort                     j/k         down / up        ┃───────┃
+┃       ┃[/]         jump section         ^d/^u       page down / up   ┃       ┃
+┃   Stud┃{/}         jump project         home/end    top / bottom     ┃·······┃
+┃▍  Draf┃,           group by project                                  ┃10 │ Ju┃
+┃   Revi┃.           group by section     Modes                        ┃19 │  A┃
+┃   Ship┃s           sort this column     p           projects         ┃ay │ Au┃
+┃   Conf┃                                 f           filters          ┃ed │ Au┃
+┃   Upda┃Edit                             m           toggle tasks     ┃ 4 │ Au┃
+┃   Qual┃t           add & delete rows                                 ┃12 │  J┃
+┃       ┃h/l         column cursor        Panes                        ┃       ┃
+┃   Ship┃⏎           edit the cell        0           restore          ┃·······┃
+┃   Book┃d           open / done                                       ┃15 │  S┃
 ┃   Labe┃                                 App                          ┃ 9 │   ┃
 ┃   Reco┃                                 r           refresh          ┃30 │ Se┃
 ┃   Clos┃                                 q ^c        quit             ┃14 │  O┃
@@ -36,5 +36,5 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ␣ select   ⏎ edit   d done   h/l column   o open   r refresh   q quit
+j/k move   ␣ select   ⏎ edit   t add   d done   h/l column    r refresh   q quit
  TASK

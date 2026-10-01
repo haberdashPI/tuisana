@@ -10,7 +10,7 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11 tasks · row 1 · columns 0/41 ┓
+┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11 tasks · row 1 · columns 0/50 ┓
 ┃   Task                                          │ Assignee▼1   │   Due▼2 │  S┃
 ┃                                                                              ┃
 ┃▌Northwind BTX 4412 ──────────────────────────────────────────────────────────┃
@@ -36,5 +36,5 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ␣ select   ⏎ edit   d done   h/l column   o open   r refresh   q quit
+j/k move   ␣ select   ⏎ edit   t add   d done   h/l column    r refresh   q quit
  TASK                                               sort assignee desc, due desc

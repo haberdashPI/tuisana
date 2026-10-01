@@ -9,7 +9,7 @@ pub mod fake;
 
 use crate::{
     asana::dto::{ProjectCustomFieldSettingDto, SectionDto, TaskDto, UserDto},
-    domain::{Project, ProjectEdit, ProjectKind, TaskFieldEdit},
+    domain::{NewTask, Project, ProjectEdit, ProjectKind, TaskFieldEdit},
     error::Result,
 };
 
@@ -147,6 +147,33 @@ pub trait AsanaClient {
     /// `removeProject`, one request per project, and answers with nothing
     /// worth keeping.
     fn update_task_project(&self, edit: &ProjectEdit) -> Result<()>;
+    /// Creates a task, answering it as the server now has it.
+    ///
+    /// The reply carries the gid, which is the whole reason this write is not
+    /// optimistic: every edit of the new row needs it, and a placeholder
+    /// cannot stand in.
+    fn create_task(&self, task: &NewTask) -> Result<TaskDto>;
+    /// Deletes a task. Asana takes its subtasks with it, server-side.
+    fn delete_task(&self, task_gid: &str) -> Result<()>;
+    /// Hangs a task off another task, or off nothing with `None`.
+    ///
+    /// Its own endpoint, like project membership: Asana does not accept
+    /// `parent` in a task update.
+    fn set_task_parent(&self, task_gid: &str, parent_gid: Option<&str>) -> Result<()>;
+    /// Puts a task in a section, which takes it out of its old one.
+    ///
+    /// So there is no paired removal: moving a task between two sections of
+    /// the same project is one request.
+    fn add_task_to_section(&self, section_gid: &str, task_gid: &str) -> Result<()>;
+    /// Creates a section in a project, after `insert_after` when given.
+    fn create_section(
+        &self,
+        project_gid: &str,
+        name: &str,
+        insert_after: Option<&str>,
+    ) -> Result<SectionDto>;
+    /// Deletes a section. Asana refuses a populated one.
+    fn delete_section(&self, section_gid: &str) -> Result<()>;
     /// Everyone in the workspace, for the assignee picker.
     ///
     /// The only directory the app can offer that is not "people who already

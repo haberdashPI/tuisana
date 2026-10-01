@@ -69,6 +69,7 @@ pub enum ColumnRole {
     Start,
     State,
     Projects,
+    Parent,
     Custom,
 }
 
@@ -81,6 +82,7 @@ impl ColumnRole {
             3 => Self::Start,
             4 => Self::State,
             5 => Self::Projects,
+            6 => Self::Parent,
             _ => Self::Custom,
         }
     }
@@ -113,6 +115,7 @@ impl ColumnRole {
             Self::Due | Self::Start => (5, 10),
             Self::State => (2, 2),
             Self::Projects => (7, 20),
+            Self::Parent => (6, 20),
             Self::Custom => (6, 16),
         }
     }
@@ -154,6 +157,11 @@ pub struct RenderRow {
     pub label: String,
     /// Whether this task is complete.
     pub completed: bool,
+    /// Whether this row is going when the marked deletions are carried out.
+    ///
+    /// Drawn struck through — a glyph change, not a colour change, so it
+    /// reads under `variant = "mono"`.
+    pub marked_for_deletion: bool,
     /// How deeply the task is nested under a parent.
     pub subtask_depth: usize,
     /// One entry per column, for task rows.
@@ -330,7 +338,7 @@ pub fn render_task_table(
     let rows = model
         .rows
         .iter()
-        .map(|row| resolve_row(row, today, theme))
+        .map(|row| resolve_row(row, today, theme, state.is_marked_for_deletion(&row.gid)))
         .collect::<Vec<_>>();
 
     let split = split_pane(
@@ -358,6 +366,14 @@ pub fn render_task_table(
     if cursor_column.is_some() {
         state.ensure_column_visible(&column_widths, split.columns);
     }
+    // Only the renderer knows the widths, so only the renderer can say which
+    // columns the reader actually saw — which is what §5.1 of milestone 15
+    // inherits a new task's project on.
+    state.set_visible_columns(drawn_columns(
+        &column_widths,
+        state.horizontal_scroll().min(max_scroll),
+        split.columns,
+    ));
     let editing = editing_cell(state, &column_widths, theme);
     let state = &*state;
     let model = state.table();
@@ -405,6 +421,29 @@ pub fn render_task_table(
     .with_narrow_chart_warning(split.too_narrow)
 }
 
+/// Which columns are on screen, as a half-open range of column indices.
+///
+/// A column counts as drawn when any of it is: a project name clipped to
+/// three characters is still a project name the reader can see is there.
+fn drawn_columns(
+    widths: &[usize],
+    scroll: usize,
+    viewport: usize,
+) -> std::ops::Range<usize> {
+    let mut start = widths.len();
+    let mut end = 0;
+    let mut offset = 0usize;
+    for (index, width) in widths.iter().enumerate() {
+        let column_end = offset + width;
+        if column_end > scroll && offset < scroll + viewport {
+            start = start.min(index);
+            end = index + 1;
+        }
+        offset = column_end + COLUMN_SEPARATOR_WIDTH;
+    }
+    start.min(end)..end
+}
+
 /// Resolves the open cell editor into the text to draw in its cell.
 ///
 /// The window is measured and stored here because the column width is only
@@ -450,7 +489,7 @@ pub fn recent_pane_view(
         .recent_table()
         .rows
         .iter()
-        .map(|row| resolve_row(row, today, theme))
+        .map(|row| resolve_row(row, today, theme, state.is_marked_for_deletion(&row.gid)))
         .collect::<Vec<_>>();
     let hidden = state.recent_hidden_count();
 
@@ -557,12 +596,29 @@ pub fn task_body_lines(
                 theme,
                 None,
             ),
-            TaskRowKind::SectionHeader => with_chart(
-                group_header_line(&row.label, theme, table_width, false),
-                view,
-                theme,
-                None,
-            ),
+            TaskRowKind::SectionHeader => {
+                // A draft section is a heading being typed, and a heading row
+                // draws no cells for the cell editor to live in — so its
+                // caret is drawn as part of the label instead.
+                let label = match Some(index) == cursor_index {
+                    true => view
+                        .editing
+                        .as_ref()
+                        .map(|edit| format!("{}{}", edit.text, theme.glyphs.cursor)),
+                    false => None,
+                };
+                with_chart(
+                    group_header_line(
+                        label.as_deref().unwrap_or(&row.label),
+                        theme,
+                        table_width,
+                        false,
+                    ),
+                    view,
+                    theme,
+                    None,
+                )
+            }
             TaskRowKind::Task => {
                 let is_cursor = Some(index) == cursor_index;
                 let is_selected = view.selected_task_ids.contains(&row.gid);
@@ -631,7 +687,19 @@ fn task_line(
     // but there is one cell being typed into.
     let editing = is_cursor.then_some(view.editing.as_ref()).flatten();
     let cursor_column = is_cursor.then_some(view.cursor_column).flatten();
-    let cells = cell_spans(&row.cells, view, theme, false, editing, cursor_column);
+    let mut cells = cell_spans(&row.cells, view, theme, false, editing, cursor_column);
+    if row.marked_for_deletion {
+        // On the spans rather than the whole `Line`, which keeps the chart's
+        // "one line per row" invariant intact: the bar beside a marked row is
+        // not what is being deleted.
+        cells = cells
+            .into_iter()
+            .map(|span| {
+                let style = span.style.add_modifier(ratatui::style::Modifier::CROSSED_OUT);
+                span.style(style)
+            })
+            .collect();
+    }
     spans.extend(slice_spans(&cells, view.scroll_offset, columns_width));
 
     Line::from(spans)
@@ -787,6 +855,7 @@ fn resolve_row(
     row: &crate::domain::TaskRow,
     today: date::CivilDate,
     theme: &Theme,
+    marked_for_deletion: bool,
 ) -> RenderRow {
     if !row.kind.is_task() {
         return RenderRow {
@@ -794,6 +863,7 @@ fn resolve_row(
             gid: row.gid.clone(),
             label: row.cells.first().cloned().unwrap_or_default(),
             completed: false,
+            marked_for_deletion: false,
             subtask_depth: 0,
             cells: Vec::new(),
         };
@@ -821,6 +891,7 @@ fn resolve_row(
         gid: row.gid.clone(),
         label: String::new(),
         completed,
+        marked_for_deletion,
         subtask_depth: row.subtask_depth,
         cells,
     }
@@ -989,6 +1060,15 @@ fn counts(state: &TaskState) -> Vec<Chip> {
         chips.push(Chip::toned(
             format!("editing {}", state.cell_edit_target_count()),
             Tone::Accent,
+        ));
+    }
+
+    // Beside where it says `editing 3`, and in the colour that says this one
+    // is not reversible: `enter` is what carries it out.
+    if state.marked_for_deletion_count() > 0 {
+        chips.push(Chip::toned(
+            format!("deleting {}", state.marked_for_deletion_count()),
+            Tone::Danger,
         ));
     }
 
@@ -1448,6 +1528,40 @@ mod tests {
         assert_eq!(row.cells[2].tone, Tone::Muted);
     }
 
+    /// A glyph change, not a colour change, so a marked row still reads under
+    /// `variant = "mono"`.
+    #[test]
+    fn a_row_marked_for_deletion_is_struck_through() {
+        let mut state = state_with(vec![
+            task("t1", "Going", Some("2026-01-01"), false),
+            task("t2", "Staying", Some("2026-01-02"), false),
+        ]);
+        state.toggle_deletion_marks();
+        let theme = Theme::default();
+        let view = render_task_table(&mut state, 120, &theme, None);
+
+        let lines = task_body_lines(&view, state.selected_index(), &theme, 120);
+        let struck = |line: &ratatui::text::Line<'_>| {
+            line.spans
+                .iter()
+                .any(|span| span.style.add_modifier.contains(Modifier::CROSSED_OUT))
+        };
+        let marked = lines
+            .iter()
+            .zip(view.rows.iter())
+            .find(|(_, row)| row.gid == "t1")
+            .expect("the marked row");
+        let kept = lines
+            .iter()
+            .zip(view.rows.iter())
+            .find(|(_, row)| row.gid == "t2")
+            .expect("the other row");
+
+        assert!(struck(marked.0), "the marked row is struck through");
+        assert!(!struck(kept.0), "and nothing else is");
+        assert_eq!(state.marked_for_deletion_count(), 1);
+    }
+
     #[test]
     fn empty_cells_show_a_placeholder_rather_than_blank_space() {
         let mut dto = task("t1", "No assignee", None, false);
@@ -1632,7 +1746,8 @@ mod tests {
         assert_eq!(ColumnRole::for_index(0), ColumnRole::Title);
         assert_eq!(ColumnRole::for_index(4), ColumnRole::State);
         assert_eq!(ColumnRole::for_index(5), ColumnRole::Projects);
-        assert_eq!(ColumnRole::for_index(6), ColumnRole::Custom);
+        assert_eq!(ColumnRole::for_index(6), ColumnRole::Parent);
+        assert_eq!(ColumnRole::for_index(7), ColumnRole::Custom);
         assert_eq!(ColumnRole::for_index(20), ColumnRole::Custom);
     }
 

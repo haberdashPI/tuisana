@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                                                              │
+│▍   ★ Platform Infrastructure                                                                                         │
+│    ☆ Backlog                                                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                   ┏ Help · edit mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                   │
+│                   ┃Create                                   Modes                                ┃                   │
+└───────────────────┃i         new task beside this one       p         projects                   ┃───────────────────┘
+┏ Tasks ━━━━━━━━━━━━┃I         new subtask of this one        f         filters                    ┃w 1 · columns 0/10 ┓
+┃   Task            ┃S         new section after this one     t         tasks                      ┃          │ Parent ┃
+┃                   ┃                                         m         toggle tasks               ┃                   ┃
+┃▌Northwind BTX 4412┃Move & remove                                                                 ┃───────────────────┃
+┃                   ┃K/J       move between sections          Panes                                ┃                   ┃
+┃   Study Kit Design┃␣         select, then mark              [/]       shrink / grow              ┃···················┃
+┃▍  Draft the assay ┃x         mark for deletion              {         minimize                   ┃ BTX 4412 │ —      ┃
+┃   Review shipment ┃⏎         delete what is marked          }         maximize                   ┃ BTX 4412 │ —      ┃
+┃   Ship release can┃X         delete an empty section        0         restore                    ┃ BTX 4412 │ —      ┃
+┃   Confirm carrier ┃esc       clear the marks, then leave                                         ┃ BTX 4412 │ —      ┃
+┃   Update the sampl┃                                         App                                  ┃ BTX 4412 │ —      ┃
+┃   Qualify the seco┃Move                                     r         refresh                    ┃ BTX 4412 │ —      ┃
+┃                   ┃j/k       down / up                      q ^c      quit                       ┃                   ┃
+┃   Shipment ·······┃^d/^u     page down / up                 ?         close this help            ┃···················┃
+┃   Book the courier┃home/end  top / bottom                                                        ┃ BTX 4412 │ —      ┃
+┃   Label the retent┃                                                                              ┃ BTX 4412 │ —      ┃
+┃   Reconcile the fr┃                                                                    ? to close┃ BTX 4412 │ —      ┃
+┃   Close out packag┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ BTX 4412 │ —      ┃
+┃   Close the quarter's shipping report           │ Priya Raman  │  Dec 18 │  Nov 2 │ ○  │ Northwind BTX 4412 │ —      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+i new task   I new subtask   S new section   K/J move section   x mark delete                         r refresh   q quit
+ EDIT

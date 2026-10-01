@@ -874,6 +874,38 @@ mod tests {
             Err(Error::Backend("backend unavailable".to_string()))
         }
 
+        fn create_task(
+            &self,
+            _task: &crate::domain::NewTask,
+        ) -> Result<crate::asana::dto::TaskDto> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
+        fn delete_task(&self, _task_gid: &str) -> Result<()> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
+        fn set_task_parent(&self, _task_gid: &str, _parent_gid: Option<&str>) -> Result<()> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
+        fn add_task_to_section(&self, _section_gid: &str, _task_gid: &str) -> Result<()> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
+        fn create_section(
+            &self,
+            _project_gid: &str,
+            _name: &str,
+            _insert_after: Option<&str>,
+        ) -> Result<crate::asana::dto::SectionDto> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
+        fn delete_section(&self, _section_gid: &str) -> Result<()> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
         fn current_user_gid(&self) -> Result<String> {
             Err(Error::Backend("backend unavailable".to_string()))
         }

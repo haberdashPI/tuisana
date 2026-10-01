@@ -37,4 +37,4 @@
 #                                                                                                                      #
 + # Alex Chen  @ Dana Ruiz  + Jo Park  * Kim Alvarez  o Morgan Ellis  ~ Priya Raman  = other ==========================+
 h/l scroll   -/+ zoom   t today   </> columns   c color   enter order   g close   ? help              r refresh   q quit
- GANTT                                                                              gantt | color assignee | columns 2/7
+ GANTT                                                                              gantt | color assignee | columns 2/8

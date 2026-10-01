@@ -14,7 +14,7 @@ use crate::{
         },
         AsanaClient, TaskLoadScope, TaskQuery, TaskTarget,
     },
-    domain::{CustomFieldValue, Project, ProjectEdit, ProjectMembership, TaskFieldEdit},
+    domain::{CustomFieldValue, NewTask, Project, ProjectEdit, ProjectMembership, TaskFieldEdit},
     error::{Error, Result},
 };
 
@@ -57,6 +57,44 @@ pub struct FakeAsanaClient {
     users: Vec<UserDto>,
     /// Set to make `list_users` fail, for the fallback test.
     users_unavailable: bool,
+    /// The structural writes, in the order they went out.
+    ///
+    /// One log for all six because the question a test asks is almost always
+    /// "what did this keystroke send", and the answer is a sequence.
+    structural_calls: Arc<Mutex<Vec<StructuralCall>>>,
+    /// Gids whose structural writes fail, for the rollback tests.
+    ///
+    /// A task gid for a create — the *parent* or the project it would land
+    /// in — a task gid for a delete or a re-parent, and a section gid for a
+    /// section write.
+    structural_failures: HashSet<String>,
+    /// The gid the next created task is given.
+    next_task_gid: Arc<Mutex<usize>>,
+}
+
+/// One structural write the fake was asked to make.
+///
+/// Recorded rather than applied to the fixtures: a created task has no
+/// project membership a later `list_tasks` could find it under without a
+/// fixture to put it in, and the tests that care read the log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StructuralCall {
+    CreateTask(NewTask),
+    DeleteTask(String),
+    SetParent {
+        gid: String,
+        parent_gid: Option<String>,
+    },
+    AddTaskToSection {
+        section_gid: String,
+        task_gid: String,
+    },
+    CreateSection {
+        project_gid: String,
+        name: String,
+        insert_after: Option<String>,
+    },
+    DeleteSection(String),
 }
 
 impl FakeAsanaClient {
@@ -136,6 +174,27 @@ impl FakeAsanaClient {
     pub fn with_users_unavailable(mut self) -> Self {
         self.users_unavailable = true;
         self
+    }
+
+    /// Makes the structural write naming this gid fail.
+    pub fn with_structural_failure(mut self, gid: impl Into<String>) -> Self {
+        self.structural_failures.insert(gid.into());
+        self
+    }
+
+    /// The structural writes that went out, in order.
+    pub fn structural_calls(&self) -> Vec<StructuralCall> {
+        self.structural_calls
+            .lock()
+            .expect("structural calls are not poisoned")
+            .clone()
+    }
+
+    fn record_structural(&self, call: StructuralCall) {
+        self.structural_calls
+            .lock()
+            .expect("structural calls are not poisoned")
+            .push(call);
     }
 
     /// The membership changes `update_task_project` has been called with.
@@ -326,6 +385,119 @@ impl AsanaClient for FakeAsanaClient {
             .entry(edit.gid.clone())
             .or_default()
             .push(edit.clone());
+        Ok(())
+    }
+
+    fn create_task(&self, task: &NewTask) -> Result<TaskDto> {
+        self.record_structural(StructuralCall::CreateTask(task.clone()));
+
+        for named in [&task.parent_gid, &task.project_gid, &task.section_gid] {
+            if named
+                .as_deref()
+                .is_some_and(|gid| self.structural_failures.contains(gid))
+            {
+                return Err(Error::Backend("403".to_string()));
+            }
+        }
+
+        let mut next = self.next_task_gid.lock().expect("gid counter is not poisoned");
+        *next += 1;
+        let gid = format!("new-{next}");
+        drop(next);
+
+        let created = TaskDto {
+            gid,
+            name: task.name.clone(),
+            completed: false,
+            modified_at: Some(FAKE_EDIT_MODIFIED_AT.to_string()),
+            due_on: None,
+            start_on: None,
+            assignee: None,
+            num_subtasks: 0,
+            parent: task
+                .parent_gid
+                .clone()
+                .map(|gid| crate::asana::dto::TaskParentDto { gid }),
+            memberships: task
+                .project_gid
+                .clone()
+                .map(|project_gid| TaskMembershipDto {
+                    project: TaskMembershipProjectDto {
+                        gid: project_gid,
+                        name: String::new(),
+                    },
+                    section: None,
+                })
+                .into_iter()
+                .collect(),
+            custom_fields: Vec::new(),
+        };
+
+        // Second, and only on the first's success, exactly as the HTTP
+        // client does it: a section is not a field on create.
+        if let Some(section) = &task.section_gid {
+            self.add_task_to_section(section, &created.gid)?;
+        }
+        Ok(created)
+    }
+
+    fn delete_task(&self, task_gid: &str) -> Result<()> {
+        self.record_structural(StructuralCall::DeleteTask(task_gid.to_string()));
+        if self.structural_failures.contains(task_gid) {
+            return Err(Error::Backend("403".to_string()));
+        }
+        Ok(())
+    }
+
+    fn set_task_parent(&self, task_gid: &str, parent_gid: Option<&str>) -> Result<()> {
+        self.record_structural(StructuralCall::SetParent {
+            gid: task_gid.to_string(),
+            parent_gid: parent_gid.map(str::to_string),
+        });
+        if self.structural_failures.contains(task_gid) {
+            return Err(Error::Backend("403".to_string()));
+        }
+        Ok(())
+    }
+
+    fn add_task_to_section(&self, section_gid: &str, task_gid: &str) -> Result<()> {
+        self.record_structural(StructuralCall::AddTaskToSection {
+            section_gid: section_gid.to_string(),
+            task_gid: task_gid.to_string(),
+        });
+        if self.structural_failures.contains(section_gid)
+            || self.structural_failures.contains(task_gid)
+        {
+            return Err(Error::Backend("403".to_string()));
+        }
+        Ok(())
+    }
+
+    fn create_section(
+        &self,
+        project_gid: &str,
+        name: &str,
+        insert_after: Option<&str>,
+    ) -> Result<SectionDto> {
+        self.record_structural(StructuralCall::CreateSection {
+            project_gid: project_gid.to_string(),
+            name: name.to_string(),
+            insert_after: insert_after.map(str::to_string),
+        });
+        if self.structural_failures.contains(project_gid) {
+            return Err(Error::Backend("403".to_string()));
+        }
+        Ok(SectionDto {
+            gid: format!("section-for-{name}"),
+            name: name.to_string(),
+        })
+    }
+
+    fn delete_section(&self, section_gid: &str) -> Result<()> {
+        self.record_structural(StructuralCall::DeleteSection(section_gid.to_string()));
+        if self.structural_failures.contains(section_gid) {
+            return Err(Error::Backend("403".to_string()));
+        }
         Ok(())
     }
 

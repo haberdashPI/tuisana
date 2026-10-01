@@ -98,6 +98,9 @@ pub struct HintContext {
     pub task_edit_completes: bool,
     /// The recently-edited pane has rows, so the toggle can do something.
     pub has_recent_edits: bool,
+    /// How many tasks are marked for deletion, which is what decides whether
+    /// `enter` and `esc` have anything to act on.
+    pub marked_for_deletion: usize,
 }
 
 /// The three forward cuts, as one hint.
@@ -233,7 +236,8 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
             hints
         }
         Mode::Task => task_hints(context),
-        Mode::TaskEdit => task_edit_hints(context),
+        Mode::Edit => edit_hints(context),
+        Mode::ColumnEdit => task_edit_hints(context),
         Mode::Gantt => gantt_hints(context),
         Mode::GanttOrder => vec![
             Hint::new(&[Action::MoveDown, Action::MoveUp], "cursor"),
@@ -302,7 +306,17 @@ fn task_hints(context: HintContext) -> Vec<Hint> {
     if context.has_selection {
         hints.push(Hint::new(&[Action::CopyTasksToClipboard], "copy"));
     }
-    hints.push(Hint::new(&[Action::BeginTaskEdit], "edit"));
+    hints.push(Hint::new(&[Action::EditColumn], "edit"));
+    // Next to the cell editor, because the two are the halves of one idea:
+    // `enter` changes what a row says, `t` changes which rows there are. It
+    // is also the only way to reach creating a task, so it is ranked above
+    // the view toggles rather than left to the help overlay.
+    //
+    // "add" rather than "add / delete", which is what the help overlay says:
+    // the longer label cost two hints at eighty columns, and adding is the
+    // half worth *discovering* — the deleting half is three keystrokes away
+    // behind a confirmation, and the mode's own bar leads with it.
+    hints.push(Hint::new(&[Action::SetEditMode], "add"));
     hints.push(Hint::new(&[Action::ToggleTaskCompleted], "done"));
     hints.push(Hint::new(
         &[Action::TaskColumnPrev, Action::TaskColumnNext],
@@ -330,24 +344,50 @@ fn task_hints(context: HintContext) -> Vec<Hint> {
     hints
 }
 
+/// The structural keys: short, because that is the point of a mode of its own.
+fn edit_hints(context: HintContext) -> Vec<Hint> {
+    let mut hints = vec![
+        Hint::new(&[Action::InsertTask], "new task"),
+        Hint::new(&[Action::InsertSubtask], "new subtask"),
+        Hint::new(&[Action::InsertSection], "new section"),
+        Hint::new(
+            &[Action::MoveTaskToSection(-1), Action::MoveTaskToSection(1)],
+            "move section",
+        ),
+        Hint::new(&[Action::MarkForDeletion], "mark delete"),
+    ];
+    // The two keys that only mean something once something is marked. Saying
+    // so before then would advertise an `enter` that deletes nothing.
+    if context.marked_for_deletion > 0 {
+        hints.push(Hint::new(&[Action::DeleteMarkedTasks], "delete marked"));
+        hints.push(Hint::new(&[Action::EditCancel], "clear marks"));
+    } else {
+        hints.push(Hint::new(&[Action::DeleteSection], "drop empty section"));
+        hints.push(Hint::new(&[Action::EditCancel], "done"));
+    }
+    hints.push(Hint::new(&[Action::ToggleTaskSelection], "select"));
+    hints.push(Hint::new(&[Action::ToggleHelpDetails], "help"));
+    hints
+}
+
 /// The keys an open cell editor reads.
 ///
 /// A value picker reads no text at all, so the caret motions are replaced by
 /// the two keys that actually do something there.
 fn task_edit_hints(context: HintContext) -> Vec<Hint> {
     let mut hints = vec![
-        Hint::new(&[Action::CommitTaskEdit], "save"),
-        Hint::new(&[Action::CancelTaskEdit], "cancel"),
+        Hint::new(&[Action::CommitColumnEdit], "save"),
+        Hint::new(&[Action::CancelColumnEdit], "cancel"),
     ];
     if context.task_edit_is_options {
         hints.push(Hint::new(
             &[
-                Action::TaskEditCycleValue(1),
-                Action::TaskEditCycleValue(-1),
+                Action::ColumnEditCycleValue(1),
+                Action::ColumnEditCycleValue(-1),
             ],
             "value",
         ));
-        hints.push(Hint::new(&[Action::TaskEditClear], "clear"));
+        hints.push(Hint::new(&[Action::ColumnEditClear], "clear"));
         return hints;
     }
     // Ahead of the caret motions: on a field whose values are a closed set,
@@ -927,6 +967,39 @@ mod tests {
         assert!(labels(&hidden).contains(&"pick"));
         assert!(labels(&hidden).contains(&"close"));
         assert!(labels(&hidden).contains(&"caret"));
+    }
+
+    /// Edit mode is the only way to reach creating a task, so the key into it
+    /// has to survive the narrowest bar the app draws rather than live only
+    /// in the help overlay.
+    #[test]
+    fn the_way_into_edit_mode_is_on_the_task_bar_at_eighty_columns() {
+        let keymap = keymap();
+        let theme = Theme::default();
+        let rendered = hint_line(
+            &hints_for(Mode::Task, HintContext::default()),
+            &keymap,
+            Mode::Task,
+            &theme,
+            80,
+        )
+        .to_string();
+
+        let key = hint_key_text(
+            &Hint::new(&[Action::SetEditMode], "add"),
+            &keymap,
+            Mode::Task,
+            &theme.glyphs,
+        );
+        assert_eq!(
+            key.as_deref(),
+            Some("t"),
+            "the label follows the binding, not a literal"
+        );
+        assert!(
+            rendered.contains("t add"),
+            "the bar sheds from the right, and this must not be what goes: {rendered}"
+        );
     }
 
     #[test]

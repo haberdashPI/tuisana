@@ -1,5 +1,9 @@
 target/
 tuisana.toml
+# The copy the version-1 migration offers to make. It is a byte-for-byte copy
+# of tuisana.toml, so it carries the same personal access token.
+tuisana.backup.toml
+tuisana.backup.*.toml
 
 # Editor and OS noise
 .DS_Store

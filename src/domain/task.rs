@@ -178,6 +178,16 @@ pub struct TaskRecord {
     pub start_date: Option<String>,
     /// The parent task id for subtasks.
     pub parent_gid: Option<String>,
+    /// The parent's title, when the loader knows it and the parent is not
+    /// itself a loaded row.
+    ///
+    /// Beside the gid for the same reason `projects` sits beside
+    /// `project_gids`: the table shows a name and only the gid is loaded with
+    /// the task. A subtask fetched by assignee usually has a parent belonging
+    /// to someone else, so there is no loaded row to read the title off — and
+    /// the loader has already fetched that parent to decide which project the
+    /// subtask is grouped under, so the name is there for the asking.
+    pub parent_name: Option<String>,
     /// The nesting depth used when rendering subtasks.
     pub subtask_depth: usize,
     /// The natural API ordering of the task.
@@ -188,6 +198,14 @@ pub struct TaskRecord {
     pub project_gids: Vec<String>,
     /// Human-readable section names associated with this task.
     pub sections: Vec<String>,
+    /// The gids of those sections, in the same order.
+    ///
+    /// Beside the names rather than instead of them: the table shows a name
+    /// and every write names a gid. They have always been in
+    /// `TASK_OPT_FIELDS` and read in the loader; they were simply thrown
+    /// away, and creating a task into a section, moving one between
+    /// sections, and deleting one all need the gid.
+    pub section_gids: Vec<String>,
     /// Human-readable project names associated with this task.
     pub projects: Vec<String>,
     /// Multi-valued custom fields keyed by field id.
@@ -207,11 +225,13 @@ impl TaskRecord {
             due_date: None,
             start_date: None,
             parent_gid: None,
+            parent_name: None,
             subtask_depth: 0,
             natural_order: usize::MAX,
             section_order: None,
             project_gids: Vec::new(),
             sections: Vec::new(),
+            section_gids: Vec::new(),
             projects: Vec::new(),
             custom_fields: HashMap::new(),
         }
@@ -376,8 +396,10 @@ pub const START_COLUMN: usize = 3;
 pub const STATE_COLUMN: usize = 4;
 /// Cell index of the project-membership column.
 pub const PROJECTS_COLUMN: usize = 5;
+/// Cell index of the supertask column.
+pub const PARENT_COLUMN: usize = 6;
 /// Cell index of the first custom-field column.
-pub const FIRST_CUSTOM_COLUMN: usize = 6;
+pub const FIRST_CUSTOM_COLUMN: usize = 7;
 
 /// The fully assembled task table used by the renderer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -682,11 +704,17 @@ impl TaskTableModel {
 
         let mut merged = merge_records(records);
         merged.sort_by(|left, right| order.compare(left, right));
+        // Taken before the filter and before the layout, both of which lose
+        // it: `apply_task_filter` can drop a parent out from under its
+        // children, and `arrange_hierarchy` then clears `parent_gid` so the
+        // orphan reads as a root. The `Parent` column still has to say what
+        // the row hangs off.
+        let parents = parent_links(&merged);
         merged = apply_task_filter(merged, &settings.filter);
         let merged = arrange_hierarchy(merged, &order);
 
         let custom_field_columns = custom_columns(&merged, &custom_field_gids);
-        let rows = build_rows(&merged, &custom_field_columns, settings);
+        let rows = build_rows(&merged, &custom_field_columns, settings, &parents);
 
         Self::from_parts(custom_field_columns, rows)
     }
@@ -711,7 +739,8 @@ impl TaskTableModel {
         };
         let custom_field_columns =
             custom_columns(&records, &group_custom_fields_by_name(&custom_field_definitions));
-        let rows = build_rows(&records, &custom_field_columns, &ungrouped);
+        let parents = parent_links(&records);
+        let rows = build_rows(&records, &custom_field_columns, &ungrouped, &parents);
 
         Self::from_parts(custom_field_columns, rows)
     }
@@ -756,9 +785,12 @@ impl TaskTableModel {
             START_COLUMN => Some(TaskSortColumn::Start),
             STATE_COLUMN => Some(TaskSortColumn::State),
             PROJECTS_COLUMN => Some(TaskSortColumn::Projects),
+            // Ordering the table by what each row hangs off would fight the
+            // parent-first layout, which is already an ordering by parent.
+            PARENT_COLUMN => None,
             _ => self
                 .custom_field_columns
-                .get(index.saturating_sub(FIRST_CUSTOM_COLUMN))
+                .get(index.checked_sub(FIRST_CUSTOM_COLUMN)?)
                 .map(|column| TaskSortColumn::Custom(column.name.clone())),
         }
     }
@@ -936,6 +968,7 @@ fn default_columns() -> Vec<String> {
         "Start".to_string(),
         "State".to_string(),
         "Projects".to_string(),
+        "Parent".to_string(),
     ]
 }
 
@@ -987,6 +1020,7 @@ pub fn merge_task_record(existing: &mut TaskRecord, record: TaskRecord) {
         existing.modified_at = record.modified_at.clone();
     }
     existing.parent_gid = existing.parent_gid.clone().or(record.parent_gid.clone());
+    existing.parent_name = existing.parent_name.clone().or(record.parent_name.clone());
     existing.subtask_depth = existing.subtask_depth.max(record.subtask_depth);
     existing.section_order = match (existing.section_order, record.section_order) {
         (Some(left), Some(right)) => Some(left.min(right)),
@@ -995,6 +1029,7 @@ pub fn merge_task_record(existing: &mut TaskRecord, record: TaskRecord) {
         (None, None) => None,
     };
     merge_text_lists(&mut existing.sections, &record.sections);
+    merge_text_lists(&mut existing.section_gids, &record.section_gids);
     merge_text_lists(&mut existing.projects, &record.projects);
     merge_text_lists(&mut existing.project_gids, &record.project_gids);
     existing.natural_order = existing.natural_order.min(record.natural_order);
@@ -1436,10 +1471,41 @@ fn custom_field_value(record: &TaskRecord, gids: &[String]) -> String {
     join_non_empty(&values)
 }
 
+/// What each record hangs off, as `gid -> parent title or gid`.
+///
+/// The title when the parent is one of these records, and the bare gid when
+/// it is not — the same fallback the `Projects` column makes for a project
+/// the session never loaded. Keeping the gid rather than blanking the cell is
+/// what stops a re-parent from looking like a task with no parent at all.
+fn parent_links(records: &[TaskRecord]) -> HashMap<String, String> {
+    let names = records
+        .iter()
+        .map(|record| (record.gid.as_str(), record.name.as_str()))
+        .collect::<HashMap<_, _>>();
+    records
+        .iter()
+        .filter_map(|record| {
+            let parent = record.parent_gid.as_deref()?;
+            // The loaded row first, because it is always current — a title
+            // edited this session is right there. The name the loader carried
+            // in next, for a parent no row holds. The gid only when neither
+            // knows, which means a task the session has never seen at all.
+            let label = names
+                .get(parent)
+                .map(|name| (*name).to_string())
+                .or_else(|| record.parent_name.clone())
+                .map(|name| sanitize_display_text(&name))
+                .unwrap_or_else(|| parent.to_string());
+            Some((record.gid.clone(), label))
+        })
+        .collect()
+}
+
 fn build_rows(
     merged: &[TaskRecord],
     custom_field_columns: &[CustomFieldColumn],
     settings: &TaskTableSettings,
+    parents: &HashMap<String, String>,
 ) -> Vec<TaskRow> {
     let column_count = default_columns().len() + custom_field_columns.len();
     let mut rows = Vec::new();
@@ -1492,6 +1558,7 @@ fn build_rows(
                 "open".to_string()
             },
             join_non_empty(&record.projects),
+            parents.get(&record.gid).cloned().unwrap_or_default(),
         ];
 
         for column in custom_field_columns {
@@ -1653,7 +1720,7 @@ mod tests {
         assert_eq!(model.rows[4].cells[2], ""); // due
         assert_eq!(model.rows[4].cells[4], "done");
         assert_eq!(model.rows[4].cells[5], "Alpha | Beta");
-        assert_eq!(model.rows[4].cells[6], "High | Urgent");
+        assert_eq!(model.rows[4].cells[FIRST_CUSTOM_COLUMN], "High | Urgent");
     }
 
     #[test]
@@ -1688,7 +1755,7 @@ mod tests {
         assert_eq!(model.rows[4].cells[0], "Northwind task");
         assert_eq!(model.rows[4].cells[1], "Morgan Ellis");
         assert_eq!(model.rows[4].cells[5], "Northwind BTX 4412 Ph1 PSG");
-        assert_eq!(model.rows[4].cells[6], "High");
+        assert_eq!(model.rows[4].cells[FIRST_CUSTOM_COLUMN], "High");
     }
 
     #[test]

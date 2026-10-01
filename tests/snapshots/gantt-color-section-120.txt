@@ -37,4 +37,4 @@
 ┃                                                                                                                      ┃
 ┗ █ Shipment  █ Study Kit Design ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 h/l scroll   -/+ zoom   t today   </> columns   c color   ⏎ order   g close   ? help                  r refresh   q quit
- GANTT                                                                               gantt · color section · columns 2/7
+ GANTT                                                                               gantt · color section · columns 2/8

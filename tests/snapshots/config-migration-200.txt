@@ -1,0 +1,40 @@
+ TUISANA  ▸ Northwind BTX 4412
+┏ Projects ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3 shown ┓
+┃▍   ★ Northwind BTX 4412                                                                                                                                                                              ┃
+┃    ★ Platform Infrastructure                                                                                                                                                                         ┃
+┃    ☆ Backlog                                                                                                                                                                                         ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                         ┏ Config format changed ━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                                                                         ┃
+┃                                                                         ┃                                                  ┃                                                                         ┃
+┃                                                                         ┃ tuisana.toml is in the version 1 format. Six     ┃                                                                         ┃
+┃                                                                         ┃ command names and one mode name have been        ┃                                                                         ┃
+┃                                                                         ┃ renamed, and uppercase letters are now distinct  ┃                                                                         ┃
+┃                                                                         ┃ keys.                                            ┃                                                                         ┃
+┃                                                                         ┃                                                  ┃                                                                         ┃
+┃                                                                         ┃ tuisana will rewrite it in the version 2 format. ┃                                                                         ┃
+┃                                                                         ┃ A backup would go to tuisana.backup.toml.        ┃                                                                         ┃
+┃                                                                         ┃                                                  ┃                                                                         ┃
+┃                                                                         ┃ y        back it up first, then migrate          ┃                                                                         ┃
+┃                                                                         ┃ n        migrate without a backup                ┃                                                                         ┃
+┃                                                                         ┃ q / esc  quit and change nothing                 ┃                                                                         ┃
+┃                                                                         ┃                                                  ┃                                                                         ┃
+┃                                                                         ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                                                                         ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+j/k move   ␣ select   t tasks   / search   v show hidden   ? help                                                                                                                     r refresh   q quit
+ PROJECT

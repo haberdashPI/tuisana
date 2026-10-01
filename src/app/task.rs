@@ -26,11 +26,11 @@ use crate::{
     domain::{
         date, distinct_values, group_custom_fields_by_name, merge_task_record,
         parse_custom_value, parse_date_value, resolve_assignee, AssigneeRef, CivilDate,
-        CustomFieldDefinition, CustomFieldKind, CustomValueKind, EnumOption, ProjectEdit,
-        TaskEdit, TaskFieldEdit,
+        CustomFieldDefinition, CustomFieldKind, CustomValueKind, EnumOption, NewTask,
+        ParentEdit, ProjectEdit, TaskEdit, TaskFieldEdit,
         GanttColorKey, Timeline,
-        DateQuery, Project, ProjectKind, TaskRecord, TaskRowKind, TaskTableModel,
-        TaskTableSettings,
+        DateQuery, Project, ProjectKind, Section, TaskRecord, TaskRow, TaskRowKind,
+        TaskTableModel, TaskTableSettings,
     },
     config::{GanttConfig, SavedFilterField, SavedFilterSet},
     error::Result,
@@ -39,6 +39,13 @@ use crate::{
 };
 
 const HORIZONTAL_SCROLL_STEP: usize = 8;
+
+/// The gid a draft row carries until Asana answers with a real one.
+///
+/// Prefixed so it cannot collide with an Asana gid, which is always digits.
+/// One constant rather than a counter, because only one draft is ever open:
+/// a second `i` commits the first.
+const DRAFT_GID: &str = "draft:1";
 
 /// What the logged-in user is called wherever a name is typed.
 ///
@@ -117,6 +124,25 @@ struct TaskViewState {
     pending_column_scroll: bool,
     /// The edit in progress, if any.
     cell_edit: Option<TaskCellEditState>,
+    /// The row that does not exist in Asana yet, if one is open.
+    ///
+    /// Here rather than in the cache, and one at a time: a cache entry for
+    /// something with no gid would have to be special-cased everywhere the
+    /// cache is read, and a second draft while one is open commits the first.
+    draft: Option<Draft>,
+    /// The tasks `x` has marked, waiting for `enter`.
+    ///
+    /// A set rather than a flag on the record: a mark is not something the
+    /// backend knows about, and it has to survive the rebuilds that a
+    /// streaming load triggers between the mark and the confirmation.
+    marked_for_deletion: HashSet<String>,
+    /// The columns the renderer last drew, as a half-open range.
+    ///
+    /// Only the renderer knows the widths, so only the renderer can say what
+    /// is on screen — and §5.1 of milestone 15 inherits a field only when the
+    /// view would have shown it. `None` before the first frame, which reads
+    /// as "assume visible": a caller that never draws has not hidden anything.
+    visible_columns: Option<std::ops::Range<usize>>,
     /// Set once the user has hidden the date picker's month grid.
     ///
     /// Not `calendar_grid_visible`, because the grid is shown by default and a
@@ -181,6 +207,136 @@ struct TaskViewState {
     stale_since: Option<Instant>,
 }
 
+/// A row that does not exist in Asana yet.
+///
+/// `i`, `I`, and `S` all open one: nothing is sent until `enter`, and `esc`
+/// discards it with nothing having happened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Draft {
+    /// The placeholder gid, which no Asana gid can collide with.
+    gid: String,
+    /// The row the draft is drawn directly after, by gid.
+    ///
+    /// Resolved on every rebuild rather than kept as an index: a streaming
+    /// load reorders the table under an open draft.
+    after_gid: Option<String>,
+    kind: DraftKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DraftKind {
+    Task(DraftTask),
+    Section(DraftSection),
+}
+
+/// What a new task will be created with.
+///
+/// Every field is what the view could actually show at the cursor: §5.1's
+/// rule is that a field is inherited when the screen said it, and left blank
+/// when it did not. A blank project is recoverable — the cell is editable —
+/// where a wrong one is a task filed somewhere nobody will look.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DraftTask {
+    /// The target the record is cached under once it exists.
+    ///
+    /// Usually the project gid. For a task that joins no project it is the
+    /// target the cursor was in, so the row stays where it was created rather
+    /// than vanishing on the keystroke that created it.
+    target_gid: String,
+    project_gid: Option<String>,
+    project_name: Option<String>,
+    section_gid: Option<String>,
+    section_name: Option<String>,
+    parent_gid: Option<String>,
+    workspace_gid: Option<String>,
+    /// How deep the row is drawn, so a new sibling lines up with its siblings.
+    depth: usize,
+}
+
+/// What a new section will be created with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DraftSection {
+    project_gid: String,
+    /// The section the new one goes after, as Asana's `insert_after`.
+    insert_after: Option<String>,
+}
+
+/// What a committed draft turns into: one write, in the client's shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DraftCommit {
+    Task(NewTask),
+    Section {
+        project_gid: String,
+        name: String,
+        insert_after: Option<String>,
+    },
+}
+
+/// One task moved from one section to another, with what to put back.
+///
+/// Its own type rather than a [`TaskFieldEdit`] for the reason a membership
+/// change is: section membership is not a field on the task, Asana takes it
+/// through `POST /sections/{gid}/addTask`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SectionMove {
+    pub gid: String,
+    pub section_gid: String,
+    pub section_name: String,
+    pub section_order: Option<usize>,
+    pub previous_gid: Option<String>,
+    pub previous_name: Option<String>,
+    pub previous_order: Option<usize>,
+}
+
+impl SectionMove {
+    /// The move that puts the task back where it was.
+    ///
+    /// `None` when it was in no section at all: there is no "no section"
+    /// endpoint to move it back to, so a failed move out of nowhere is
+    /// reported rather than undone.
+    fn undo(&self) -> Option<Self> {
+        Some(Self {
+            gid: self.gid.clone(),
+            section_gid: self.previous_gid.clone()?,
+            section_name: self.previous_name.clone().unwrap_or_default(),
+            section_order: self.previous_order,
+            previous_gid: Some(self.section_gid.clone()),
+            previous_name: Some(self.section_name.clone()),
+            previous_order: self.section_order,
+        })
+    }
+
+    /// Writes this move onto a record.
+    ///
+    /// The lists are left sorted, as `merge_task_record` leaves them, so a
+    /// record moved locally and one reloaded from Asana compare equal.
+    fn apply(&self, record: &mut TaskRecord) {
+        if let Some(previous) = &self.previous_gid {
+            record.section_gids.retain(|gid| gid != previous);
+        }
+        if let Some(previous) = &self.previous_name {
+            record.sections.retain(|name| name != previous);
+        }
+        if !record.section_gids.contains(&self.section_gid) {
+            record.section_gids.push(self.section_gid.clone());
+            record.section_gids.sort();
+        }
+        if !record.sections.contains(&self.section_name) {
+            record.sections.push(self.section_name.clone());
+            record.sections.sort();
+        }
+        record.section_order = self.section_order;
+    }
+}
+
+/// The section `X` would delete.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SectionTarget {
+    pub project_gid: String,
+    pub section_gid: String,
+    pub section_name: String,
+}
+
 /// Whether a task-data fetch is currently in flight.
 ///
 /// Grouping these fields in an enum ensures that in-flight metadata
@@ -237,6 +393,13 @@ struct TaskLoadingState {
 pub(crate) struct TaskDataset {
     records: Vec<TaskRecord>,
     custom_field_definitions: Vec<CustomFieldDefinition>,
+    /// Each loaded project's sections, in the order the project puts them.
+    ///
+    /// The loader has always built this to resolve a membership's section
+    /// name and then dropped it. Moving a task between sections needs to
+    /// know what the *next* one is, and creating a section needs something
+    /// to insert after, so it survives the fetch now.
+    sections: Vec<(String, Vec<Section>)>,
 }
 
 /// The coarse type of filter supported by the task filter editor.
@@ -449,6 +612,12 @@ struct TaskCache {
     /// to know the field's kind and which project declared it, so the cache
     /// keeps the definition rather than collapsing it to a label.
     custom_field_definitions: HashMap<String, CustomFieldDefinition>,
+    /// Each project's ordered section list, keyed by project gid.
+    ///
+    /// Replaced wholesale per project rather than merged: a reload is the
+    /// authority on what order a project's sections are in, and a section
+    /// deleted in Asana has to be able to disappear.
+    sections_by_project: HashMap<String, Vec<Section>>,
     lru: VecDeque<String>,
 }
 
@@ -464,6 +633,10 @@ impl TaskCache {
             self.custom_field_definitions
                 .entry(definition.gid.clone())
                 .or_insert(definition);
+        }
+
+        for (project_gid, sections) in dataset.sections {
+            self.sections_by_project.insert(project_gid, sections);
         }
     }
 
@@ -3372,6 +3545,7 @@ impl TaskState {
 
         let mut records = Vec::new();
         let mut definitions_by_gid: HashMap<String, CustomFieldDefinition> = HashMap::new();
+        let mut section_lists: Vec<(String, Vec<Section>)> = Vec::new();
         let mut natural_order = 0usize;
 
         for project in projects {
@@ -3389,15 +3563,14 @@ impl TaskState {
                 project.id,
                 sections.len()
             ));
-            let section_map = sections
-                .iter()
-                .map(|section| (section.gid.clone(), section.name.clone()))
-                .collect::<HashMap<_, _>>();
-            let section_order_map = sections
+            let sections = sections
                 .into_iter()
-                .enumerate()
-                .map(|(index, section)| (section.gid, index))
-                .collect::<HashMap<_, _>>();
+                .map(|section| Section::new(section.gid, section.name))
+                .collect::<Vec<_>>();
+            let section_context = SectionContext::new(&sections);
+            if !is_assigned_to_me {
+                section_lists.push((project.id.clone(), sections));
+            }
 
             if !is_assigned_to_me {
                 for setting in client.list_project_custom_field_settings(&project.id)? {
@@ -3434,9 +3607,21 @@ impl TaskState {
                 } else {
                     None
                 };
-                let (target_gid, project_name, inherited_section) = match placement {
-                    Some(placement) => (placement.project_gid, placement.project, placement.section),
-                    None => (project.id.clone(), project.name.clone(), None),
+                let (target_gid, project_name, inherited) = match placement {
+                    Some(placement) => (
+                        placement.project_gid,
+                        placement.project,
+                        InheritedSection {
+                            gid: placement.section_gid,
+                            name: placement.section,
+                            order: None,
+                        },
+                    ),
+                    None => (
+                        project.id.clone(),
+                        project.name.clone(),
+                        InheritedSection::default(),
+                    ),
                 };
 
                 add_task_tree(
@@ -3444,10 +3629,8 @@ impl TaskState {
                     &target_gid,
                     &project_name,
                     query_template.scope,
-                    &section_map,
-                    &section_order_map,
-                    inherited_section,
-                    None,
+                    &section_context,
+                    inherited,
                     None,
                     0,
                     &mut natural_order,
@@ -3463,6 +3646,7 @@ impl TaskState {
         Ok(TaskDataset {
             records,
             custom_field_definitions: definitions,
+            sections: section_lists,
         })
     }
 
@@ -3473,6 +3657,9 @@ impl TaskState {
         self.loading.dataset = Some(TaskDataset {
             records,
             custom_field_definitions,
+            // The cache is the authority on sections; the visible dataset is
+            // rebuilt from it, so there is nothing to carry back the other way.
+            sections: Vec::new(),
         });
         if let Some(dataset) = self.loading.dataset.as_ref() {
             let previous = self.view.filter_editor.clone();
@@ -3979,6 +4166,11 @@ impl TaskState {
                 TaskStatus::Ready
             };
         }
+
+        // Last, after the cursor has been resolved and the status decided: a
+        // draft is not a task the dataset knows about, and it must not count
+        // towards "no tasks here".
+        self.inject_draft();
     }
 
     fn active_target_ids(&self) -> &[String] {
@@ -4263,6 +4455,21 @@ impl TaskState {
                     usize::MAX,
                 ))
             }
+            crate::domain::PARENT_COLUMN => {
+                let held = record
+                    .parent_gid
+                    .iter()
+                    .map(|gid| Candidate::new(gid, self.task_title(gid)))
+                    .collect();
+                // Capped at one: a task hangs off one other task. The cap is
+                // what makes typing a second title a re-parent rather than
+                // an error, exactly as it does on `Assignee`.
+                CellEditor::Complete(AutocompleteState::new(
+                    held,
+                    self.parent_candidates(&record),
+                    1,
+                ))
+            }
             _ => {
                 let definitions = self.definitions_for_column(column, &record);
                 let Some(definition) = definitions.first() else {
@@ -4323,6 +4530,13 @@ impl TaskState {
             return Ok(committed);
         }
 
+        // Nor is the parent: `setParent` is its own endpoint.
+        if edit.column == crate::domain::PARENT_COLUMN {
+            let committed = self.parent_edits_for(&edit)?;
+            self.view.cell_edit = None;
+            return Ok(committed);
+        }
+
         let value = edit.value();
         let directory = self.people_directory(ctx);
         // Resolved once, ahead of the loop: an assignee is resolved against a
@@ -4354,7 +4568,7 @@ impl TaskState {
         self.view.cell_edit = None;
         Ok(CommittedEdits {
             fields: edits,
-            projects: Vec::new(),
+            ..CommittedEdits::default()
         })
     }
 
@@ -4439,8 +4653,8 @@ impl TaskState {
         }
 
         Ok(CommittedEdits {
-            fields: Vec::new(),
             projects,
+            ..CommittedEdits::default()
         })
     }
 
@@ -4474,6 +4688,9 @@ impl TaskState {
             crate::domain::STATE_COLUMN => Ok(TaskFieldEdit::Completed(value == "done")),
             crate::domain::PROJECTS_COLUMN => {
                 Err("project membership is not a task field".to_string())
+            }
+            crate::domain::PARENT_COLUMN => {
+                Err("a task's parent is not a task field".to_string())
             }
             column => {
                 // Resolved per task, not once: two projects declare the same
@@ -4773,6 +4990,46 @@ impl TaskState {
         Some((label, state))
     }
 
+    /// What the open completion editor is offering, in offer order.
+    ///
+    /// The display names only: the handles are the editor's business, and a
+    /// test asking "what does the picker put first" is asking about the list
+    /// the reader sees.
+    pub fn open_completion_candidates(&self) -> Vec<&str> {
+        self.open_completion()
+            .map(|(_, complete)| {
+                complete
+                    .matches()
+                    .into_iter()
+                    .map(|candidate| candidate.display.as_str())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Whether a candidate overlay is on screen, in either pane.
+    ///
+    /// The one question `ctrl-n` turns on: with an overlay up it walks the
+    /// candidates, with none it negates the filter row it always negated.
+    pub fn completion_overlay_open(&self) -> bool {
+        self.open_completion().is_some()
+    }
+
+    /// Moves the highlight through whichever candidate list is open.
+    ///
+    /// Answers whether there was anything to walk, so a key that did nothing
+    /// can say why — the same contract `cell_edit_complete` has.
+    pub fn move_completion_highlight(&mut self, delta: i32) -> bool {
+        if let Some(complete) = self.view.cell_edit.as_mut().and_then(|edit| edit.complete_mut()) {
+            return complete.move_highlight(delta);
+        }
+        self.view
+            .filter_editor
+            .autocomplete
+            .as_mut()
+            .is_some_and(|complete| complete.move_highlight(delta))
+    }
+
     pub fn cell_edit_move_word(&mut self, delta: i64) {
         if let Some(text) = self.view.cell_edit.as_mut().and_then(|edit| edit.text_mut()) {
             text.move_word(delta);
@@ -4816,6 +5073,947 @@ impl TaskState {
         if let Some(edit) = self.view.cell_edit.as_mut() {
             edit.cycle_option(delta);
         }
+    }
+}
+
+/// Edit mode: the keys that change which rows exist.
+///
+/// Everything here either creates a row, destroys one, or moves one between
+/// groups. The field edits above change what a row *says*; these change what
+/// the table *contains*, which is why they have a mode of their own and why
+/// none of them goes through the pending-edit channel: the rollback is a
+/// different operation on each.
+impl TaskState {
+    /// Records which columns the renderer last drew.
+    ///
+    /// Follows `ensure_column_visible` and `set_cell_edit_window`: the widths
+    /// are only known at draw time, and §5.1's inheritance rule turns on
+    /// whether the view actually showed a field.
+    pub fn set_visible_columns(&mut self, columns: std::ops::Range<usize>) {
+        self.view.visible_columns = Some(columns);
+    }
+
+    /// Whether the view is currently showing this column.
+    ///
+    /// `true` before the first frame: a caller that has not drawn anything
+    /// has not hidden anything either.
+    fn column_visible(&self, column: usize) -> bool {
+        self.view
+            .visible_columns
+            .as_ref()
+            .is_none_or(|columns| columns.contains(&column))
+    }
+
+    /// The draft row's gid, while one is open.
+    pub fn draft_gid(&self) -> Option<&str> {
+        self.view.draft.as_ref().map(|draft| draft.gid.as_str())
+    }
+
+    /// Whether the open draft is a section rather than a task.
+    pub fn draft_is_section(&self) -> bool {
+        matches!(
+            self.view.draft.as_ref().map(|draft| &draft.kind),
+            Some(DraftKind::Section(_))
+        )
+    }
+
+    /// Opens a draft task beside the cursor row, or as a subtask of it.
+    ///
+    /// Nothing is sent: the draft is a local row with the `Task` cell already
+    /// open, so `i` costs one keystroke before typing. A second `i` while one
+    /// is open is handled by the caller, which commits the first.
+    pub fn begin_draft_task(
+        &mut self,
+        as_subtask: bool,
+        ctx: &EditContext,
+    ) -> std::result::Result<(), String> {
+        self.view.edit_notice = None;
+
+        let Some(gid) = self.cursor_task_gid() else {
+            return Err("no task under the cursor".to_string());
+        };
+        let Some(record) = self.record(&gid).cloned() else {
+            return Err("no task under the cursor".to_string());
+        };
+
+        let grouped_project = self.cursor_project(&record, ctx);
+        // §5.1: the project is inherited when the screen said it — a project
+        // heading above the row, or the `Projects` column on screen. With
+        // neither, filing the task there would be a guess the user cannot
+        // see being made.
+        let project_named = self.view.settings.sort.group_by_project
+            || self.column_visible(crate::domain::PROJECTS_COLUMN);
+        let project = project_named.then_some(grouped_project.clone()).flatten();
+
+        let parent = match as_subtask {
+            // `I`: the cursor row itself.
+            true => Some(gid.clone()),
+            // `i`: a new task beside a subtask is a sibling subtask.
+            false => record.parent_gid.clone(),
+        };
+
+        // A subtask belongs to its parent, not to a section — whether it got
+        // its parent from `I` or from standing beside another subtask. For a
+        // top-level task the section is inherited on the same terms as the
+        // project, which for a section means the grouping: nothing else on
+        // screen names one.
+        let section = match parent.is_some() || !self.view.settings.sort.group_by_section {
+            true => None,
+            false => record
+                .section_gids
+                .first()
+                .cloned()
+                .zip(record.sections.first().cloned()),
+        };
+
+        let workspace = ctx.workspace_gid.clone();
+        if project.is_none() && parent.is_none() && workspace.is_none() {
+            return Err(
+                "a task outside every project needs a workspace, and none is loaded".to_string(),
+            );
+        }
+
+        let target_gid = project
+            .as_ref()
+            .map(|(gid, _)| gid.clone())
+            .or_else(|| grouped_project.as_ref().map(|(gid, _)| gid.clone()))
+            .or_else(|| record.project_gids.first().cloned())
+            .unwrap_or_else(|| gid.clone());
+
+        let depth = match as_subtask {
+            true => self.cursor_depth().saturating_add(1),
+            false => self.cursor_depth(),
+        };
+
+        self.open_draft(
+            Draft {
+                gid: DRAFT_GID.to_string(),
+                after_gid: Some(gid),
+                kind: DraftKind::Task(DraftTask {
+                    target_gid,
+                    project_gid: project.as_ref().map(|(gid, _)| gid.clone()),
+                    project_name: project.as_ref().map(|(_, name)| name.clone()),
+                    section_gid: section.as_ref().map(|(gid, _)| gid.clone()),
+                    section_name: section.as_ref().map(|(_, name)| name.clone()),
+                    parent_gid: parent,
+                    workspace_gid: workspace,
+                    depth,
+                }),
+            },
+            String::new(),
+        );
+        Ok(())
+    }
+
+    /// Opens a draft section after the one the cursor is in.
+    ///
+    /// Reuses the cell editor, so there is no new text-entry mode and no new
+    /// keys to learn: `enter` creates it, `esc` throws it away.
+    pub fn begin_draft_section(
+        &mut self,
+        ctx: &EditContext,
+    ) -> std::result::Result<(), String> {
+        self.view.edit_notice = None;
+
+        let Some(gid) = self.cursor_task_gid() else {
+            return Err("no task under the cursor".to_string());
+        };
+        let Some(record) = self.record(&gid).cloned() else {
+            return Err("no task under the cursor".to_string());
+        };
+        let Some((project_gid, _)) = self.cursor_project(&record, ctx) else {
+            return Err("no project for this row, so nowhere to add a section".to_string());
+        };
+
+        // The cursor's own section, which is what the new one goes after.
+        // `None` is legal: a project with no sections yet takes the new one
+        // at the top.
+        let insert_after = record
+            .section_gids
+            .iter()
+            .find(|section| {
+                self.sections_for(&project_gid)
+                    .iter()
+                    .any(|known| &known.gid == *section)
+            })
+            .cloned();
+
+        // After the last row of that section, so the heading lands where a
+        // reader would put it rather than in the middle of a group.
+        let after_gid = self.last_row_of_section(insert_after.as_deref(), &record);
+
+        self.open_draft(
+            Draft {
+                gid: DRAFT_GID.to_string(),
+                after_gid,
+                kind: DraftKind::Section(DraftSection {
+                    project_gid,
+                    insert_after,
+                }),
+            },
+            String::new(),
+        );
+        Ok(())
+    }
+
+    /// Puts a draft on screen with the `Task` cell open on it.
+    fn open_draft(&mut self, draft: Draft, text: String) {
+        let gid = draft.gid.clone();
+        self.view.draft = Some(draft);
+        self.view.cell_edit = Some(TaskCellEditState::new(
+            crate::domain::TITLE_COLUMN,
+            vec![gid],
+            CellEditor::Text(TextEdit::new(text)),
+        ));
+        // The cell being typed into has to be on screen, and `i` can be
+        // pressed with the column cursor anywhere.
+        self.view.selected_column = crate::domain::TITLE_COLUMN;
+        self.view.pending_column_scroll = true;
+        self.refresh_table();
+    }
+
+    /// What the open draft would create, or `None` when there is nothing to
+    /// send.
+    ///
+    /// An empty name is `None`: `enter` on an untitled draft discards it, the
+    /// same as `esc`, because nothing was sent and there is nothing to undo.
+    pub fn draft_commit(&self) -> Option<DraftCommit> {
+        let draft = self.view.draft.as_ref()?;
+        let name = self
+            .view
+            .cell_edit
+            .as_ref()
+            .map(|edit| edit.value())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            return None;
+        }
+
+        Some(match &draft.kind {
+            DraftKind::Task(task) => DraftCommit::Task(NewTask {
+                name,
+                parent_gid: task.parent_gid.clone(),
+                // A subtask belongs to its parent, and to nothing else.
+                // Sending `projects` as well would make it a *direct member*
+                // of the project, which Asana files in that project's first
+                // section — so the new subtask would turn up as a top-level
+                // row under some arbitrary heading, which is exactly what it
+                // is not. The project is still kept on the
+                // draft: it is where the record is cached, so the new row
+                // stays in view beside the parent it was created under.
+                project_gid: match task.parent_gid.is_some() {
+                    true => None,
+                    false => task.project_gid.clone(),
+                },
+                workspace_gid: task.workspace_gid.clone(),
+                section_gid: task.section_gid.clone(),
+            }),
+            DraftKind::Section(section) => DraftCommit::Section {
+                project_gid: section.project_gid.clone(),
+                name,
+                insert_after: section.insert_after.clone(),
+            },
+        })
+    }
+
+    /// Throws the open draft away. Nothing was sent, so nothing is undone.
+    pub fn cancel_draft(&mut self) {
+        if self.view.draft.take().is_some() {
+            self.view.cell_edit = None;
+            self.refresh_table();
+        }
+    }
+
+    /// Replaces the draft with the task Asana answered with.
+    ///
+    /// The record is built by the same code path as any fetched task, so a
+    /// created row carries everything a loaded one does — and the cursor
+    /// follows it to its real gid.
+    pub fn finish_draft_task(&mut self, task: TaskDto) {
+        let Some(Draft {
+            kind: DraftKind::Task(draft),
+            ..
+        }) = self.view.draft.take()
+        else {
+            return;
+        };
+        self.view.cell_edit = None;
+
+        let gid = task.gid.clone();
+        let sections = SectionContext::new(self.sections_for(&draft.target_gid));
+        let (record, _) = record_from_dto(
+            &draft.target_gid,
+            draft.project_name.as_deref().unwrap_or_default(),
+            &sections,
+            InheritedSection {
+                gid: draft.section_gid,
+                name: draft.section_name,
+                order: None,
+            },
+            // The draft knew its parent's gid; the title comes from the row
+            // it was created beside, which is the row it is a subtask of.
+            draft
+                .parent_gid
+                .map(|gid| (gid.clone(), self.task_title(&gid))),
+            draft.depth,
+            // Last among its siblings, which is where Asana put it.
+            usize::MAX - 1,
+            task,
+        );
+
+        self.loading.cache.upsert_record(record);
+        self.remember_edited(&gid);
+        self.rebuild_visible_dataset();
+        self.view.selected = self
+            .view
+            .table
+            .rows
+            .iter()
+            .position(|row| row.gid == gid)
+            .or(self.view.selected);
+    }
+
+    /// Records a created section, so the next `S` and `J` can see it.
+    pub fn finish_draft_section(&mut self, section: Section) {
+        let Some(Draft {
+            kind: DraftKind::Section(draft),
+            ..
+        }) = self.view.draft.take()
+        else {
+            return;
+        };
+        self.view.cell_edit = None;
+
+        let sections = self
+            .loading
+            .cache
+            .sections_by_project
+            .entry(draft.project_gid)
+            .or_default();
+        let at = draft
+            .insert_after
+            .as_deref()
+            .and_then(|after| sections.iter().position(|known| known.gid == after))
+            .map_or(0, |index| index + 1);
+        sections.insert(at, section);
+        self.rebuild_visible_dataset();
+    }
+
+    /// The section `X` would delete, or why there is none to delete.
+    ///
+    /// Deliberately **not** the section the cursor row is in. Asana deletes a
+    /// section only when it holds no tasks, and a section that holds no tasks
+    /// has no row for the cursor to stand on — the table draws a heading only
+    /// where there is something under it. A key that read the cursor row's own
+    /// section could therefore only ever refuse.
+    ///
+    /// So `X` takes the cursor row's *project* and deletes the first section
+    /// of it that is empty, in the order the project puts them. That is how
+    /// you undo an `S` you did not mean; repeating it clears them one at a
+    /// time, and the notice names the one that went. A populated section is
+    /// never sent, which is the point — Asana's own refusal is a worse error
+    /// than saying so here.
+    pub fn section_to_delete(
+        &self,
+        ctx: &EditContext,
+    ) -> std::result::Result<SectionTarget, String> {
+        let Some(gid) = self.cursor_task_gid() else {
+            return Err("no task under the cursor".to_string());
+        };
+        let Some(record) = self.record(&gid) else {
+            return Err("no task under the cursor".to_string());
+        };
+        let Some((project_gid, project_name)) = self.cursor_project(record, ctx) else {
+            return Err("no project for this row, so no section to delete".to_string());
+        };
+
+        let sections = self.sections_for(&project_gid);
+        if sections.is_empty() {
+            return Err(format!("{project_name} has no sections"));
+        }
+
+        sections
+            .iter()
+            .find(|section| {
+                !self
+                    .loading
+                    .cache
+                    .records
+                    .values()
+                    .any(|record| record.section_gids.contains(&section.gid))
+            })
+            .map(|section| SectionTarget {
+                project_gid: project_gid.clone(),
+                section_gid: section.gid.clone(),
+                section_name: section.name.clone(),
+            })
+            .ok_or_else(|| {
+                format!("every section in {project_name} still holds tasks, so none can be deleted")
+            })
+    }
+
+    /// Forgets a deleted section, and the rows' membership of it.
+    pub fn remove_section_locally(&mut self, target: &SectionTarget) {
+        if let Some(sections) = self
+            .loading
+            .cache
+            .sections_by_project
+            .get_mut(&target.project_gid)
+        {
+            sections.retain(|section| section.gid != target.section_gid);
+        }
+        for record in self.loading.cache.records.values_mut() {
+            record.section_gids.retain(|gid| gid != &target.section_gid);
+            record.sections.retain(|name| name != &target.section_name);
+        }
+        self.rebuild_visible_dataset();
+    }
+
+    /// The move `J` or `K` would make, or why it cannot be made.
+    ///
+    /// Section membership is per project, so the project the cursor row is
+    /// *grouped under* is the one it moves within. With grouping off and a
+    /// task in several projects there is no such project, and the move is
+    /// refused rather than guessed.
+    pub fn section_move(
+        &self,
+        delta: i32,
+        ctx: &EditContext,
+    ) -> std::result::Result<Option<SectionMove>, String> {
+        let Some(gid) = self.cursor_task_gid() else {
+            return Err("no task under the cursor".to_string());
+        };
+        let Some(record) = self.record(&gid) else {
+            return Err("no task under the cursor".to_string());
+        };
+        if record.is_subtask() {
+            return Err("a subtask belongs to its parent, not to a section".to_string());
+        }
+        let Some((project_gid, _)) = self.cursor_project(record, ctx) else {
+            return Err("this task is in several projects, so which section is ambiguous".to_string());
+        };
+
+        let sections = self.sections_for(&project_gid).to_vec();
+        if sections.len() < 2 {
+            return Err(format!(
+                "{} has {} section{}, so there is nowhere to move to",
+                ctx.project_name(&project_gid),
+                sections.len(),
+                if sections.len() == 1 { "" } else { "s" },
+            ));
+        }
+
+        let current = sections
+            .iter()
+            .position(|section| record.section_gids.contains(&section.gid));
+        // Off the end in either direction does nothing: there is no "no
+        // section" position below the last one for a task to move into.
+        let next = match current {
+            Some(current) => usize::try_from(current as i64 + delta as i64)
+                .ok()
+                .filter(|next| *next < sections.len()),
+            // A task in no section joins at the end going forward and the
+            // start going back, which is the first section either key can
+            // reach.
+            None => Some(match delta >= 0 {
+                true => 0,
+                false => sections.len() - 1,
+            }),
+        };
+        let Some(next) = next else {
+            return Ok(None);
+        };
+
+        let previous = current.and_then(|index| sections.get(index));
+        Ok(Some(SectionMove {
+            gid,
+            section_gid: sections[next].gid.clone(),
+            section_name: sections[next].name.clone(),
+            section_order: Some(next),
+            previous_gid: previous.map(|section| section.gid.clone()),
+            previous_name: previous.map(|section| section.name.clone()),
+            previous_order: current,
+        }))
+    }
+
+    /// Writes a section move onto the record, so the row jumps on the key.
+    pub fn apply_section_move_locally(&mut self, moved: &SectionMove) {
+        self.remember_edited(&moved.gid);
+        if let Some(record) = self.loading.cache.records.get_mut(&moved.gid) {
+            moved.apply(record);
+        }
+        self.rebuild_visible_dataset();
+    }
+
+    /// Puts a failed section move back, when there is anywhere to put it.
+    pub fn undo_section_move_locally(&mut self, moved: &SectionMove) {
+        if let Some(undo) = moved.undo() {
+            self.apply_section_move_locally(&undo);
+        }
+    }
+
+    // --- deletion marks ---------------------------------------------------
+
+    /// `x`: marks the cursor row, or the whole selection, for deletion.
+    ///
+    /// Pressing it again on something already marked unmarks it. "An edit is
+    /// an edit of everything selected" is the rule everywhere else, and
+    /// deletion is not where to make an exception.
+    pub fn toggle_deletion_marks(&mut self) {
+        self.view.edit_notice = None;
+        let targets = self.edit_targets();
+        if targets.is_empty() {
+            return;
+        }
+        let marked = targets
+            .iter()
+            .all(|gid| self.view.marked_for_deletion.contains(gid));
+        for gid in targets {
+            match marked {
+                true => self.view.marked_for_deletion.remove(&gid),
+                false => self.view.marked_for_deletion.insert(gid),
+            };
+        }
+    }
+
+    /// How many tasks `enter` would delete.
+    ///
+    /// The explicit marks, not their subtasks: that is how many requests go
+    /// out, and the strike-through is what shows the rest are going too.
+    pub fn marked_for_deletion_count(&self) -> usize {
+        self.view.marked_for_deletion.len()
+    }
+
+    /// Whether this row is drawn as going.
+    ///
+    /// True for a marked task and for every loaded descendant of one: Asana
+    /// deletes a parent's subtasks server-side, and a confirmation that did
+    /// not show that would be a confirmation of the wrong thing.
+    pub fn is_marked_for_deletion(&self, gid: &str) -> bool {
+        if self.view.marked_for_deletion.is_empty() {
+            return false;
+        }
+        let mut current = Some(gid.to_string());
+        // The same hop limit the ancestor walk uses: a parent cycle the API
+        // should never have sent must not spin here either.
+        for _ in 0..AncestorPlacements::MAX_HOPS {
+            let Some(gid) = current else {
+                return false;
+            };
+            if self.view.marked_for_deletion.contains(&gid) {
+                return true;
+            }
+            current = self.record(&gid).and_then(|record| record.parent_gid.clone());
+        }
+        false
+    }
+
+    /// The marked tasks, in reading order, so the requests follow it too.
+    ///
+    /// Both lists, like [`TaskState::edit_targets`]: a task marked before a
+    /// filter pushed it out of the table is still marked, and the
+    /// recently-edited pane is where it is now. Anything neither list holds
+    /// is appended rather than dropped — a mark that quietly failed to delete
+    /// would be the worst outcome this key has.
+    pub fn marked_for_deletion(&self) -> Vec<String> {
+        let mut marked = self
+            .view
+            .recent_table
+            .rows
+            .iter()
+            .chain(self.view.table.rows.iter())
+            .filter(|row| row.kind.is_task() && self.view.marked_for_deletion.contains(&row.gid))
+            .map(|row| row.gid.clone())
+            .collect::<Vec<_>>();
+        marked.dedup();
+
+        let mut rest = self
+            .view
+            .marked_for_deletion
+            .iter()
+            .filter(|gid| !marked.contains(gid))
+            .cloned()
+            .collect::<Vec<_>>();
+        // The set has no order of its own, so without this the tail would
+        // come out differently run to run.
+        rest.sort();
+        marked.extend(rest);
+        marked
+    }
+
+    /// `esc`: drops the marks, answering whether there were any.
+    ///
+    /// The answer is what lets one key mean "back out of whatever is
+    /// pending": with no marks, `esc` leaves the mode instead.
+    pub fn clear_deletion_marks(&mut self) -> bool {
+        let had = !self.view.marked_for_deletion.is_empty();
+        self.view.marked_for_deletion.clear();
+        had
+    }
+
+    /// Takes rows out of the cache and the table, answering what it took.
+    ///
+    /// Each marked task takes its loaded descendants with it, because Asana
+    /// does. The records come back whole so a failed request can put them
+    /// back.
+    pub fn remove_tasks_locally(&mut self, gids: &[String]) -> Vec<TaskRecord> {
+        if gids.is_empty() {
+            return Vec::new();
+        }
+        // Where the first row was, so the cursor lands there rather than
+        // wherever the rebuild's fallback would leave it.
+        let landing = self
+            .view
+            .table
+            .rows
+            .iter()
+            .position(|row| gids.contains(&row.gid));
+
+        let mut going = self
+            .loading
+            .cache
+            .records
+            .values()
+            .filter(|record| self.is_marked_for_deletion(&record.gid))
+            .map(|record| (record.natural_order, record.gid.clone()))
+            .collect::<Vec<_>>();
+        // The cache is a `HashMap`, so without this the records handed back
+        // for a rollback would be in a different order every run.
+        going.sort();
+        let going = going.into_iter().map(|(_, gid)| gid).collect::<Vec<_>>();
+        let removed = going
+            .iter()
+            .filter_map(|gid| self.loading.cache.records.remove(gid))
+            .collect::<Vec<_>>();
+        for gid in &going {
+            self.view.marked_for_deletion.remove(gid);
+            self.view.selected_task_ids.remove(gid);
+            self.view.recently_edited.retain(|held| held != gid);
+        }
+
+        self.rebuild_visible_dataset();
+        if let Some(landing) = landing {
+            self.view.selected = self
+                .view
+                .table
+                .selectable_row_indices()
+                .into_iter()
+                .rev()
+                .find(|index| *index <= landing)
+                .or_else(|| self.view.table.first_selectable_row_index())
+                .or(self.view.selected);
+        }
+        removed
+    }
+
+    /// Puts rows a failed delete took out back where they were.
+    pub fn restore_tasks_locally(&mut self, records: Vec<TaskRecord>) {
+        if records.is_empty() {
+            return;
+        }
+        for record in records {
+            self.loading.cache.upsert_record(record);
+        }
+        self.rebuild_visible_dataset();
+    }
+
+    // --- the Parent column ------------------------------------------------
+
+    /// Every task the `Parent` cell can be set to, best first.
+    ///
+    /// Banded: the cursor task's own section, then its project, then
+    /// everything else, and within each band in the table's order so the
+    /// list reads like the screen. Typing re-ranks by fuzzy score and the
+    /// banding becomes the tie-break — with nothing typed it is the whole
+    /// order, which is the case that matters, because the parent you want is
+    /// nearly always a few rows up.
+    pub(crate) fn parent_candidates(&self, record: &TaskRecord) -> Vec<Candidate> {
+        let excluded = self.descendants_of(&record.gid);
+        let mut bands: [Vec<Candidate>; 3] = Default::default();
+
+        for row in self.view.table.rows.iter().filter(|row| row.kind.is_task()) {
+            if row.gid == record.gid
+                || excluded.contains(&row.gid)
+                || self.draft_gid() == Some(row.gid.as_str())
+            {
+                continue;
+            }
+            let Some(other) = self.record(&row.gid) else {
+                continue;
+            };
+            let band = if other
+                .section_gids
+                .iter()
+                .any(|gid| record.section_gids.contains(gid))
+            {
+                0
+            } else if other
+                .project_gids
+                .iter()
+                .any(|gid| record.project_gids.contains(gid))
+            {
+                1
+            } else {
+                2
+            };
+            bands[band].push(Candidate::new(&other.gid, &other.name));
+        }
+
+        bands.into_iter().flatten().collect()
+    }
+
+    /// Every loaded task below `gid` in the tree.
+    ///
+    /// A parent picker that offered one of them would be offering a cycle,
+    /// which Asana rejects anyway — but a refusal from the API is a worse
+    /// answer than a list that never had it.
+    fn descendants_of(&self, gid: &str) -> HashSet<String> {
+        let mut found = HashSet::new();
+        let mut frontier = vec![gid.to_string()];
+        while let Some(current) = frontier.pop() {
+            let children = self
+                .loading
+                .cache
+                .records
+                .values()
+                .filter(|record| record.parent_gid.as_deref() == Some(current.as_str()))
+                .map(|record| record.gid.clone())
+                .collect::<Vec<_>>();
+            for child in children {
+                if found.insert(child.clone()) {
+                    frontier.push(child);
+                }
+            }
+        }
+        found
+    }
+
+    /// The title a task goes by, or its gid when the session never loaded it.
+    fn task_title(&self, gid: &str) -> String {
+        self.record(gid)
+            .map(|record| record.name.clone())
+            .unwrap_or_else(|| gid.to_string())
+    }
+
+    /// Resolves the `Parent` editor into the re-parentings to send.
+    ///
+    /// A bulk re-parent is allowed: unlike a title, "these five are subtasks
+    /// of that one" is a sentence someone means.
+    fn parent_edits_for(
+        &self,
+        edit: &TaskCellEditState,
+    ) -> std::result::Result<CommittedEdits, String> {
+        let Some(complete) = edit.complete().cloned() else {
+            return Ok(CommittedEdits::default());
+        };
+        let items = complete.commit().map_err(|unresolved| match unresolved {
+            Unresolved::Ambiguous(text) => format!("{text} is ambiguous"),
+            Unresolved::Unknown(text) => format!("no task called {text} is loaded"),
+        })?;
+        let parent = items.first();
+
+        let mut parents = Vec::new();
+        for gid in &edit.targets {
+            let Some(record) = self.record(gid) else {
+                continue;
+            };
+            if parent.map(|item| item.handle.as_str()) == record.parent_gid.as_deref() {
+                continue;
+            }
+            // A task cannot be its own parent, and the editor opened on one
+            // row's candidates — a bulk edit can name a row in the set.
+            if parent.is_some_and(|item| &item.handle == gid) {
+                continue;
+            }
+            parents.push(ParentEdit {
+                gid: gid.clone(),
+                parent_gid: parent.map(|item| item.handle.clone()),
+                parent_name: parent.map(|item| item.display.clone()),
+                previous_name: record
+                    .parent_gid
+                    .as_deref()
+                    .map(|parent| self.task_title(parent)),
+                previous_gid: record.parent_gid.clone(),
+            });
+        }
+
+        Ok(CommittedEdits {
+            parents,
+            ..CommittedEdits::default()
+        })
+    }
+
+    /// Applies re-parentings locally, then rebuilds so the limb moves.
+    ///
+    /// Written straight onto the record rather than merged:
+    /// `merge_task_record` keeps whichever parent it already had, so a
+    /// promotion to top level would be a silent no-op through that path.
+    pub fn apply_parent_edits_locally(&mut self, edits: &[ParentEdit]) {
+        if edits.is_empty() {
+            return;
+        }
+        for edit in edits {
+            self.remember_edited(&edit.gid);
+            if let Some(record) = self.loading.cache.records.get_mut(&edit.gid) {
+                edit.apply(record);
+            }
+        }
+        self.rebuild_visible_dataset();
+    }
+
+    // --- shared lookups --------------------------------------------------
+
+    /// The project a row belongs to for the purpose of a structural edit.
+    ///
+    /// The one it is *grouped under* when grouping is on, which is the one
+    /// the screen is showing it in. With grouping off a task in exactly one
+    /// project still has an unambiguous answer; one in several does not.
+    fn cursor_project(
+        &self,
+        record: &TaskRecord,
+        ctx: &EditContext,
+    ) -> Option<(String, String)> {
+        if self.view.settings.sort.group_by_project {
+            // The row's group label is a project *name*; the gid is what a
+            // write needs, and the two lists on a record are sorted
+            // independently so they cannot be zipped.
+            let label = self
+                .view
+                .table
+                .rows
+                .iter()
+                .find(|row| row.gid == record.gid)
+                .and_then(|row| row.project.clone())
+                .or_else(|| record.projects.first().cloned());
+            if let Some(label) = label {
+                if let Some(gid) = record
+                    .project_gids
+                    .iter()
+                    .find(|gid| ctx.project_name(gid) == label)
+                {
+                    return Some((gid.clone(), label));
+                }
+            }
+        }
+
+        match record.project_gids.as_slice() {
+            [gid] => Some((gid.clone(), ctx.project_name(gid))),
+            _ => None,
+        }
+    }
+
+    /// The project's sections, in the order the project puts them.
+    fn sections_for(&self, project_gid: &str) -> &[Section] {
+        self.loading
+            .cache
+            .sections_by_project
+            .get(project_gid)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    /// How deeply the cursor row is nested, for drawing a draft beside it.
+    fn cursor_depth(&self) -> usize {
+        match self.view.recent_selected {
+            Some(index) => self.view.recent_table.rows.get(index),
+            None => self
+                .view
+                .selected
+                .and_then(|index| self.view.table.rows.get(index)),
+        }
+        .map_or(0, |row| row.subtask_depth)
+    }
+
+    /// The last table row belonging to a section, so a new heading lands
+    /// after the group rather than inside it.
+    fn last_row_of_section(
+        &self,
+        section_gid: Option<&str>,
+        record: &TaskRecord,
+    ) -> Option<String> {
+        let name = section_gid.and_then(|gid| {
+            record
+                .section_gids
+                .iter()
+                .position(|held| held == gid)
+                .and_then(|index| record.sections.get(index))
+                .cloned()
+        });
+        let name = name.or_else(|| record.sections.first().cloned());
+
+        let name = name.unwrap_or_default();
+        self.view
+            .table
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .rfind(|row| row.section.clone().unwrap_or_default() == name)
+            .map(|row| row.gid.clone())
+            .or_else(|| Some(record.gid.clone()))
+    }
+
+    /// Injects the open draft into the table, directly after its neighbour.
+    ///
+    /// Exempt from the filters, deliberately: a draft with no title cannot
+    /// match a `Title` filter, and a task that vanishes the instant you
+    /// create it is not a feature.
+    fn inject_draft(&mut self) {
+        let Some(draft) = self.view.draft.clone() else {
+            return;
+        };
+        let columns = self.view.table.columns.len();
+        let name = self
+            .view
+            .cell_edit
+            .as_ref()
+            .map(|edit| edit.value())
+            .unwrap_or_default();
+
+        let row = match &draft.kind {
+            DraftKind::Task(task) => {
+                let mut cells = vec![String::new(); columns];
+                if let Some(cell) = cells.get_mut(crate::domain::TITLE_COLUMN) {
+                    *cell = name;
+                }
+                if let Some(cell) = cells.get_mut(crate::domain::STATE_COLUMN) {
+                    *cell = "open".to_string();
+                }
+                if let Some(cell) = cells.get_mut(crate::domain::PROJECTS_COLUMN) {
+                    *cell = task.project_name.clone().unwrap_or_default();
+                }
+                if let Some(cell) = cells.get_mut(crate::domain::PARENT_COLUMN) {
+                    *cell = task
+                        .parent_gid
+                        .as_deref()
+                        .map(|gid| self.task_title(gid))
+                        .unwrap_or_default();
+                }
+                let mut row = TaskRow::task(draft.gid.clone(), cells);
+                row.project = task.project_name.clone();
+                row.section = task.section_name.clone();
+                row.subtask_depth = task.depth;
+                row
+            }
+            DraftKind::Section(_) => {
+                let mut row = TaskRow::section_header(name, columns);
+                row.gid = draft.gid.clone();
+                row
+            }
+        };
+
+        let at = draft
+            .after_gid
+            .as_deref()
+            .and_then(|gid| self.view.table.rows.iter().position(|row| row.gid == gid))
+            .map_or(self.view.table.rows.len(), |index| index + 1);
+        self.view.table.rows.insert(at, row);
+        // The cursor goes to the draft whatever the rebuild decided: a draft
+        // section's row is not selectable, so the usual resolution by gid
+        // cannot find it.
+        self.view.selected = Some(at);
+        self.view.recent_selected = None;
     }
 }
 
@@ -4998,6 +6196,50 @@ fn prefer_selected_projects(records: &mut [TaskRecord], selected: &[String]) {
     }
 }
 
+/// One project's sections, in the two shapes the loader reads them in.
+///
+/// A struct rather than two maps threaded through every recursive call: the
+/// loader needs the name to display and the position to sort by, and they are
+/// read together or not at all.
+#[derive(Debug, Default)]
+struct SectionContext {
+    names: HashMap<String, String>,
+    order: HashMap<String, usize>,
+}
+
+impl SectionContext {
+    fn new(sections: &[Section]) -> Self {
+        Self {
+            names: sections
+                .iter()
+                .map(|section| (section.gid.clone(), section.name.clone()))
+                .collect(),
+            order: sections
+                .iter()
+                .enumerate()
+                .map(|(index, section)| (section.gid.clone(), index))
+                .collect(),
+        }
+    }
+}
+
+/// The section a task has been placed in, as far as the loader knows.
+///
+/// Inherited by a subtask from its parent, which is what keeps a subtask
+/// under the same section heading as the task it hangs off.
+#[derive(Clone, Debug, Default)]
+struct InheritedSection {
+    gid: Option<String>,
+    name: Option<String>,
+    order: Option<usize>,
+}
+
+impl InheritedSection {
+    fn is_resolved(&self) -> bool {
+        self.gid.is_some() && self.name.is_some() && self.order.is_some()
+    }
+}
+
 /// Where a task belongs in the project/section hierarchy, as resolved from the
 /// task's own project membership or from the nearest ancestor that has one.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -5005,6 +6247,8 @@ struct TaskPlacement {
     project_gid: String,
     project: String,
     section: Option<String>,
+    /// The gid of that section, which is what every section write names.
+    section_gid: Option<String>,
 }
 
 /// Resolves the project a task fetched by assignee belongs to.
@@ -5086,8 +6330,124 @@ fn membership_placement(task: &TaskDto) -> Option<TaskPlacement> {
                 .as_ref()
                 .map(|section| section.name.clone())
                 .filter(|section| !section.trim().is_empty()),
+            section_gid: membership
+                .section
+                .as_ref()
+                .map(|section| section.gid.clone())
+                .filter(|gid| !gid.trim().is_empty()),
         })
     })
+}
+
+/// Turns one task payload into a record, answering the section it landed in.
+///
+/// Positional and long, like [`add_task_tree`] below it, because every
+/// argument is a distinct piece of the context a record is assembled from and
+/// a struct to carry them would be read in exactly one place.
+///
+/// Shared by the loader and by the create in §5.3, which is the point: a row
+/// that was just created carries everything a fetched one does rather than a
+/// hand-built subset that drifts from it.
+///
+/// The resolved section travels back out because a subtask inherits it: a
+/// subtask holds no membership of its own, and it reads as a subtask only
+/// under the same heading as its parent.
+#[allow(clippy::too_many_arguments)]
+fn record_from_dto(
+    target_gid: &str,
+    project_name: &str,
+    sections: &SectionContext,
+    inherited: InheritedSection,
+    parent: Option<(String, String)>,
+    depth: usize,
+    natural_order: usize,
+    task: TaskDto,
+) -> (TaskRecord, InheritedSection) {
+    // The parent comes from the caller — the recursion that fetched this
+    // task *as* a subtask — and deliberately not from the payload's own
+    // `parent.gid`. A subtask that is also a direct member of the project is
+    // returned in the project's task list as an ordinary row, and Asana shows
+    // it as one; reading the parent off that row would nest it here and leave
+    // the two views disagreeing about the same task.
+    let mut record = TaskRecord::new(task.gid, task.name);
+    record.completed = task.completed;
+    record.modified_at = task.modified_at;
+    // The title travels with the gid. The `Parent` column has to name the
+    // parent even when no row does — the filter panel can drop a parent out
+    // from under its children, and the one place the name is reliably in hand
+    // is right here, where the subtask was fetched *because* of it.
+    (record.parent_gid, record.parent_name) = match parent {
+        Some((gid, name)) => (Some(gid), Some(name)),
+        None => (None, None),
+    };
+    record.subtask_depth = depth;
+    if let Some(assignee) = task.assignee {
+        // The gid is kept beside the name: a write has to name a user the way
+        // the API will accept, and a display name is the one form it will not.
+        record.assignee_gid = Some(assignee.gid.clone());
+        record.assignee = assignee.display_name.or(assignee.name).or(Some(assignee.gid));
+    }
+    record.due_date = task.due_on;
+    record.start_date = task.start_on;
+    record.natural_order = natural_order;
+    record.project_gids.push(target_gid.to_string());
+    if !project_name.is_empty() {
+        record.projects.push(project_name.to_string());
+    }
+
+    let mut placed = inherited;
+    if !placed.is_resolved() {
+        for membership in task.memberships {
+            if let Some(section) = membership.section {
+                if placed.gid.is_none() {
+                    placed.gid = Some(section.gid.clone());
+                }
+                if placed.name.is_none() {
+                    placed.name = Some(
+                        sections
+                            .names
+                            .get(&section.gid)
+                            .cloned()
+                            .unwrap_or(section.name.clone()),
+                    );
+                }
+                if placed.order.is_none() {
+                    placed.order = sections.order.get(&section.gid).copied();
+                }
+                if placed.is_resolved() {
+                    break;
+                }
+            }
+        }
+    }
+    // The order the project puts the section in, which the inherited copy
+    // may not carry: an assigned-to-me placement resolves a name and a gid
+    // without ever seeing the project's section list.
+    if placed.order.is_none() {
+        if let Some(gid) = placed.gid.as_deref() {
+            placed.order = sections.order.get(gid).copied();
+        }
+    }
+
+    if let Some(section) = placed.name.clone() {
+        record.sections.push(section);
+    }
+    if let Some(gid) = placed.gid.clone() {
+        record.section_gids.push(gid);
+    }
+    record.section_order = placed.order;
+
+    for field in task.custom_fields {
+        if let Some(value) = custom_field_value(&field) {
+            record
+                .custom_fields
+                .entry(field.gid)
+                .or_default()
+                .push(value);
+        }
+    }
+
+    (record, placed)
 }
 
 /// Records `task` and its subtasks.
@@ -5102,76 +6462,31 @@ fn add_task_tree<C: AsanaClient>(
     target_gid: &str,
     project_name: &str,
     scope: TaskLoadScope,
-    section_map: &HashMap<String, String>,
-    section_order_map: &HashMap<String, usize>,
-    inherited_section: Option<String>,
-    inherited_section_order: Option<usize>,
-    parent_gid: Option<String>,
+    sections: &SectionContext,
+    inherited: InheritedSection,
+    parent: Option<(String, String)>,
     depth: usize,
     natural_order: &mut usize,
     task: TaskDto,
     records: &mut Vec<TaskRecord>,
 ) -> Result<()> {
     let current_gid = task.gid.clone();
-    let mut record = TaskRecord::new(task.gid, task.name);
-    record.completed = task.completed;
-    record.modified_at = task.modified_at;
-    record.parent_gid = parent_gid;
-    record.subtask_depth = depth;
-    if let Some(assignee) = task.assignee {
-        // The gid is kept beside the name: a write has to name a user the way
-        // the API will accept, and a display name is the one form it will not.
-        record.assignee_gid = Some(assignee.gid.clone());
-        record.assignee = assignee.display_name.or(assignee.name).or(Some(assignee.gid));
-    }
-    record.due_date = task.due_on;
-    record.start_date = task.start_on;
-    record.natural_order = *natural_order;
+    let current_name = task.name.clone();
+    let num_subtasks = task.num_subtasks;
+    let (record, placed) = record_from_dto(
+        target_gid,
+        project_name,
+        sections,
+        inherited,
+        parent,
+        depth,
+        *natural_order,
+        task,
+    );
     *natural_order = (*natural_order).saturating_add(1);
-    record.project_gids.push(target_gid.to_string());
-    record.projects.push(project_name.to_string());
-
-    let mut section_name = inherited_section;
-    let mut section_order = inherited_section_order;
-    if section_name.is_none() || section_order.is_none() {
-        for membership in task.memberships {
-            if let Some(section) = membership.section {
-                if section_name.is_none() {
-                    section_name = Some(
-                        section_map
-                            .get(&section.gid)
-                            .cloned()
-                            .unwrap_or(section.name.clone()),
-                    );
-                }
-                if section_order.is_none() {
-                    section_order = section_order_map.get(&section.gid).copied();
-                }
-                if section_name.is_some() && section_order.is_some() {
-                    break;
-                }
-            }
-        }
-    }
-
-    if let Some(section) = section_name.clone() {
-        record.sections.push(section);
-    }
-    record.section_order = section_order;
-
-    for field in task.custom_fields {
-        if let Some(value) = custom_field_value(&field) {
-            record
-                .custom_fields
-                .entry(field.gid)
-                .or_default()
-                .push(value);
-        }
-    }
-
     records.push(record);
 
-    if task.num_subtasks > 0 {
+    if num_subtasks > 0 {
         let subtasks = client.list_subtasks(&current_gid, scope)?;
         for subtask in subtasks {
             add_task_tree(
@@ -5179,11 +6494,9 @@ fn add_task_tree<C: AsanaClient>(
                 target_gid,
                 project_name,
                 scope,
-                section_map,
-                section_order_map,
-                section_name.clone(),
-                section_order,
-                Some(current_gid.clone()),
+                sections,
+                placed.clone(),
+                Some((current_gid.clone(), current_name.clone())),
                 depth + 1,
                 natural_order,
                 subtask,
@@ -5840,6 +7153,7 @@ mod tests {
 
         state.begin_loading(&[Project::new("p1", "Inbox", true)]);
         state.finish_loading_dataset(TaskDataset {
+            sections: Vec::new(),
             records: vec![late, early, undated],
             custom_field_definitions: Vec::new(),
         });
@@ -5897,6 +7211,7 @@ mod tests {
 
         state.begin_loading(&[Project::new("p1", "Inbox", true)]);
         state.finish_loading_dataset(TaskDataset {
+            sections: Vec::new(),
             records: vec![record("a", "Ada")],
             custom_field_definitions: Vec::new(),
         });
@@ -8666,6 +9981,7 @@ mod tests {
         state.confirm_edit(&edits[0].gid, Some("2026-06-02T00:00:00Z".to_string()));
 
         let stale = TaskDataset {
+            sections: Vec::new(),
             records: vec![{
                 let mut record = TaskRecord::new("t1", "Ship it");
                 record.modified_at = Some("2026-06-01T00:00:00Z".to_string());

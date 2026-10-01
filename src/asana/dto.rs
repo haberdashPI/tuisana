@@ -26,6 +26,13 @@ pub struct Page {
     pub offset: String,
 }
 
+/// The workspace portion of a project payload.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProjectWorkspaceDto {
+    /// The workspace id.
+    pub gid: String,
+}
+
 /// Project payload returned by the Asana API.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProjectDto {
@@ -33,6 +40,9 @@ pub struct ProjectDto {
     pub gid: String,
     /// The project name.
     pub name: String,
+    /// The workspace the project belongs to, if it was asked for.
+    #[serde(default)]
+    pub workspace: Option<ProjectWorkspaceDto>,
 }
 
 /// Section payload returned by the Asana API.

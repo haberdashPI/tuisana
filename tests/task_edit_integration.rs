@@ -11,10 +11,11 @@ use tuisana::{
     app::App,
     asana::{
         dto::{
-            CustomFieldDto, EnumOptionDto, ProjectCustomFieldSettingDto, ProjectDto, TaskDto,
-            TaskMembershipDto, TaskMembershipProjectDto, UserDto,
+            CustomFieldDto, EnumOptionDto, ProjectCustomFieldSettingDto, ProjectDto, SectionDto,
+            TaskDto, TaskMembershipDto, TaskMembershipProjectDto, TaskMembershipSectionDto,
+            UserDto,
         },
-        fake::FakeAsanaClient,
+        fake::{FakeAsanaClient, StructuralCall},
         AsanaClient,
     },
     config::{Config, ProjectVisibilityConfig},
@@ -218,6 +219,16 @@ impl Session {
 
     fn project_updates(&self) -> Vec<ProjectEdit> {
         self.client.project_update_calls()
+    }
+
+    /// The task the row cursor is on.
+    fn cursor_gid(&self) -> Option<String> {
+        self.app
+            .tasks
+            .selected_index()
+            .and_then(|index| self.app.tasks.table().rows.get(index))
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.clone())
     }
 
     /// The task ids the recently-edited pane is holding.
@@ -476,8 +487,8 @@ fn clearing_a_date_on_the_calendar_sends_the_cleared_value_and_closes() {
 fn an_enum_custom_field_offers_the_options_the_project_declares() {
     let mut session = Session::start();
 
-    // Title, Assignee, Due, Start, State, Projects, then Priority.
-    for _ in 0..6 {
+    // Title, Assignee, Due, Start, State, Projects, Parent, then Priority.
+    for _ in 0..tuisana::domain::FIRST_CUSTOM_COLUMN {
         session.press(KeyCode::Char('l'), KeyModifiers::NONE);
     }
     session.press(KeyCode::Enter, KeyModifiers::NONE);
@@ -585,6 +596,7 @@ fn the_fixture_project_is_the_one_the_settings_belong_to() {
     let project = ProjectDto {
         gid: "project-1".to_string(),
         name: "Inbox".to_string(),
+        workspace: None,
     };
     let client = client();
 
@@ -597,3 +609,591 @@ fn the_fixture_project_is_the_one_the_settings_belong_to() {
     );
 }
 
+
+// ---- Edit mode -------------------------------------------------------------
+//
+// The structural edits, through the keys that drive them. A unit test of
+// `begin_draft_task` would pass with `t` bound to nothing at all, and the mode
+// split is the whole reason `i` and `x` can mean insert and delete here while
+// still meaning invert and clear one mode over.
+
+/// The fixture, with two sections and a subtask.
+///
+/// Enough shape to move a task between sections, refuse the move on a
+/// subtask, and delete a section that is empty.
+fn sectioned_client() -> FakeAsanaClient {
+    fn placed(gid: &str, name: &str, section: (&str, &str), subtasks: usize) -> TaskDto {
+        TaskDto {
+            gid: gid.to_string(),
+            name: name.to_string(),
+            completed: false,
+            modified_at: Some("2026-06-01T00:00:00Z".to_string()),
+            due_on: None,
+            start_on: None,
+            assignee: None,
+            num_subtasks: subtasks,
+            parent: None,
+            memberships: vec![TaskMembershipDto {
+                project: TaskMembershipProjectDto {
+                    gid: "project-1".to_string(),
+                    name: "Inbox".to_string(),
+                },
+                section: Some(TaskMembershipSectionDto {
+                    gid: section.0.to_string(),
+                    name: section.1.to_string(),
+                }),
+            }],
+            custom_fields: Vec::new(),
+        }
+    }
+
+    FakeAsanaClient::new(vec![Project::new("project-1", "Inbox", true)])
+        .with_current_user_gid("user-alex")
+        .with_sections(
+            "project-1",
+            vec![
+                SectionDto {
+                    gid: "sec-open".to_string(),
+                    name: "Open".to_string(),
+                },
+                SectionDto {
+                    gid: "sec-done".to_string(),
+                    name: "Done".to_string(),
+                },
+            ],
+        )
+        .with_tasks(
+            "project-1",
+            vec![
+                placed("t1", "Ship the release", ("sec-open", "Open"), 1),
+                placed("t2", "Write the changelog", ("sec-done", "Done"), 0),
+            ],
+        )
+        .with_subtasks(
+            "project-1-sub",
+            Vec::new(),
+        )
+        .with_subtasks(
+            "t1",
+            vec![placed("t1a", "Tag the commit", ("sec-open", "Open"), 0)],
+        )
+}
+
+/// A session in edit mode, over the sectioned fixture.
+fn edit_session() -> Session {
+    let mut session = Session::start_with(sectioned_client());
+    session.press(KeyCode::Char('t'), KeyModifiers::NONE);
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Edit);
+    session
+}
+
+/// The task gids the table is showing, in order.
+fn visible_gids(session: &Session) -> Vec<String> {
+    session
+        .app
+        .tasks
+        .table()
+        .rows
+        .iter()
+        .filter(|row| row.kind.is_task())
+        .map(|row| row.gid.clone())
+        .collect()
+}
+
+/// Moves the row cursor onto the task with this gid, from the top.
+fn move_to_task(session: &mut Session, gid: &str) {
+    session.press(KeyCode::Home, KeyModifiers::NONE);
+    for _ in 0..session.app.tasks.table().rows.len() {
+        if session.cursor_gid().as_deref() == Some(gid) {
+            return;
+        }
+        session.press(KeyCode::Char('j'), KeyModifiers::NONE);
+    }
+    panic!("no row for {gid}");
+}
+
+#[test]
+fn t_enters_edit_mode_and_esc_leaves_it() {
+    let mut session = Session::start();
+
+    session.press(KeyCode::Char('t'), KeyModifiers::NONE);
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Edit);
+
+    session.press(KeyCode::Esc, KeyModifiers::NONE);
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Task);
+}
+
+#[test]
+fn i_and_x_keep_their_task_mode_meanings_and_gain_their_edit_mode_ones() {
+    let mut session = Session::start();
+
+    // Task mode: `space` then `i` inverts the selection, `x` clears it.
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    assert_eq!(session.app.tasks.selected_task_count(), 1);
+    session.press(KeyCode::Char('i'), KeyModifiers::NONE);
+    assert_eq!(session.app.tasks.selected_task_count(), 2, "inverted, not inserted");
+    session.press(KeyCode::Char('x'), KeyModifiers::NONE);
+    assert_eq!(session.app.tasks.selected_task_count(), 0, "cleared, not deleted");
+
+    // Edit mode: the same two letters insert and delete.
+    session.press(KeyCode::Char('t'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('i'), KeyModifiers::NONE);
+    assert!(session.app.tasks.draft_gid().is_some(), "a draft opened");
+    session.press(KeyCode::Esc, KeyModifiers::NONE);
+
+    session.press(KeyCode::Char('x'), KeyModifiers::NONE);
+    assert_eq!(session.app.tasks.marked_for_deletion_count(), 1);
+}
+
+#[test]
+fn an_uppercase_letter_is_a_key_of_its_own() {
+    let mut session = edit_session();
+    move_to_task(&mut session, "t1");
+
+    // `J` moves the task down a section; `j` moves the cursor.
+    session.press(KeyCode::Char('J'), KeyModifiers::SHIFT);
+    assert_eq!(
+        session.client.structural_calls(),
+        vec![StructuralCall::AddTaskToSection {
+            section_gid: "sec-done".to_string(),
+            task_gid: "t1".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn i_then_a_title_then_enter_creates_a_task_where_the_cursor_stood() {
+    let mut session = edit_session();
+    move_to_task(&mut session, "t2");
+
+    session.press(KeyCode::Char('i'), KeyModifiers::NONE);
+    assert_eq!(session.app.mode(), tuisana::config::Mode::ColumnEdit);
+    session.type_keys("Cut the tag");
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Edit, "back to edit mode");
+    assert_eq!(
+        session.client.structural_calls(),
+        vec![
+            StructuralCall::CreateTask(tuisana::domain::NewTask {
+                name: "Cut the tag".to_string(),
+                parent_gid: None,
+                project_gid: Some("project-1".to_string()),
+                workspace_gid: None,
+                section_gid: Some("sec-done".to_string()),
+            }),
+            StructuralCall::AddTaskToSection {
+                section_gid: "sec-done".to_string(),
+                task_gid: "new-1".to_string(),
+            },
+        ]
+    );
+    assert_eq!(session.cursor_gid().as_deref(), Some("new-1"), "the cursor follows it");
+}
+
+#[test]
+fn a_create_that_fails_keeps_the_draft_and_its_title_on_screen() {
+    let mut session = Session::start_with(sectioned_client().with_structural_failure("sec-done"));
+    session.press(KeyCode::Char('t'), KeyModifiers::NONE);
+    move_to_task(&mut session, "t2");
+
+    session.press(KeyCode::Char('i'), KeyModifiers::NONE);
+    session.type_keys("Cut the tag");
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(session.app.mode(), tuisana::config::Mode::ColumnEdit, "the editor stays open");
+    assert!(session.app.tasks.draft_gid().is_some(), "and so does the draft");
+    assert!(
+        session
+            .app
+            .tasks
+            .edit_notice()
+            .is_some_and(|notice| notice.contains("could not create")),
+        "with the reason in the corner: {:?}",
+        session.app.tasks.edit_notice()
+    );
+}
+
+#[test]
+fn esc_on_a_draft_discards_it_with_nothing_sent() {
+    let mut session = edit_session();
+
+    session.press(KeyCode::Char('i'), KeyModifiers::NONE);
+    session.type_keys("Never mind");
+    session.press(KeyCode::Esc, KeyModifiers::NONE);
+
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Edit);
+    assert_eq!(session.app.tasks.draft_gid(), None);
+    assert!(session.client.structural_calls().is_empty());
+}
+
+#[test]
+fn i_then_enter_repeats_as_a_run_of_new_tasks() {
+    let mut session = edit_session();
+    move_to_task(&mut session, "t2");
+
+    // `i` types while the draft's cell is open — every letter does, which is
+    // what makes a title typeable — so a run of new tasks is `i`, the title,
+    // `enter`, and again.
+    for title in ["First", "Second"] {
+        session.press(KeyCode::Char('i'), KeyModifiers::NONE);
+        session.type_keys(title);
+        session.press(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(session.app.mode(), tuisana::config::Mode::Edit);
+    }
+
+    let created = session
+        .client
+        .structural_calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            StructuralCall::CreateTask(task) => Some(task.name),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(created, vec!["First".to_string(), "Second".to_string()]);
+}
+
+#[test]
+fn capital_i_opens_a_draft_whose_parent_is_the_cursor_row() {
+    let mut session = edit_session();
+    move_to_task(&mut session, "t2");
+
+    session.press(KeyCode::Char('I'), KeyModifiers::SHIFT);
+    session.type_keys("Check the diff");
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(
+        session.client.structural_calls(),
+        vec![StructuralCall::CreateTask(tuisana::domain::NewTask {
+            name: "Check the diff".to_string(),
+            parent_gid: Some("t2".to_string()),
+            // The parent, and nothing else. Naming the project as well would
+            // make the subtask a direct member of it, which Asana files in
+            // the project's first section — so it would come back as a
+            // top-level row under an arbitrary heading rather than as a
+            // subtask. Same reason there is no section, and so no second
+            // request.
+            project_gid: None,
+            workspace_gid: None,
+            section_gid: None,
+        })]
+    );
+}
+
+#[test]
+fn capital_s_adds_a_section_after_the_cursors_own() {
+    let mut session = edit_session();
+    move_to_task(&mut session, "t1");
+
+    session.press(KeyCode::Char('S'), KeyModifiers::SHIFT);
+    assert_eq!(session.app.mode(), tuisana::config::Mode::ColumnEdit);
+    session.type_keys("Review");
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(
+        session.client.structural_calls(),
+        vec![StructuralCall::CreateSection {
+            project_gid: "project-1".to_string(),
+            name: "Review".to_string(),
+            insert_after: Some("sec-open".to_string()),
+        }]
+    );
+}
+
+/// `S` then `X` is the round trip: add a section, then take it back.
+///
+/// `X` never names a section that still holds tasks, because Asana would
+/// refuse it — and a section that holds none has no row for the cursor to
+/// stand on, so it takes the project's first empty one.
+#[test]
+fn capital_x_takes_back_the_section_capital_s_added() {
+    let mut session = edit_session();
+    move_to_task(&mut session, "t1");
+
+    // Both of the fixture's sections hold tasks, so there is nothing to take.
+    session.press(KeyCode::Char('X'), KeyModifiers::SHIFT);
+    assert!(
+        session
+            .app
+            .tasks
+            .edit_notice()
+            .is_some_and(|notice| notice.contains("still holds tasks")),
+        "{:?}",
+        session.app.tasks.edit_notice()
+    );
+    assert!(session.client.structural_calls().is_empty(), "nothing was sent");
+
+    session.press(KeyCode::Char('S'), KeyModifiers::SHIFT);
+    session.type_keys("Review");
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    session.press(KeyCode::Char('X'), KeyModifiers::SHIFT);
+
+    assert_eq!(
+        session.client.structural_calls(),
+        vec![
+            StructuralCall::CreateSection {
+                project_gid: "project-1".to_string(),
+                name: "Review".to_string(),
+                insert_after: Some("sec-open".to_string()),
+            },
+            StructuralCall::DeleteSection("section-for-Review".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn x_marks_the_selection_and_enter_deletes_it() {
+    let mut session = edit_session();
+    move_to_task(&mut session, "t1");
+
+    // `space` selects and advances, so two presses take `t1` and `t1a`.
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char('x'), KeyModifiers::NONE);
+    assert_eq!(session.app.tasks.marked_for_deletion_count(), 1);
+
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(
+        session.client.structural_calls(),
+        vec![StructuralCall::DeleteTask("t1".to_string())]
+    );
+    assert_eq!(
+        session
+            .app
+            .tasks
+            .table()
+            .rows
+            .iter()
+            .filter(|row| row.kind.is_task())
+            .map(|row| row.gid.clone())
+            .collect::<Vec<_>>(),
+        vec!["t2".to_string()],
+        "the parent took its subtask with it"
+    );
+}
+
+/// A failed parent takes its whole limb back, however deep.
+#[test]
+fn a_failed_delete_restores_the_whole_limb_it_took() {
+    let mut session = Session::start_with(sectioned_client().with_structural_failure("t1"));
+    session.press(KeyCode::Char('t'), KeyModifiers::NONE);
+    move_to_task(&mut session, "t1");
+
+    session.press(KeyCode::Char('x'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(
+        visible_gids(&session),
+        vec!["t1".to_string(), "t1a".to_string(), "t2".to_string()],
+        "the subtask comes back with its parent"
+    );
+}
+
+/// A mark survives the row leaving the table, and `enter` still deletes it.
+#[test]
+fn a_mark_outlives_the_filter_that_hides_its_row() {
+    let mut session = edit_session();
+    move_to_task(&mut session, "t2");
+    session.press(KeyCode::Char('x'), KeyModifiers::NONE);
+
+    // A filter that hides `t2` but keeps the pane's own rows out of it.
+    session.press(KeyCode::Char('f'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    session.type_keys("release");
+    assert_eq!(
+        visible_gids(&session),
+        vec!["t1".to_string()],
+        "the marked row is gone from the table"
+    );
+
+    assert_eq!(
+        session.app.tasks.marked_for_deletion(),
+        vec!["t2".to_string()],
+        "a mark the filter hid is still a mark"
+    );
+}
+
+#[test]
+fn esc_clears_the_marks_before_it_leaves_the_mode() {
+    let mut session = edit_session();
+
+    session.press(KeyCode::Char('x'), KeyModifiers::NONE);
+    session.press(KeyCode::Esc, KeyModifiers::NONE);
+    assert_eq!(session.app.tasks.marked_for_deletion_count(), 0);
+    assert_eq!(
+        session.app.mode(),
+        tuisana::config::Mode::Edit,
+        "one key, one sentence: back out of whatever is pending"
+    );
+
+    session.press(KeyCode::Esc, KeyModifiers::NONE);
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Task);
+}
+
+#[test]
+fn a_failed_delete_puts_the_row_back_and_says_so() {
+    let mut session = Session::start_with(sectioned_client().with_structural_failure("t2"));
+    session.press(KeyCode::Char('t'), KeyModifiers::NONE);
+    move_to_task(&mut session, "t2");
+
+    session.press(KeyCode::Char('x'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert!(
+        session
+            .app
+            .tasks
+            .table()
+            .rows
+            .iter()
+            .any(|row| row.gid == "t2"),
+        "the row comes back"
+    );
+    assert!(
+        session
+            .app
+            .tasks
+            .edit_notice()
+            .is_some_and(|notice| notice.contains("could not delete 1 of 1")),
+        "{:?}",
+        session.app.tasks.edit_notice()
+    );
+}
+
+#[test]
+fn capital_j_and_k_move_the_task_and_are_refused_on_a_subtask() {
+    let mut session = edit_session();
+    move_to_task(&mut session, "t1a");
+
+    session.press(KeyCode::Char('J'), KeyModifiers::SHIFT);
+    assert!(
+        session
+            .app
+            .tasks
+            .edit_notice()
+            .is_some_and(|notice| notice.contains("belongs to its parent")),
+        "{:?}",
+        session.app.tasks.edit_notice()
+    );
+    assert!(session.client.structural_calls().is_empty());
+
+    move_to_task(&mut session, "t2");
+    session.press(KeyCode::Char('K'), KeyModifiers::SHIFT);
+    assert_eq!(
+        session.client.structural_calls(),
+        vec![StructuralCall::AddTaskToSection {
+            section_gid: "sec-open".to_string(),
+            task_gid: "t2".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn the_parent_column_is_edited_like_any_other_cell() {
+    let mut session = Session::start_with(sectioned_client());
+    move_to_task(&mut session, "t2");
+    for _ in 0..tuisana::domain::PARENT_COLUMN {
+        session.press(KeyCode::Char('l'), KeyModifiers::NONE);
+    }
+
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    session.type_keys("Ship the release");
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(
+        session.client.structural_calls(),
+        vec![StructuralCall::SetParent {
+            gid: "t2".to_string(),
+            parent_gid: Some("t1".to_string()),
+        }]
+    );
+    assert_eq!(
+        session.cell("t2", tuisana::domain::PARENT_COLUMN),
+        "Ship the release"
+    );
+}
+
+#[test]
+fn ctrl_n_walks_the_candidates_and_enter_takes_the_highlighted_one() {
+    let mut session = Session::start();
+
+    session.press(KeyCode::Char('l'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    session.press(KeyCode::Char('l'), KeyModifiers::CONTROL);
+    // `me` leads the list, then the workspace directory.
+    session.press(KeyCode::Char('n'), KeyModifiers::CONTROL);
+    session.press(KeyCode::Char('n'), KeyModifiers::CONTROL);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(
+        session.updates(),
+        vec![(
+            "t1".to_string(),
+            TaskFieldEdit::Assignee(Some(tuisana::domain::AssigneeRef::new("user-alex", "alex")))
+        )],
+        "the second candidate, taken without a single character typed"
+    );
+}
+
+#[test]
+fn a_subsequence_completes_where_a_substring_would_not() {
+    let mut session = Session::start();
+
+    session.press(KeyCode::Char('l'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    session.press(KeyCode::Char('l'), KeyModifiers::CONTROL);
+    session.type_keys("prrmn");
+    session.press(KeyCode::Tab, KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(session.cell("t1", ASSIGNEE_COLUMN), "Priya Raman");
+}
+
+#[test]
+fn a_failed_section_move_puts_the_row_back_and_says_so() {
+    let mut session =
+        Session::start_with(sectioned_client().with_structural_failure("sec-done"));
+    session.press(KeyCode::Char('t'), KeyModifiers::NONE);
+    move_to_task(&mut session, "t1");
+
+    session.press(KeyCode::Char('J'), KeyModifiers::SHIFT);
+
+    let section = session
+        .app
+        .tasks
+        .table()
+        .rows
+        .iter()
+        .find(|row| row.gid == "t1")
+        .and_then(|row| row.section.clone());
+    assert_eq!(section.as_deref(), Some("Open"), "the row goes back");
+    assert!(
+        session
+            .app
+            .tasks
+            .edit_notice()
+            .is_some_and(|notice| notice.contains("could not move to Done")),
+        "{:?}",
+        session.app.tasks.edit_notice()
+    );
+}
+
+#[test]
+fn ctrl_n_still_negates_a_filter_row_when_no_overlay_is_open() {
+    let mut session = Session::start();
+
+    // `f` opens the filter panel, `enter` edits the `Title` row — free text,
+    // so there is no candidate overlay for `ctrl-n` to walk.
+    session.press(KeyCode::Char('f'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    session.type_keys("ship");
+    assert_eq!(visible_gids(&session), vec!["t1".to_string()]);
+    assert!(!session.app.tasks.completion_overlay_open());
+
+    session.press(KeyCode::Char('n'), KeyModifiers::CONTROL);
+    assert_eq!(
+        visible_gids(&session),
+        vec!["t2".to_string(), "t3".to_string()],
+        "the complement, which is what ctrl-n has always meant here"
+    );
+}

@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                      │
+│▍   ★ Platform Infrastructure                                                 │
+│    ☆ Backlog                                                                 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+┏ Help · edit mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Create                                   Modes                                ┃
+┃i         new task beside this one       p         projects                   ┃
+┃I         new subtask of this one        f         filters                    ┃
+┃S         new section after this one     t         tasks                      ┃
+┃                                         m         toggle tasks               ┃
+┃Move & remove                                                                 ┃
+┃K/J       move between sections          Panes                                ┃
+┃␣         select, then mark              [/]       shrink / grow              ┃
+┃x         mark for deletion              {         minimize                   ┃
+┃⏎         delete what is marked          }         maximize                   ┃
+┃X         delete an empty section        0         restore                    ┃
+┃esc       clear the marks, then leave                                         ┃
+┃                                         App                                  ┃
+┃Move                                     r         refresh                    ┃
+┃j/k       down / up                      q ^c      quit                       ┃
+┃^d/^u     page down / up                 ?         close this help            ┃
+┃home/end  top / bottom                                                        ┃
+┃                                                                              ┃
+┃                                                                    ? to close┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┃   Close the quarter's shipping report           │ Priya Raman  │  Dec 18 │  N┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┃                                                                              ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+i new task   I new subtask   S new section                    r refresh   q quit
+ EDIT

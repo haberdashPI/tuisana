@@ -845,7 +845,7 @@ fn named_sets_app() -> (App<FakeAsanaClient>, Terminal<TestBackend>, std::path::
         .expect("clock")
         .as_nanos();
     let path = std::env::temp_dir().join(format!("tuisana-named-sets-{unique}.toml"));
-    std::fs::write(&path, "[header]\ntype = \"tuisana\"\nversion = 1.0\n")
+    std::fs::write(&path, "[header]\ntype = \"tuisana\"\nversion = 2.0\n")
         .expect("write config");
 
     let mut app = App::new(

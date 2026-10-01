@@ -586,6 +586,86 @@ fn task_mode_with_selection() {
     });
 }
 
+/// The window that asks before a version-1 config is rewritten.
+///
+/// It is the first thing a user upgrading sees, and the one window that must
+/// name the file it is about to write. Written into a directory of its own so
+/// the config is called `tuisana.toml` and the backup name is the real one.
+#[test]
+fn the_version_one_migration_prompt() {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!("tuisana-snapshot-{unique}"));
+    fs::create_dir_all(&directory).expect("create the config directory");
+    let path = directory.join("tuisana.toml");
+    fs::write(&path, "[header]\ntype = \"tuisana\"\nversion = 1.0\n")
+        .expect("write a version 1 config");
+
+    let mut config = Config::load_from_path(&path).expect("config loads");
+    config.project_visibility = self::config().project_visibility;
+    assert_snapshot_with(config, WIDTHS.to_vec(), "config-migration", Vec::new);
+
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// Edit mode: a different badge, a different hint bar, the same rows.
+///
+/// The split is the point — task mode's keys are about what the table *says*,
+/// these are about what it *contains* — and the two bars are what say so.
+#[test]
+fn edit_mode() {
+    assert_snapshot("edit-mode", || vec![enter_task_mode(), vec![key('t')]]);
+}
+
+/// Three rows marked for deletion, struck through, with `deleting 3` on the
+/// border.
+///
+/// A glyph change rather than a colour change, so it reads under
+/// `variant = "mono"` too.
+#[test]
+fn edit_mode_with_rows_marked_for_deletion() {
+    assert_snapshot("edit-marked", || {
+        vec![
+            enter_task_mode(),
+            // `space` selects and advances, so three presses take three rows;
+            // `x` marks the whole selection at once.
+            vec![key('t'), key(' '), key(' '), key(' '), key('x')],
+        ]
+    });
+}
+
+/// A draft task on screen, directly after the cursor row, with its title
+/// half-typed.
+#[test]
+fn edit_mode_with_a_draft_task() {
+    assert_snapshot("edit-draft", || {
+        let mut keys = vec![key('t'), key('i')];
+        keys.extend("Pack the retention samples".chars().map(key));
+        vec![enter_task_mode(), keys]
+    });
+}
+
+/// A draft section, which is a heading being typed rather than a cell.
+#[test]
+fn edit_mode_with_a_draft_section() {
+    assert_snapshot("edit-draft-section", || {
+        let mut keys = vec![key('t'), KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT)];
+        keys.extend("Retention".chars().map(key));
+        vec![enter_task_mode(), keys]
+    });
+}
+
+/// The help overlay for edit mode, which is the short honest list the mode
+/// split buys.
+#[test]
+fn edit_mode_with_help() {
+    assert_snapshot("edit-help", || {
+        vec![enter_task_mode(), vec![key('t'), key('?')]]
+    });
+}
+
 #[test]
 fn task_mode_with_help() {
     assert_snapshot("task-help", || vec![enter_task_mode(), vec![key('?')]]);

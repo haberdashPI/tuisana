@@ -20,7 +20,7 @@ use crate::error::{Error, Result};
 /// loaded from so the app can persist changes back to the same file.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
-    #[serde(default)]
+    #[serde(default = "unversioned_header")]
     pub header: Header,
     #[serde(default)]
     #[serde(skip_serializing_if = "ThemeConfig::is_default")]
@@ -44,6 +44,12 @@ pub struct Config {
     pub filter_sets: Vec<NamedFilterSet>,
     #[serde(skip)]
     source_path: Option<PathBuf>,
+    /// Set when [`migrate_v1`] rewrote this config on the way in.
+    ///
+    /// The app asks before it writes the migrated file back, so it has to
+    /// know that the file on disk is not what it is now holding.
+    #[serde(skip)]
+    migrated: bool,
 }
 
 impl PartialEq for Config {
@@ -71,14 +77,21 @@ impl Default for Config {
             project_visibility: Vec::new(),
             filter_sets: Vec::new(),
             source_path: None,
+            migrated: false,
         }
     }
 }
 
 impl Config {
     /// Parse config from an in-memory TOML string.
+    ///
+    /// A version-1 file is migrated in memory, between parsing and
+    /// validation: §2.1 of milestone 15 renamed six commands and one mode,
+    /// and an unknown command is a hard startup error, so without the rename
+    /// a file that was valid yesterday would refuse to load at all.
     pub fn from_toml_str(input: &str) -> Result<Self> {
         let config: Self = toml::from_str(input)?;
+        let config = migrate_v1(config);
         config.validate()?;
         Ok(config)
     }
@@ -114,6 +127,20 @@ impl Config {
         self.source_path.as_deref()
     }
 
+    /// Whether this config was read in the version-1 format and rewritten.
+    ///
+    /// True only for a file that exists on disk in the old format: a missing
+    /// config, or one already at version 2, has nothing to migrate.
+    pub fn needs_migration(&self) -> bool {
+        self.migrated && self.source_path.is_some()
+    }
+
+    /// Clears the migration flag, once the file on disk has caught up — or
+    /// once the user has been asked and said no.
+    pub fn clear_migration(&mut self) {
+        self.migrated = false;
+    }
+
     /// Merge the built-in default bindings with any user-defined overrides.
     pub fn effective_bindings(&self) -> Vec<Bind> {
         let mut bindings = default_bindings();
@@ -133,11 +160,15 @@ impl Config {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.header.version != Header::EXPECTED_VERSION {
+        // A range rather than one number: version 1 is still *readable*, it
+        // is just no longer writable, and `migrate_v1` is what closes the
+        // gap. A file from the future is still rejected — the app cannot
+        // guess what a key it has never heard of means.
+        let version = self.header.version();
+        if !(Header::OLDEST_VERSION..=Header::CURRENT_VERSION).contains(&version) {
             return Err(Error::ConfigValidation(format!(
-                "expected header.version = {}, found {}",
-                Header::EXPECTED_VERSION,
-                self.header.version
+                "expected header.version = {}, found {version}",
+                Header::CURRENT_VERSION,
             )));
         }
 
@@ -619,8 +650,19 @@ pub enum Mode {
     FilterSetName,
     Calendar,
     Task,
+    /// The structural edits: the keys that change which rows exist.
+    ///
+    /// A sibling of [`Mode::Task`] the way [`Mode::Gantt`] is — the same pane,
+    /// the same rows, the same cursor and selection, different keys. Task mode
+    /// is about what the table *says*; this one is about what it *contains*.
+    Edit,
     /// A task table cell is open for editing.
-    TaskEdit,
+    ///
+    /// `task_edit` is the version-1 spelling, kept as an alias so a config in
+    /// the old format parses at all — the migration is what rewrites it, and
+    /// it cannot run on a file that failed to deserialize.
+    #[serde(alias = "task_edit")]
+    ColumnEdit,
     Gantt,
     GanttOrder,
 }
@@ -645,7 +687,7 @@ impl Mode {
                 | Self::Calendar
                 // An unbound letter has to type into the cell rather than
                 // fire the global binding that letter carries.
-                | Self::TaskEdit
+                | Self::ColumnEdit
         )
     }
 
@@ -659,7 +701,8 @@ impl Mode {
             Self::FilterSetName => "set name",
             Self::Calendar => "calendar",
             Self::Task => "task",
-            Self::TaskEdit => "task edit",
+            Self::Edit => "edit",
+            Self::ColumnEdit => "column",
             Self::Gantt => "gantt",
             Self::GanttOrder => "colors",
         }
@@ -723,19 +766,34 @@ impl ProjectVisibilityConfig {
 pub struct Header {
     #[serde(rename = "type", default = "default_header_type")]
     pub kind: String,
-    #[serde(default = "default_header_version")]
-    pub version: f64,
+    /// The format version the file was written in.
+    ///
+    /// `None` means the file carries no `[header]` at all, which is read as
+    /// **version 1** rather than as the current version. Defaulting it to
+    /// what the app writes would be the wrong answer for a file the app has
+    /// never written: it would skip the migration and then fail validation on
+    /// the old command names it was supposed to rename.
+    #[serde(default)]
+    pub version: Option<f64>,
 }
 
 impl Header {
-    const EXPECTED_VERSION: f64 = 1.0;
+    /// The version the app writes, and the only one it will write.
+    pub const CURRENT_VERSION: f64 = 2.0;
+    /// The oldest version still readable.
+    pub const OLDEST_VERSION: f64 = 1.0;
+
+    /// The version this header declares, treating "absent" as the oldest.
+    pub fn version(&self) -> f64 {
+        self.version.unwrap_or(Self::OLDEST_VERSION)
+    }
 }
 
 impl Default for Header {
     fn default() -> Self {
         Self {
             kind: default_header_type(),
-            version: default_header_version(),
+            version: Some(Header::CURRENT_VERSION),
         }
     }
 }
@@ -772,12 +830,73 @@ impl Bind {
     }
 }
 
+/// The §2.1 renames, as `(version 1, version 2)` pairs.
+///
+/// One list so the migration and its tests read from the same place. Mode
+/// names and command names are kept apart because a config spells them in
+/// different keys, and `task_edit` as a *command* has never existed.
+const V1_COMMAND_RENAMES: [(&str, &str); 6] = [
+    ("begin_task_edit", "edit_column"),
+    ("commit_task_edit", "commit_column_edit"),
+    ("cancel_task_edit", "cancel_column_edit"),
+    ("task_edit_next_value", "column_edit_next_value"),
+    ("task_edit_prev_value", "column_edit_prev_value"),
+    ("task_edit_clear", "column_edit_clear"),
+];
+
+/// Brings a version-1 config up to version 2, in memory.
+///
+/// Three changes, and deliberately no more:
+///
+/// - every `[[bind]]` whose command appears in [`V1_COMMAND_RENAMES`] is
+///   renamed. The mode rename is handled by serde, which accepts both
+///   `task_edit` and `column_edit` for the same variant.
+/// - every single-letter `key` is **lowercased**. Version 1's reader
+///   lowercased it on the way in, so `key = "G"` meant `g`; milestone 15
+///   makes that a different key, and a migration that left it alone would
+///   silently rebind it.
+/// - `header.version` becomes [`Header::CURRENT_VERSION`].
+///
+/// Unknown commands are left exactly as they are and still fail validation:
+/// this renames what was renamed, and is not a licence to accept typos.
+fn migrate_v1(mut config: Config) -> Config {
+    if config.header.version() >= Header::CURRENT_VERSION {
+        return config;
+    }
+
+    for bind in &mut config.bind {
+        if let Some((_, renamed)) = V1_COMMAND_RENAMES
+            .iter()
+            .find(|(old, _)| bind.command.trim().eq_ignore_ascii_case(old))
+        {
+            bind.command = (*renamed).to_string();
+        }
+        let key = bind.key.trim();
+        if key.chars().count() == 1 {
+            bind.key = key.to_lowercase();
+        }
+    }
+
+    config.header.version = Some(Header::CURRENT_VERSION);
+    config.migrated = true;
+    config
+}
+
 fn default_header_type() -> String {
     "tuisana".to_string()
 }
 
-fn default_header_version() -> f64 {
-    1.0
+/// The header a file with no `[header]` table at all is read as.
+///
+/// Deliberately not [`Header::default`], which carries the version the app
+/// *writes*: that would be the wrong answer for a file the app has never
+/// written. "Absent" means unversioned, so the oldest — which is what sends
+/// it through [`migrate_v1`] rather than past it.
+fn unversioned_header() -> Header {
+    Header {
+        kind: default_header_type(),
+        version: None,
+    }
 }
 
 fn default_bindings() -> Vec<Bind> {
@@ -962,36 +1081,63 @@ fn default_bindings() -> Vec<Bind> {
         // app, so it means that here too, and opening in Asana takes `o`.
         Bind::with_mode("h", Mode::Task, "task_column_prev"),
         Bind::with_mode("l", Mode::Task, "task_column_next"),
-        Bind::with_mode("enter", Mode::Task, "begin_task_edit"),
+        Bind::with_mode("enter", Mode::Task, "edit_column"),
         Bind::with_mode("d", Mode::Task, "toggle_task_completed"),
-        Bind::with_mode("enter", Mode::TaskEdit, "commit_task_edit"),
-        Bind::with_mode("esc", Mode::TaskEdit, "cancel_task_edit"),
+        // `t` is `set_task_mode` globally, which is what gets you *out* of
+        // edit mode by way of task mode; from task mode it is the way in.
+        Bind::with_mode("t", Mode::Task, "set_edit_mode"),
+        // Edit mode. The case split is the whole mnemonic: lowercase acts on
+        // the task, uppercase on the structure around it. `i`/`I` is a task
+        // and a nested task, `x`/`X` is a task and the section holding it,
+        // `j`/`k` move the cursor and `J`/`K` move the task.
+        //
+        // `i` and `x` mean insert and delete here, which is what they mean
+        // in every editor; they are still `invert_task_selection` and
+        // `clear_task_selection` in task mode, because the two modes no
+        // longer compete for them.
+        Bind::with_mode("i", Mode::Edit, "insert_task"),
+        Bind::with_mode("I", Mode::Edit, "insert_subtask"),
+        Bind::with_mode("x", Mode::Edit, "mark_for_deletion"),
+        Bind::with_mode("X", Mode::Edit, "delete_section"),
+        Bind::with_mode("S", Mode::Edit, "insert_section"),
+        Bind::with_mode("J", Mode::Edit, "move_task_to_next_section"),
+        Bind::with_mode("K", Mode::Edit, "move_task_to_prev_section"),
+        // Building a selection is part of the flow: `x` acts on it.
+        Bind::with_mode("space", Mode::Edit, "toggle_task_selection"),
+        Bind::with_mode("enter", Mode::Edit, "delete_marked_tasks"),
+        Bind::with_mode("esc", Mode::Edit, "edit_cancel"),
+        Bind::with_mode("enter", Mode::ColumnEdit, "commit_column_edit"),
+        Bind::with_mode("esc", Mode::ColumnEdit, "cancel_column_edit"),
         // Letters type in this mode, so the value picker's keys are only
         // reachable because a picker reads no text at all.
-        Bind::with_mode("j", Mode::TaskEdit, "task_edit_next_value"),
-        Bind::with_mode("k", Mode::TaskEdit, "task_edit_prev_value"),
-        Bind::with_mode("d", Mode::TaskEdit, "task_edit_clear"),
-        Bind::with_mode("ctrl-l", Mode::TaskEdit, "task_edit_clear"),
-        Bind::with_mode("left", Mode::TaskEdit, "filter_caret_left"),
-        Bind::with_mode("right", Mode::TaskEdit, "filter_caret_right"),
-        Bind::with_mode("ctrl-b", Mode::TaskEdit, "filter_caret_left"),
-        Bind::with_mode("ctrl-f", Mode::TaskEdit, "filter_caret_right"),
-        Bind::with_mode("alt-b", Mode::TaskEdit, "text_caret_word_back"),
-        Bind::with_mode("alt-f", Mode::TaskEdit, "text_caret_word_forward"),
-        Bind::with_mode("ctrl-a", Mode::TaskEdit, "text_caret_start"),
-        Bind::with_mode("ctrl-e", Mode::TaskEdit, "text_caret_end"),
+        Bind::with_mode("j", Mode::ColumnEdit, "column_edit_next_value"),
+        Bind::with_mode("k", Mode::ColumnEdit, "column_edit_prev_value"),
+        Bind::with_mode("d", Mode::ColumnEdit, "column_edit_clear"),
+        Bind::with_mode("ctrl-l", Mode::ColumnEdit, "column_edit_clear"),
+        Bind::with_mode("left", Mode::ColumnEdit, "filter_caret_left"),
+        Bind::with_mode("right", Mode::ColumnEdit, "filter_caret_right"),
+        Bind::with_mode("ctrl-b", Mode::ColumnEdit, "filter_caret_left"),
+        Bind::with_mode("ctrl-f", Mode::ColumnEdit, "filter_caret_right"),
+        Bind::with_mode("alt-b", Mode::ColumnEdit, "text_caret_word_back"),
+        Bind::with_mode("alt-f", Mode::ColumnEdit, "text_caret_word_forward"),
+        Bind::with_mode("ctrl-a", Mode::ColumnEdit, "text_caret_start"),
+        Bind::with_mode("ctrl-e", Mode::ColumnEdit, "text_caret_end"),
         // The same three cuts, so a cell editor and a filter field still read
         // the same keys.
-        Bind::with_mode("ctrl-d", Mode::TaskEdit, "text_cut_char"),
-        Bind::with_mode("alt-d", Mode::TaskEdit, "text_cut_word"),
-        Bind::with_mode("ctrl-k", Mode::TaskEdit, "text_cut_to_end"),
+        Bind::with_mode("ctrl-d", Mode::ColumnEdit, "text_cut_char"),
+        Bind::with_mode("alt-d", Mode::ColumnEdit, "text_cut_word"),
+        Bind::with_mode("ctrl-k", Mode::ColumnEdit, "text_cut_to_end"),
         // Completion, on the two cells whose values are names the backend
         // knows. `tab` is free in every mode: nothing else reads it.
-        Bind::with_mode("tab", Mode::TaskEdit, "complete_next_candidate"),
-        Bind::with_mode("shift-tab", Mode::TaskEdit, "complete_prev_candidate"),
-        // Punctuation and ctrl- pairs throughout, because
-        // KeyBinding::from_crossterm_event lowercases every char: `G` and `g`
-        // are the same key, so shift+letter is not an available namespace.
+        Bind::with_mode("tab", Mode::ColumnEdit, "complete_next_candidate"),
+        Bind::with_mode("shift-tab", Mode::ColumnEdit, "complete_prev_candidate"),
+        // Walking the candidate list without taking any of it, so `enter` is
+        // what picks. Free here; in filter-edit mode `ctrl-n` is already the
+        // field negation, which is why only `ctrl-p` is bound there and the
+        // negation itself is gated on the overlay being open.
+        Bind::with_mode("ctrl-n", Mode::ColumnEdit, "highlight_next_candidate"),
+        Bind::with_mode("ctrl-p", Mode::ColumnEdit, "highlight_prev_candidate"),
+        Bind::with_mode("ctrl-p", Mode::FilterEdit, "highlight_prev_candidate"),
         Bind::with_mode("esc", Mode::Gantt, "set_task_mode"),
         Bind::with_mode("g", Mode::Gantt, "toggle_gantt"),
         Bind::with_mode("<", Mode::Gantt, "gantt_remove_column"),
@@ -1030,7 +1176,10 @@ fn default_bindings() -> Vec<Bind> {
 mod tests {
     use crate::input::{Action, KeyBinding, KeyMap};
 
-    use super::{Config, Mode, NamedFilterSet, SavedFilterField, SavedFilterSet};
+    use super::{
+        default_bindings, Config, Header, Mode, NamedFilterSet, SavedFilterField, SavedFilterSet,
+        V1_COMMAND_RENAMES,
+    };
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -1053,24 +1202,179 @@ mod tests {
         .expect("config parses");
 
         assert_eq!(config.header.kind, "tuisana");
-        assert_eq!(config.header.version, 1.0);
+        assert_eq!(config.header.version, Some(Header::CURRENT_VERSION));
         assert_eq!(config.bind.len(), 2);
         assert_eq!(config.bind[0].key, "x");
         assert_eq!(config.bind[0].command, "quit");
     }
 
+    // ---- Version 2, and the migration ----------------------------------
+
     #[test]
-    fn rejects_wrong_version() {
-        let err = Config::from_toml_str(
+    fn a_version_one_file_renames_every_command_and_mode_it_has_to() {
+        let config = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 1.0
+
+                [[bind]]
+                key = "e"
+                mode = "task"
+                command = "begin_task_edit"
+
+                [[bind]]
+                key = "enter"
+                mode = "task_edit"
+                command = "commit_task_edit"
+
+                [[bind]]
+                key = "esc"
+                mode = "task_edit"
+                command = "cancel_task_edit"
+
+                [[bind]]
+                key = "j"
+                mode = "task_edit"
+                command = "task_edit_next_value"
+
+                [[bind]]
+                key = "k"
+                mode = "task_edit"
+                command = "task_edit_prev_value"
+
+                [[bind]]
+                key = "d"
+                mode = "task_edit"
+                command = "task_edit_clear"
+            "#,
+        )
+        .expect("a version 1 file still loads");
+
+        assert_eq!(config.header.version, Some(Header::CURRENT_VERSION));
+        assert!(config.needs_migration() || config.source_path().is_none());
+        // Every pair in the rename table, and the mode name with them.
+        for (index, (_, renamed)) in V1_COMMAND_RENAMES.iter().enumerate() {
+            assert_eq!(&config.bind[index].command, renamed);
+        }
+        for bind in &config.bind[1..] {
+            assert_eq!(bind.mode, Mode::ColumnEdit, "task_edit is now column_edit");
+        }
+        // And the renamed names are the ones the action layer accepts.
+        KeyMap::from_bindings(&config.effective_bindings()).expect("the renamed config binds");
+    }
+
+    #[test]
+    fn a_version_one_file_lowercases_its_single_letter_keys() {
+        let config = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 1.0
+
+                [[bind]]
+                key = "G"
+                command = "jump_bottom"
+
+                [[bind]]
+                key = "Ctrl-D"
+                command = "page_down"
+
+                [[bind]]
+                key = "?"
+                command = "toggle_help_details"
+            "#,
+        )
+        .expect("a version 1 file still loads");
+
+        // Version 1's reader lowercased it anyway, so `G` meant `g`. Leaving
+        // it alone would silently rebind it now that case is a namespace.
+        assert_eq!(config.bind[0].key, "g");
+        // Modifier forms were never case-sensitive and are left as written;
+        // the parser lowercases them.
+        assert_eq!(config.bind[1].key, "Ctrl-D");
+        assert_eq!(config.bind[2].key, "?");
+    }
+
+    #[test]
+    fn a_file_with_no_header_at_all_migrates_as_version_one() {
+        // `default_header_version` would be the wrong answer for a file the
+        // app has never written: it would skip the rename and then fail
+        // validation on the old name it was meant to fix.
+        let config = Config::from_toml_str(
+            r#"
+                [[bind]]
+                key = "E"
+                mode = "task"
+                command = "begin_task_edit"
+            "#,
+        )
+        .expect("an unversioned file loads");
+
+        assert_eq!(config.header.version, Some(Header::CURRENT_VERSION));
+        assert_eq!(config.bind[0].command, "edit_column");
+        assert_eq!(config.bind[0].key, "e");
+    }
+
+    #[test]
+    fn a_version_two_file_is_left_exactly_as_written() {
+        let config = Config::from_toml_str(
             r#"
                 [header]
                 type = "tuisana"
                 version = 2.0
+
+                [[bind]]
+                key = "J"
+                mode = "edit"
+                command = "move_task_to_next_section"
+            "#,
+        )
+        .expect("a version 2 file loads");
+
+        assert!(!config.needs_migration(), "there is nothing to migrate");
+        assert_eq!(config.bind[0].key, "J", "from version 2 on, the case written is the case meant");
+        assert_eq!(config.bind[0].mode, Mode::Edit);
+    }
+
+    #[test]
+    fn a_migration_is_not_a_licence_to_accept_a_typo() {
+        let config = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 1.0
+
+                [[bind]]
+                key = "e"
+                command = "begin_task_edi"
+            "#,
+        )
+        .expect("the file itself is valid toml");
+
+        assert_eq!(
+            config.bind[0].command, "begin_task_edi",
+            "a name that was never renamed is left alone"
+        );
+        let error = KeyMap::from_bindings(&config.effective_bindings())
+            .expect_err("and still fails to bind");
+        assert!(format!("{error}").contains("unsupported command"), "{error}");
+    }
+
+    /// A file from the future is still rejected: the app cannot guess what a
+    /// key it has never heard of means.
+    #[test]
+    fn rejects_a_version_from_the_future() {
+        let err = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 3.0
             "#,
         )
         .expect_err("version should be rejected");
 
-        assert!(format!("{err}").contains("expected header.version = 1"));
+        assert!(format!("{err}").contains("expected header.version = 2"));
     }
 
     #[test]
@@ -1818,7 +2122,7 @@ name = "Mine"
         for (key, action) in [
             (KeyBinding::Char('h'), Action::TaskColumnPrev),
             (KeyBinding::Char('l'), Action::TaskColumnNext),
-            (KeyBinding::Enter, Action::BeginTaskEdit),
+            (KeyBinding::Enter, Action::EditColumn),
             (KeyBinding::Char('o'), Action::Open),
             (KeyBinding::Char('d'), Action::ToggleTaskCompleted),
             (KeyBinding::Char('b'), Action::ToggleRecentPane),
@@ -1833,7 +2137,7 @@ name = "Mine"
         let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
             .expect("default bindings parse");
 
-        for mode in [Mode::TaskEdit, Mode::FilterEdit] {
+        for mode in [Mode::ColumnEdit, Mode::FilterEdit] {
             assert_eq!(
                 keymap.action_for(&KeyBinding::Tab, mode),
                 Some(&Action::CompleteCandidate(1)),
@@ -1853,11 +2157,11 @@ name = "Mine"
             .expect("default bindings parse");
 
         for (key, action) in [
-            (KeyBinding::Enter, Action::CommitTaskEdit),
-            (KeyBinding::Esc, Action::CancelTaskEdit),
-            (KeyBinding::Char('j'), Action::TaskEditCycleValue(1)),
-            (KeyBinding::Char('k'), Action::TaskEditCycleValue(-1)),
-            (KeyBinding::Char('d'), Action::TaskEditClear),
+            (KeyBinding::Enter, Action::CommitColumnEdit),
+            (KeyBinding::Esc, Action::CancelColumnEdit),
+            (KeyBinding::Char('j'), Action::ColumnEditCycleValue(1)),
+            (KeyBinding::Char('k'), Action::ColumnEditCycleValue(-1)),
+            (KeyBinding::Char('d'), Action::ColumnEditClear),
             (KeyBinding::Alt('b'), Action::TextCaretWordBack),
             (KeyBinding::Alt('f'), Action::TextCaretWordForward),
             (KeyBinding::Ctrl('a'), Action::TextCaretStart),
@@ -1867,10 +2171,118 @@ name = "Mine"
             (KeyBinding::Ctrl('k'), Action::TextCutToEnd),
         ] {
             assert_eq!(
-                keymap.action_for(&key, Mode::TaskEdit),
+                keymap.action_for(&key, Mode::ColumnEdit),
                 Some(&action),
-                "{key:?} in task-edit mode"
+                "{key:?} in column-edit mode"
             );
+        }
+    }
+
+    /// Edit mode's twelve keys, and the two rules behind them: lowercase acts
+    /// on the task, uppercase on the structure around it.
+    #[test]
+    fn default_bindings_include_the_edit_mode_controls() {
+        let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
+            .expect("default bindings parse");
+
+        for (key, action) in [
+            (KeyBinding::Char('i'), Action::InsertTask),
+            (KeyBinding::Char('I'), Action::InsertSubtask),
+            (KeyBinding::Char('x'), Action::MarkForDeletion),
+            (KeyBinding::Char('X'), Action::DeleteSection),
+            (KeyBinding::Char('S'), Action::InsertSection),
+            (KeyBinding::Char('J'), Action::MoveTaskToSection(1)),
+            (KeyBinding::Char('K'), Action::MoveTaskToSection(-1)),
+            (KeyBinding::Char(' '), Action::ToggleTaskSelection),
+            (KeyBinding::Enter, Action::DeleteMarkedTasks),
+            (KeyBinding::Esc, Action::EditCancel),
+        ] {
+            assert_eq!(
+                keymap.action_for(&key, Mode::Edit),
+                Some(&action),
+                "{key:?} in edit mode"
+            );
+        }
+
+        // `t` is the way in, from task mode.
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('t'), Mode::Task),
+            Some(&Action::SetEditMode)
+        );
+        // And `i` and `x` still mean what they always meant one mode over.
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('i'), Mode::Task),
+            Some(&Action::InvertTaskSelection)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('x'), Mode::Task),
+            Some(&Action::ClearTaskSelection)
+        );
+    }
+
+    /// Edit mode takes the `Any` fallback, because moving the cursor is most
+    /// of what you do between edits — but not task mode's own bindings.
+    #[test]
+    fn edit_mode_keeps_the_global_keys_and_none_of_task_modes() {
+        let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
+            .expect("default bindings parse");
+
+        for (key, action) in [
+            (KeyBinding::Char('j'), Action::MoveDown),
+            (KeyBinding::Char('k'), Action::MoveUp),
+            (KeyBinding::Ctrl('u'), Action::PageUp),
+            (KeyBinding::Ctrl('d'), Action::PageDown),
+            (KeyBinding::Home, Action::JumpTop),
+            (KeyBinding::End, Action::JumpBottom),
+            (KeyBinding::Char('r'), Action::Refresh),
+            (KeyBinding::Char('q'), Action::Quit),
+            (KeyBinding::Char('?'), Action::ToggleHelpDetails),
+            // `[` and `]` resize the top pane here rather than moving by
+            // section, because they are the global bindings.
+            (KeyBinding::Char('['), Action::ResizeTopPaneDown),
+            (KeyBinding::Char(']'), Action::ResizeTopPaneUp),
+        ] {
+            assert_eq!(
+                keymap.action_for(&key, Mode::Edit),
+                Some(&action),
+                "{key:?} in edit mode"
+            );
+        }
+
+        // Task mode's own keys are off here.
+        for key in [
+            KeyBinding::Char('h'),
+            KeyBinding::Char('l'),
+            KeyBinding::Char('c'),
+            KeyBinding::Char('s'),
+            KeyBinding::Char('z'),
+            KeyBinding::Char('g'),
+        ] {
+            assert_eq!(
+                keymap.action_for(&key, Mode::Edit),
+                None,
+                "{key:?} is a task-mode key"
+            );
+        }
+    }
+
+    /// Nothing in `Mode::Any` may take an uppercase letter: the text-entry
+    /// modes do not fall back to it, so it would be safe today and a key that
+    /// silently stopped typing in any mode added later.
+    #[test]
+    fn no_global_binding_takes_an_uppercase_letter() {
+        for bind in default_bindings() {
+            if !bind.mode.is_any() {
+                continue;
+            }
+            let key: KeyBinding = bind.key.parse().expect("default bindings parse");
+            if let KeyBinding::Char(ch) = key {
+                assert!(
+                    !ch.is_uppercase(),
+                    "{} is a global binding on an uppercase letter",
+                    bind.key
+                );
+            }
         }
     }
 
@@ -1882,7 +2294,7 @@ name = "Mine"
         let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
             .expect("default bindings parse");
 
-        for mode in [Mode::FilterEdit, Mode::TaskEdit] {
+        for mode in [Mode::FilterEdit, Mode::ColumnEdit] {
             for (key, action) in [
                 (KeyBinding::Ctrl('d'), Action::TextCutChar),
                 (KeyBinding::Alt('d'), Action::TextCutWord),
@@ -1911,8 +2323,8 @@ name = "Mine"
         let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
             .expect("default bindings parse");
 
-        assert!(!Mode::TaskEdit.allows_any_fallback());
-        assert_eq!(keymap.action_for(&KeyBinding::Char('q'), Mode::TaskEdit), None);
+        assert!(!Mode::ColumnEdit.allows_any_fallback());
+        assert_eq!(keymap.action_for(&KeyBinding::Char('q'), Mode::ColumnEdit), None);
     }
 }
 
@@ -2207,5 +2619,26 @@ columns = 0
 
         assert_eq!(parsed.theme, ThemeConfig::default());
         assert!(parsed.theme.is_default());
+    }
+}
+
+#[cfg(test)]
+mod example_tests {
+    use super::Config;
+
+    /// `tuisana.toml.example` is documentation that has to stay true: every
+    /// command it names must parse, and its header must be the version the
+    /// app writes.
+    #[test]
+    fn the_example_config_is_a_valid_version_two_config() {
+        let text = include_str!("../../tuisana.toml.example");
+        let config = Config::from_toml_str(text).expect("the example config loads");
+
+        assert!(
+            !config.needs_migration(),
+            "the example is a version 2 file and needs no migration"
+        );
+        crate::input::KeyMap::from_bindings(&config.effective_bindings())
+            .expect("every command the example names binds");
     }
 }

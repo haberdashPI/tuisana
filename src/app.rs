@@ -1,12 +1,13 @@
 use crate::{
     asana::{AsanaClient, TaskQuery, TaskTarget},
     config::{Config, Mode, NamedFilterSet, TopPaneState, ViewConfig},
-    domain::{Project, ProjectEdit, ProjectKind, TaskEdit},
+    domain::{ParentEdit, Project, ProjectEdit, ProjectKind, Section, TaskEdit},
     error::Result,
     input::{Action, AppCommand, KeyBinding, KeyMap},
 };
 
 use std::{
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender},
     thread,
 };
@@ -20,6 +21,7 @@ pub mod task_edit;
 pub mod text_edit;
 
 use self::gantt::MoveTo;
+use self::task::DraftCommit;
 use self::project_list::ProjectListState;
 use self::task::TaskState;
 use self::text_edit::TextCut;
@@ -172,6 +174,23 @@ pub struct App<C> {
     /// [`App::load_projects`]. `refresh` goes through that same call and must
     /// not overwrite what the user has selected since.
     view_restored: bool,
+    /// The version-1 config this session has yet to be allowed to rewrite.
+    ///
+    /// `App` state rather than config state: it is a question on screen, and
+    /// the file on disk is untouched until it is answered. While it is set,
+    /// the prompt owns every key and nothing may write the config.
+    pending_migration: Option<PendingMigration>,
+}
+
+/// A version-1 config waiting for permission to be rewritten.
+#[derive(Clone, Debug)]
+struct PendingMigration {
+    /// The file `y` would copy the config to.
+    ///
+    /// Resolved up front so the window can name the file it will actually
+    /// write: an existing `tuisana.backup.toml` is not clobbered, and the
+    /// choice has to be made with the right name on screen.
+    backup_path: PathBuf,
 }
 
 /// One write still in flight, in the shape its rollback needs.
@@ -184,6 +203,7 @@ pub struct App<C> {
 enum PendingEdit {
     Field(TaskEdit),
     Project(ProjectEdit),
+    Parent(ParentEdit),
 }
 
 impl PendingEdit {
@@ -191,8 +211,20 @@ impl PendingEdit {
         match self {
             Self::Field(edit) => &edit.gid,
             Self::Project(edit) => &edit.gid,
+            Self::Parent(edit) => &edit.gid,
         }
     }
+}
+
+/// What a committed draft turned into.
+///
+/// Two shapes because `enter` on a draft means two different writes and the
+/// caller has already stopped caring which: the draft knows.
+enum Created {
+    /// Boxed: a `TaskDto` is an order of magnitude larger than a `Section`,
+    /// and this enum only ever carries one of them across one match.
+    Task(Box<crate::asana::dto::TaskDto>),
+    Section(Section),
 }
 
 /// One finished write, on its way back to the main thread.
@@ -247,9 +279,75 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             current_user_gid: None,
             people: None,
             view_restored: false,
+            pending_migration: None,
         };
         app.apply_view_config();
+        // Last, so nothing above it can have written the file: a version-1
+        // config is read, migrated in memory, and then left alone until the
+        // user says what to do with it.
+        if app.config.needs_migration() {
+            app.pending_migration = Some(PendingMigration {
+                backup_path: backup_path_for(app.config.source_path()),
+            });
+        }
         app
+    }
+
+    /// The file the migration prompt would back the config up to.
+    ///
+    /// `None` when no prompt is up, which is what the renderer reads to
+    /// decide whether to draw it at all.
+    pub fn pending_migration_backup(&self) -> Option<&Path> {
+        self.pending_migration
+            .as_ref()
+            .map(|pending| pending.backup_path.as_path())
+    }
+
+    /// The migration prompt's three keys.
+    ///
+    /// The prompt owns every key it is shown, so this consumes the event
+    /// whatever it was: a stray `j` behind a question about rewriting a
+    /// hand-written file must not move a cursor nobody can see.
+    fn handle_migration_input(
+        &mut self,
+        event: crossterm::event::KeyEvent,
+    ) -> Option<AppCommand> {
+        use crossterm::event::KeyCode;
+
+        let pending = self.pending_migration.clone()?;
+
+        match event.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                // A copy, not a re-serialization: the backup keeps the user's
+                // comments, key order, and formatting, none of which survive
+                // `toml::to_string_pretty`.
+                let source = self.config.source_path().map(Path::to_path_buf);
+                if let Some(source) = source {
+                    if let Err(err) = std::fs::copy(&source, &pending.backup_path) {
+                        debug_log(&format!("config backup failed: {err}"));
+                        self.tasks
+                            .set_edit_notice(format!("could not write the backup: {err}"));
+                        return None;
+                    }
+                }
+                self.finish_migration();
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => self.finish_migration(),
+            // Nothing is written, and the prompt returns next time. A user
+            // who would rather edit the file by hand can.
+            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
+                return Some(AppCommand::Quit)
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Lifts the write gate and puts the migrated config on disk.
+    fn finish_migration(&mut self) {
+        self.pending_migration = None;
+        self.config.clear_migration();
+        self.write_config_or_report();
     }
 
     /// Puts the panes and the bound filter set back the way `[view]` left them.
@@ -468,6 +566,18 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         }
     }
 
+    /// `ctrl-n` / `ctrl-p`: walks the candidate list without taking any of it.
+    ///
+    /// The other half of the pair `tab` is. `enter` takes whatever the
+    /// highlight landed on, which keeps `tab` meaning what it always meant —
+    /// type, `tab` until it reads right, `enter` — and adds the other idiom
+    /// beside it rather than replacing it.
+    fn highlight_candidate(&mut self, delta: i32) {
+        if !self.tasks.move_completion_highlight(delta) {
+            self.tasks.set_edit_notice("nothing to complete");
+        }
+    }
+
     /// Enters the date picker. The picker owns the whole date edit, so the
     /// filter panel's own text-edit flag stays off.
     fn set_calendar_mode(&mut self) {
@@ -497,7 +607,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     fn set_task_edit_mode(&mut self) {
         self.mode = match self.tasks.cell_edit_owns_calendar() {
             true => Mode::Calendar,
-            false => Mode::TaskEdit,
+            false => Mode::ColumnEdit,
         };
     }
 
@@ -533,6 +643,236 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         // is not a request to put the project list back: the filters you just
         // built are the thing you are reading the table against, and `f` and
         // `p` are both one keystroke away when you do want them gone.
+    }
+
+    /// Enters edit mode, taking the keys that change which rows exist.
+    ///
+    /// Follows `set_gantt_mode`: the same pane, the same rows, the same
+    /// cursor, and the top pane keeps whatever it was holding.
+    fn set_edit_mode(&mut self) {
+        if self.projects.search_active() {
+            self.projects.end_search();
+        }
+        self.mode = Mode::Edit;
+        self.tasks.set_visible(true);
+        if self.tasks.filter_panel_editing() {
+            self.tasks.filter_edit_done();
+        }
+    }
+
+    /// Leaves edit mode, or clears the deletion marks when there are any.
+    ///
+    /// One key, one sentence: back out of whatever is pending.
+    fn edit_cancel(&mut self) {
+        if self.tasks.clear_deletion_marks() {
+            return;
+        }
+        self.set_task_mode();
+    }
+
+    /// Opens a draft task, committing any draft already open.
+    ///
+    /// A second `i` while one is open commits the first, which is what makes
+    /// `i` … `enter` `i` … a run of new tasks and `i` … `i` … the same run
+    /// one keystroke shorter.
+    fn insert_task(&mut self, as_subtask: bool) {
+        if self.tasks.draft_gid().is_some() {
+            self.commit_draft();
+            // A refusal left the draft on screen with its title intact;
+            // opening a second one over it would lose exactly the text the
+            // refusal was protecting.
+            if self.tasks.draft_gid().is_some() {
+                return;
+            }
+        }
+        let context = self.edit_context();
+        match self.tasks.begin_draft_task(as_subtask, &context) {
+            Ok(()) => self.mode = Mode::ColumnEdit,
+            Err(message) => self.tasks.set_edit_notice(message),
+        }
+    }
+
+    /// Opens a draft section after the cursor's.
+    fn insert_section(&mut self) {
+        if self.tasks.draft_gid().is_some() {
+            self.commit_draft();
+            if self.tasks.draft_gid().is_some() {
+                return;
+            }
+        }
+        let context = self.edit_context();
+        match self.tasks.begin_draft_section(&context) {
+            Ok(()) => self.mode = Mode::ColumnEdit,
+            Err(message) => self.tasks.set_edit_notice(message),
+        }
+    }
+
+    /// Sends whatever the open draft holds, and returns to edit mode.
+    ///
+    /// Synchronous, unlike the field edits: a create has no local value to
+    /// show while the request is in flight — it has a gid it does not know
+    /// yet, and every subsequent edit of that row needs it. A failure leaves
+    /// the draft and its title on screen, because the alternative is losing
+    /// what was just typed to a 403.
+    fn commit_draft(&mut self) {
+        let Some(commit) = self.tasks.draft_commit() else {
+            // An empty name discards the draft with nothing sent, the same
+            // as `esc`: nothing happened, so there is nothing to undo.
+            self.tasks.cancel_draft();
+            self.set_edit_mode();
+            return;
+        };
+
+        let result = match &commit {
+            DraftCommit::Task(task) => self
+                .client
+                .create_task(task)
+                .map(|task| Created::Task(Box::new(task))),
+            DraftCommit::Section {
+                project_gid,
+                name,
+                insert_after,
+            } => self
+                .client
+                .create_section(project_gid, name, insert_after.as_deref())
+                .map(|section| Created::Section(Section::new(section.gid, section.name))),
+        };
+
+        match result {
+            Ok(Created::Task(task)) => {
+                self.tasks.clear_edit_notice();
+                self.tasks.finish_draft_task(*task);
+                self.set_edit_mode();
+            }
+            Ok(Created::Section(section)) => {
+                self.tasks.clear_edit_notice();
+                self.tasks.finish_draft_section(section);
+                self.set_edit_mode();
+            }
+            Err(err) => {
+                debug_log(&format!("create failed: {err}"));
+                self.tasks
+                    .set_edit_notice(format!("could not create: {err}"));
+            }
+        }
+    }
+
+    /// `X`: deletes the empty section the cursor is in.
+    ///
+    /// Not part of the mark-and-confirm flow: that exists because deleting
+    /// tasks destroys work, and an empty section holds none.
+    fn delete_section(&mut self) {
+        let context = self.edit_context();
+        let target = match self.tasks.section_to_delete(&context) {
+            Ok(target) => target,
+            Err(message) => {
+                self.tasks.set_edit_notice(message);
+                return;
+            }
+        };
+
+        match self.client.delete_section(&target.section_gid) {
+            Ok(()) => {
+                self.tasks.set_edit_notice(format!("deleted {}", target.section_name));
+                self.tasks.remove_section_locally(&target);
+            }
+            Err(err) => {
+                debug_log(&format!("section delete failed: {err}"));
+                self.tasks
+                    .set_edit_notice(format!("could not delete {}: {err}", target.section_name));
+            }
+        }
+    }
+
+    /// `J` / `K`: moves the task under the cursor one section along.
+    ///
+    /// Optimistic: the row jumps to its new group on the keystroke and goes
+    /// back if the request fails.
+    fn move_task_to_section(&mut self, delta: i32) {
+        let context = self.edit_context();
+        let moved = match self.tasks.section_move(delta, &context) {
+            // Off the end in either direction does nothing. There is no "no
+            // section" position to move into below the last one.
+            Ok(None) => return,
+            Ok(Some(moved)) => moved,
+            Err(message) => {
+                self.tasks.set_edit_notice(message);
+                return;
+            }
+        };
+
+        self.tasks.clear_edit_notice();
+        self.tasks.apply_section_move_locally(&moved);
+        if let Err(err) = self
+            .client
+            .add_task_to_section(&moved.section_gid, &moved.gid)
+        {
+            debug_log(&format!("section move failed: {err}"));
+            self.tasks.undo_section_move_locally(&moved);
+            self.tasks
+                .set_edit_notice(format!("could not move to {}: {err}", moved.section_name));
+        }
+    }
+
+    /// `enter` in edit mode: deletes everything `x` marked.
+    ///
+    /// The rows go at confirm time and come back if the request fails, with
+    /// the same `could not … N of M` shape the field edits report.
+    fn delete_marked_tasks(&mut self) {
+        let marked = self.tasks.marked_for_deletion();
+        if marked.is_empty() {
+            return;
+        }
+
+        // Taken out first, so the table reads as the deletion the user
+        // confirmed rather than lagging behind the requests.
+        let removed = self.tasks.remove_tasks_locally(&marked);
+        let mut failed = Vec::new();
+        let mut error = None;
+        for gid in &marked {
+            if let Err(err) = self.client.delete_task(gid) {
+                debug_log(&format!("task delete failed: {err}"));
+                failed.push(gid.clone());
+                error = Some(err.to_string());
+            }
+        }
+
+        if failed.is_empty() {
+            self.tasks.clear_edit_notice();
+            return;
+        }
+
+        // Only the ones that failed, and whatever went with them: a batch
+        // where two of three succeeded must not put all three back. A failed
+        // parent takes its whole limb back, however deep, which is why this
+        // is a closure over the removed set rather than one hop.
+        let mut keep = failed.iter().cloned().collect::<std::collections::HashSet<_>>();
+        loop {
+            let before = keep.len();
+            for record in &removed {
+                if record
+                    .parent_gid
+                    .as_ref()
+                    .is_some_and(|parent| keep.contains(parent))
+                {
+                    keep.insert(record.gid.clone());
+                }
+            }
+            if keep.len() == before {
+                break;
+            }
+        }
+        let restore = removed
+            .into_iter()
+            .filter(|record| keep.contains(&record.gid))
+            .collect::<Vec<_>>();
+        self.tasks.restore_tasks_locally(restore);
+        self.tasks.set_edit_notice(format!(
+            "could not delete {} of {}: {}",
+            failed.len(),
+            marked.len(),
+            error.unwrap_or_else(|| "unknown error".to_string()),
+        ));
     }
 
     fn adjust_top_pane_height(&mut self, delta: i16) {
@@ -861,6 +1201,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             Ok(edits) => {
                 self.dispatch_task_edits(edits.fields);
                 self.dispatch_project_edits(edits.projects);
+                self.dispatch_parent_edits(edits.parents);
                 self.set_task_mode();
             }
             Err(message) => self.tasks.set_edit_notice(message),
@@ -978,6 +1319,14 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     /// typing into a filter, and an unwritable config must not take the
     /// session down mid-word.
     fn write_config_or_report(&mut self) {
+        // The load-bearing half of §3.2: `stage_view_state` and the
+        // filter-set write-through both fire on a settled burst of
+        // keystrokes, so without this the first `j` would rewrite the file in
+        // version 2 behind the prompt — and a user who meant to quit and edit
+        // it by hand would find it already changed.
+        if self.pending_migration.is_some() {
+            return;
+        }
         match self.config.save_to_source_path() {
             Ok(()) => self.tasks.clear_filter_sets_notice(),
             Err(err) => {
@@ -1141,6 +1490,16 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             }
             Action::CompleteCandidate(delta) => {
                 self.complete_candidate(*delta);
+                return Ok(None);
+            }
+            // `ctrl-n` has meant "negate this filter row" since milestone 13,
+            // and with a candidate overlay up it is also the obvious key for
+            // "next candidate". Gated on the overlay rather than moved, in
+            // the shape `calendar_grid_visible` already uses: with the
+            // overlay open it walks, with none it negates as it always did.
+            // `!` on the row in browse mode is the other way to negate.
+            Action::FilterNegateField if self.tasks.completion_overlay_open() => {
+                self.highlight_candidate(1);
                 return Ok(None);
             }
             Action::CalendarCommit => {
@@ -1397,7 +1756,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 self.mode = Mode::Gantt;
                 return Ok(None);
             }
-            Action::BeginTaskEdit => {
+            Action::EditColumn => {
                 let context = self.edit_context();
                 match self.tasks.begin_cell_edit(&context) {
                     Ok(()) => self.set_task_edit_mode(),
@@ -1405,16 +1764,67 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 }
                 return Ok(None);
             }
-            Action::CancelTaskEdit => {
-                self.tasks.cancel_cell_edit();
-                self.set_task_mode();
+            Action::CancelColumnEdit => {
+                // A draft is thrown away whole rather than left as an empty
+                // row: nothing was sent, so there is nothing to keep.
+                match self.tasks.draft_gid().is_some() {
+                    true => {
+                        self.tasks.cancel_draft();
+                        self.set_edit_mode();
+                    }
+                    false => {
+                        self.tasks.cancel_cell_edit();
+                        self.set_task_mode();
+                    }
+                }
                 return Ok(None);
             }
-            Action::TaskEditCycleValue(delta) => {
+            Action::SetEditMode => {
+                self.set_edit_mode();
+                self.ensure_task_data();
+                return Ok(None);
+            }
+            Action::EditCancel => {
+                self.edit_cancel();
+                return Ok(None);
+            }
+            Action::InsertTask => {
+                self.insert_task(false);
+                return Ok(None);
+            }
+            Action::InsertSubtask => {
+                self.insert_task(true);
+                return Ok(None);
+            }
+            Action::InsertSection => {
+                self.insert_section();
+                return Ok(None);
+            }
+            Action::DeleteSection => {
+                self.delete_section();
+                return Ok(None);
+            }
+            Action::MoveTaskToSection(delta) => {
+                self.move_task_to_section(*delta);
+                return Ok(None);
+            }
+            Action::MarkForDeletion => {
+                self.tasks.toggle_deletion_marks();
+                return Ok(None);
+            }
+            Action::DeleteMarkedTasks => {
+                self.delete_marked_tasks();
+                return Ok(None);
+            }
+            Action::HighlightCandidate(delta) => {
+                self.highlight_candidate(*delta);
+                return Ok(None);
+            }
+            Action::ColumnEditCycleValue(delta) => {
                 self.tasks.cell_edit_cycle_value(*delta);
                 return Ok(None);
             }
-            Action::TaskEditClear => {
+            Action::ColumnEditClear => {
                 self.tasks.cell_edit_clear();
                 return Ok(None);
             }
@@ -1448,7 +1858,11 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             // Deliberately not early returns: both send a write, and the tail
             // is what keeps the fetch decision running after an action, for
             // the same reason `FilterSetLoad` falls through to it.
-            Action::CommitTaskEdit => {
+            Action::CommitColumnEdit if self.tasks.draft_gid().is_some() => {
+                self.commit_draft();
+                return Ok(None);
+            }
+            Action::CommitColumnEdit => {
                 self.commit_open_cell_edit();
             }
             Action::ToggleTaskCompleted if self.tasks.visible() => {
@@ -1631,6 +2045,13 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             return Ok(Some(AppCommand::Quit));
         }
 
+        // The migration prompt owns every key it is shown, and nothing below
+        // it may run: `ctrl-c` above is the one way out that is not one of
+        // its own three keys.
+        if self.pending_migration.is_some() {
+            return Ok(self.handle_migration_input(event));
+        }
+
         // `esc` dismisses the notice pane, in whatever mode it is showing
         // over. Here rather than as an action because `esc` is already bound
         // to something else in half the modes a notice can be raised in, and
@@ -1670,8 +2091,8 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 // anything else, the same way the filter panel's label keys
                 // are context-sensitive. Only a plain character is ambiguous:
                 // `ctrl-l` clears whatever the editor holds.
-                if action.is_task_edit_value_action()
-                    && matches!(self.mode, Mode::TaskEdit)
+                if action.is_column_edit_value_action()
+                    && matches!(self.mode, Mode::ColumnEdit)
                     && !self.tasks.cell_edit_is_options()
                     && !event
                         .modifiers
@@ -1744,6 +2165,19 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 .map(|project| (project.id.clone(), project.name.clone()))
                 .collect(),
             people: self.people_directory(),
+            // Any project answers: every one of them carries its workspace,
+            // and a task created outside every project still needs one.
+            workspace_gid: self
+                .config
+                .auth
+                .as_ref()
+                .and_then(|auth| auth.workspace_gid.clone())
+                .or_else(|| {
+                    self.projects
+                        .all_projects()
+                        .iter()
+                        .find_map(|project| project.workspace_gid.clone())
+                }),
         }
     }
 
@@ -1826,6 +2260,31 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         }
     }
 
+    /// The same, for re-parentings: `setParent` is a third endpoint again.
+    fn dispatch_parent_edits(&mut self, edits: Vec<ParentEdit>) {
+        if edits.is_empty() {
+            return;
+        }
+
+        self.tasks.clear_edit_notice();
+        self.tasks.apply_parent_edits_locally(&edits);
+        self.begin_writes(edits.len());
+
+        for edit in edits {
+            let client = self.client.clone();
+            let sender = self.task_edit_events.0.clone();
+            thread::spawn(move || {
+                let result = client
+                    .set_task_parent(&edit.gid, edit.parent_gid.as_deref())
+                    .map(|()| None);
+                let _ = sender.send(TaskEditMessage {
+                    edit: PendingEdit::Parent(edit),
+                    result,
+                });
+            });
+        }
+    }
+
     fn begin_writes(&mut self, count: usize) {
         self.task_edits_sent += count;
         self.task_edits_outstanding += count;
@@ -1882,6 +2341,9 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                     }
                     PendingEdit::Project(edit) => {
                         self.tasks.apply_project_edits_locally(&[edit.undo()]);
+                    }
+                    PendingEdit::Parent(edit) => {
+                        self.tasks.apply_parent_edits_locally(&[edit.undo()]);
                     }
                 }
             }
@@ -1952,7 +2414,9 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
 
     fn persist_project_visibility(&mut self) -> Result<()> {
         self.config.project_visibility = self.projects.project_visibility_config();
-        self.config.save_to_source_path()?;
+        if self.pending_migration.is_none() {
+            self.config.save_to_source_path()?;
+        }
         Ok(())
     }
 
@@ -1965,7 +2429,9 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     fn persist_gantt_colors(&mut self) -> Result<()> {
         self.config.gantt.color_by = self.tasks.gantt().color_key().to_string();
         self.config.gantt.order = self.tasks.gantt().orders().clone();
-        self.config.save_to_source_path()?;
+        if self.pending_migration.is_none() {
+            self.config.save_to_source_path()?;
+        }
         Ok(())
     }
 
@@ -2056,6 +2522,36 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             });
         });
     }
+}
+
+/// The file a config backup goes to, avoiding one that already exists.
+///
+/// `tuisana.toml` becomes `tuisana.backup.toml`, then
+/// `tuisana.backup.2.toml`, and so on: a second migration must not clobber
+/// the copy the first one made.
+fn backup_path_for(source: Option<&Path>) -> PathBuf {
+    let Some(source) = source else {
+        return PathBuf::from("tuisana.backup.toml");
+    };
+    let stem = source
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_string())
+        .unwrap_or_else(|| "tuisana".to_string());
+    let extension = source
+        .extension()
+        .map(|extension| format!(".{}", extension.to_string_lossy()))
+        .unwrap_or_default();
+    let directory = source.parent().unwrap_or(Path::new(""));
+
+    let first = directory.join(format!("{stem}.backup{extension}"));
+    if !first.exists() {
+        return first;
+    }
+    // Starts at 2 because the unnumbered name is the first one.
+    (2u32..)
+        .map(|n| directory.join(format!("{stem}.backup.{n}{extension}")))
+        .find(|candidate| !candidate.exists())
+        .unwrap_or(first)
 }
 
 pub fn debug_log(message: &str) {
@@ -2430,7 +2926,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("tuisana-gantt-{unique}.toml"));
         std::fs::write(
             &path,
-            format!("[header]\ntype = \"tuisana\"\nversion = 1.0\n{body}"),
+            format!("[header]\ntype = \"tuisana\"\nversion = 2.0\n{body}"),
         )
         .expect("write config");
         (Config::load_from_path(&path).expect("config loads"), path)
@@ -3025,6 +3521,140 @@ mod tests {
         assert!(!app.tasks.filter_set_dirty());
 
         let _ = std::fs::remove_dir(&path);
+    }
+
+    // ---- The version-1 migration -------------------------------------------
+
+    /// An app over a version-1 config file, which is what raises the prompt.
+    fn migrating_app(body: &str) -> (App<FakeAsanaClient>, std::path::PathBuf) {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("tuisana-migrate-{unique}.toml"));
+        std::fs::write(&path, format!("# a hand-written comment\n[header]\ntype = \"tuisana\"\nversion = 1.0\n{body}"))
+            .expect("write config");
+        let config = Config::load_from_path(&path).expect("config loads");
+        (App::new(config, FakeAsanaClient::with_default_projects()), path)
+    }
+
+    fn press_key(app: &mut App<FakeAsanaClient>, code: KeyCode) -> Option<AppCommand> {
+        let keymap = app.keymap().expect("keymap builds");
+        app.handle_key_event(&keymap, KeyEvent::new(code, KeyModifiers::NONE), 10)
+            .expect("key handled")
+    }
+
+    #[test]
+    fn a_version_one_config_asks_before_it_is_touched() {
+        let (mut app, path) = migrating_app("");
+        let before = std::fs::read_to_string(&path).expect("read back");
+
+        assert!(app.pending_migration_backup().is_some(), "the prompt is up");
+        // `stage_view_state` fires on a settled burst of keystrokes, so this
+        // is the key that used to rewrite the file behind the prompt.
+        press_key(&mut app, KeyCode::Char('j'));
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read back"),
+            before,
+            "no keystroke may write the config while the prompt is up"
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn q_quits_and_leaves_the_file_exactly_as_it_was() {
+        let (mut app, path) = migrating_app("");
+        let before = std::fs::read_to_string(&path).expect("read back");
+
+        assert_eq!(press_key(&mut app, KeyCode::Char('q')), Some(AppCommand::Quit));
+        assert_eq!(std::fs::read_to_string(&path).expect("read back"), before);
+        assert!(
+            app.pending_migration_backup().is_some(),
+            "and the prompt returns next time"
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn y_writes_a_byte_for_byte_backup_and_then_migrates() {
+        let (mut app, path) = migrating_app("");
+        let before = std::fs::read_to_string(&path).expect("read back");
+        let backup = app
+            .pending_migration_backup()
+            .expect("a backup path")
+            .to_path_buf();
+
+        press_key(&mut app, KeyCode::Char('y'));
+
+        assert_eq!(
+            std::fs::read_to_string(&backup).expect("the backup exists"),
+            before,
+            "a copy, not a re-serialization: the comments survive"
+        );
+        let migrated = std::fs::read_to_string(&path).expect("read back");
+        assert!(migrated.contains("version = 2.0"), "{migrated}");
+        assert!(app.pending_migration_backup().is_none(), "the prompt is answered");
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&backup).ok();
+    }
+
+    #[test]
+    fn n_migrates_without_a_backup() {
+        let (mut app, path) = migrating_app("");
+        let backup = app
+            .pending_migration_backup()
+            .expect("a backup path")
+            .to_path_buf();
+
+        press_key(&mut app, KeyCode::Char('n'));
+
+        assert!(!backup.exists(), "no backup was asked for");
+        assert!(std::fs::read_to_string(&path)
+            .expect("read back")
+            .contains("version = 2.0"));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn an_existing_backup_is_not_clobbered() {
+        let (app, path) = migrating_app("");
+        let first = app
+            .pending_migration_backup()
+            .expect("a backup path")
+            .to_path_buf();
+        assert!(first.to_string_lossy().ends_with(".backup.toml"));
+        std::fs::write(&first, "the backup from last time").expect("write a backup");
+
+        // A second session over the same file resolves the next free name,
+        // and the window names the file it will actually write.
+        let (app, _) = (
+            App::new(
+                Config::load_from_path(&path).expect("config loads"),
+                FakeAsanaClient::with_default_projects(),
+            ),
+            (),
+        );
+        let second = app.pending_migration_backup().expect("a backup path");
+        assert!(
+            second.to_string_lossy().ends_with(".backup.2.toml"),
+            "{second:?}"
+        );
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&first).ok();
+    }
+
+    #[test]
+    fn a_config_already_at_version_two_prompts_for_nothing() {
+        let (config, path) = config_on_disk();
+        let app = App::new(config, FakeAsanaClient::with_default_projects());
+
+        assert!(app.pending_migration_backup().is_none());
+        std::fs::remove_file(&path).ok();
     }
 
     // ---- Persisted view state ----------------------------------------------

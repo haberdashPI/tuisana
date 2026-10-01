@@ -10,16 +10,16 @@
 │                      │┃                                                                                              ┃
 │                      │┃                                                                                              ┃
 └──────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-┌ Tasks ────────────────────────────────────────────────────────────────────────────────────────────── 2 tasks · row 1 ┐
-│   Task                                             │ Assignee  │    Due │  Start │ St │ Projects           │ Priority│
+┌ Tasks ──────────────────────────────────────────────────────────────────────────────── 2 tasks · row 1 · columns 0/1 ┐
+│   Task                                     │ Assignee  │    Due │  Start │ St │ Projects           │ Parent │ Priorit│
 │                                                                                                                      │
 │▌Northwind BTX 4412 ───────────────┏ Discard filters? ━━━━━━━━━━━━━━━━━━━━━━━━━━━┓────────────────────────────────────│
 │                                   ┃                                             ┃                                    │
 │   Study Kit Design ···············┃ This filter panel has no name, so the       ┃····································│
-│▍  Ship release candidate to the st┃ 1 filter it is holding exists nowhere else. ┃│ ○  │ Northwind BTX 4412 │ High    │
+│▍  Ship release candidate to the st┃ 1 filter it is holding exists nowhere else. ┃orthwind BTX 4412 │ —      │ High   │
 │                                   ┃                                             ┃                                    │
 │   Shipment ·······················┃ y        discard them and load Blocked      ┃····································│
-│   Close out packaging vendor contr┃ n / esc  keep what is on screen             ┃│ ○  │ Northwind BTX 4412 │ Low     │
+│   Close out packaging vendor contr┃ n / esc  keep what is on screen             ┃orthwind BTX 4412 │ —      │ Low    │
 │                                   ┃                                             ┃                                    │
 │                                   ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                                    │
 │                                                                                                                      │

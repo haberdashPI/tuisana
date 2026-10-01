@@ -1,6 +1,8 @@
 [header]
 type = "tuisana"
-version = 1.0
+# Version 2. A version-1 file is still readable: the first run against one
+# asks before rewriting it, and offers to back it up byte for byte first.
+version = 2.0
 
 [auth]
 # Create a personal access token in Asana's developer console.
@@ -111,7 +113,7 @@ command = "set_project_mode"
 
 [[bind]]
 key = "t"
-command = "toggle_task_view"
+command = "set_task_mode"
 
 [[bind]]
 key = "m"
@@ -471,7 +473,7 @@ command = "task_column_next"
 [[bind]]
 key = "enter"
 mode = "task"
-command = "begin_task_edit"
+command = "edit_column"
 
 [[bind]]
 key = "o"
@@ -492,7 +494,75 @@ key = "b"
 mode = "task"
 command = "toggle_recent_pane"
 
-# "task_edit" mode is a cell open for editing. Like filter-edit and calendar
+# "edit" mode holds the keys that change *which rows exist*: creating a task,
+# re-parenting it, moving it between sections, deleting it. `t` from task mode
+# enters it and `esc` leaves. It keeps the global keys — moving the cursor is
+# most of what you do between edits — but not task mode's own.
+#
+# The case split is the mnemonic: lowercase acts on the task, uppercase on the
+# structure around it. Case matters on a single letter from version 2 on, so
+# `J` and `j` are different keys; `ctrl-` pairs are still case-insensitive,
+# which is why the subtask key is `I` rather than `ctrl-i`.
+
+[[bind]]
+key = "t"
+mode = "task"
+command = "set_edit_mode"
+
+[[bind]]
+key = "i"
+mode = "edit"
+command = "insert_task"
+
+[[bind]]
+key = "I"
+mode = "edit"
+command = "insert_subtask"
+
+[[bind]]
+key = "S"
+mode = "edit"
+command = "insert_section"
+
+[[bind]]
+key = "X"
+mode = "edit"
+command = "delete_section"
+
+[[bind]]
+key = "J"
+mode = "edit"
+command = "move_task_to_next_section"
+
+[[bind]]
+key = "K"
+mode = "edit"
+command = "move_task_to_prev_section"
+
+# Deletion is the one edit with nothing to put back, so it is marked first and
+# carried out second. `esc` clears the marks; with none, it leaves the mode.
+
+[[bind]]
+key = "x"
+mode = "edit"
+command = "mark_for_deletion"
+
+[[bind]]
+key = "space"
+mode = "edit"
+command = "toggle_task_selection"
+
+[[bind]]
+key = "enter"
+mode = "edit"
+command = "delete_marked_tasks"
+
+[[bind]]
+key = "esc"
+mode = "edit"
+command = "edit_cancel"
+
+# "column_edit" mode is a cell open for editing. Like filter-edit and calendar
 # mode it does not fall back to the global bindings, so an unbound letter
 # types into the cell rather than firing the command that letter carries.
 #
@@ -502,33 +572,33 @@ command = "toggle_recent_pane"
 
 [[bind]]
 key = "enter"
-mode = "task_edit"
-command = "commit_task_edit"
+mode = "column_edit"
+command = "commit_column_edit"
 
 [[bind]]
 key = "esc"
-mode = "task_edit"
-command = "cancel_task_edit"
+mode = "column_edit"
+command = "cancel_column_edit"
 
 [[bind]]
 key = "j"
-mode = "task_edit"
-command = "task_edit_next_value"
+mode = "column_edit"
+command = "column_edit_next_value"
 
 [[bind]]
 key = "k"
-mode = "task_edit"
-command = "task_edit_prev_value"
+mode = "column_edit"
+command = "column_edit_prev_value"
 
 [[bind]]
 key = "d"
-mode = "task_edit"
-command = "task_edit_clear"
+mode = "column_edit"
+command = "column_edit_clear"
 
 [[bind]]
 key = "ctrl-l"
-mode = "task_edit"
-command = "task_edit_clear"
+mode = "column_edit"
+command = "column_edit_clear"
 
 # Completion, on the two cells whose values are names the backend knows:
 # Assignee and Projects. tab walks the candidates with the typed prefix
@@ -536,12 +606,12 @@ command = "task_edit_clear"
 
 [[bind]]
 key = "tab"
-mode = "task_edit"
+mode = "column_edit"
 command = "complete_next_candidate"
 
 [[bind]]
 key = "shift-tab"
-mode = "task_edit"
+mode = "column_edit"
 command = "complete_prev_candidate"
 
 # The emacs motions, shared by every field that takes text. `alt-` needs the
@@ -550,42 +620,42 @@ command = "complete_prev_candidate"
 
 [[bind]]
 key = "left"
-mode = "task_edit"
+mode = "column_edit"
 command = "filter_caret_left"
 
 [[bind]]
 key = "right"
-mode = "task_edit"
+mode = "column_edit"
 command = "filter_caret_right"
 
 [[bind]]
 key = "ctrl-b"
-mode = "task_edit"
+mode = "column_edit"
 command = "filter_caret_left"
 
 [[bind]]
 key = "ctrl-f"
-mode = "task_edit"
+mode = "column_edit"
 command = "filter_caret_right"
 
 [[bind]]
 key = "alt-b"
-mode = "task_edit"
+mode = "column_edit"
 command = "text_caret_word_back"
 
 [[bind]]
 key = "alt-f"
-mode = "task_edit"
+mode = "column_edit"
 command = "text_caret_word_forward"
 
 [[bind]]
 key = "ctrl-a"
-mode = "task_edit"
+mode = "column_edit"
 command = "text_caret_start"
 
 [[bind]]
 key = "ctrl-e"
-mode = "task_edit"
+mode = "column_edit"
 command = "text_caret_end"
 
 # The three forward cuts, which are the deletions the motions above imply.
@@ -593,22 +663,42 @@ command = "text_caret_end"
 
 [[bind]]
 key = "ctrl-d"
-mode = "task_edit"
+mode = "column_edit"
 command = "text_cut_char"
 
 [[bind]]
 key = "alt-d"
-mode = "task_edit"
+mode = "column_edit"
 command = "text_cut_word"
 
 [[bind]]
 key = "ctrl-k"
-mode = "task_edit"
+mode = "column_edit"
 command = "text_cut_to_end"
 
 # The Assignee filter row has a fourth match mode, "list": its values are
 # picked from the workspace directory rather than typed as a pattern. These
 # are the same two keys the cell editor completes with.
+
+# ctrl-n and ctrl-p walk the candidate overlay's highlight without touching
+# the text, and `enter` takes whatever it landed on. In filter-edit mode
+# ctrl-n is already `filter_negate_field`, and keeps that meaning with no
+# overlay open — so only ctrl-p is bound here.
+
+[[bind]]
+key = "ctrl-n"
+mode = "column_edit"
+command = "highlight_next_candidate"
+
+[[bind]]
+key = "ctrl-p"
+mode = "column_edit"
+command = "highlight_prev_candidate"
+
+[[bind]]
+key = "ctrl-p"
+mode = "filter_edit"
+command = "highlight_prev_candidate"
 
 [[bind]]
 key = "tab"

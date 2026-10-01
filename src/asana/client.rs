@@ -15,7 +15,7 @@ use crate::{
         AsanaClient, TaskLoadScope, TaskQuery, TaskTarget,
     },
     config::AuthConfig,
-    domain::{Project, ProjectEdit, ProjectMembership, TaskFieldEdit},
+    domain::{NewTask, Project, ProjectEdit, ProjectMembership, TaskFieldEdit},
     error::{Error, Result},
 };
 
@@ -39,6 +39,9 @@ pub trait Transport {
     /// Project membership is `tasks/{gid}/addProject`, not a key in a task
     /// patch, so it cannot go through [`Transport::put_json`].
     fn post_json(&self, path: &str, body: &Value, token: &str) -> Result<Value>;
+    /// Deletes a resource. Beside the three above for the same reason they
+    /// are beside each other: a verb the other methods cannot spell.
+    fn delete_json(&self, path: &str, token: &str) -> Result<Value>;
 }
 
 /// Production HTTP transport using `reqwest`.
@@ -107,6 +110,23 @@ impl Transport for ReqwestTransport {
             .bearer_auth(token)
             .header(reqwest::header::ACCEPT, "application/json")
             .json(body)
+            .send()
+            .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
+
+        decode(response, path)
+    }
+
+    fn delete_json(&self, path: &str, token: &str) -> Result<Value> {
+        let url = format!(
+            "{}/{}",
+            self.base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+        let response = self
+            .client
+            .delete(url)
+            .bearer_auth(token)
+            .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
 
@@ -245,7 +265,14 @@ impl<T: Transport> HttpAsanaClient<T> {
     }
 
     fn list_projects_page(&self, offset: Option<&str>) -> Result<CollectionResponse<ProjectDto>> {
-        let mut query = vec![("archived", "false".to_string()), ("limit", "100".to_string())];
+        let mut query = vec![
+            // The workspace travels with the project so that creating a task
+            // outside every project still has one to name. `auth.workspace_gid`
+            // is optional, so it cannot be relied on.
+            ("opt_fields", "gid,name,workspace.gid".to_string()),
+            ("archived", "false".to_string()),
+            ("limit", "100".to_string()),
+        ];
         if let Some(workspace_gid) = &self.workspace_gid {
             query.push(("workspace", workspace_gid.clone()));
         }
@@ -417,11 +444,10 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
 
         loop {
             let page = self.list_projects_page(offset.as_deref())?;
-            projects.extend(
-                page.data
-                    .into_iter()
-                    .map(|project| Project::new(project.gid, project.name, false)),
-            );
+            projects.extend(page.data.into_iter().map(|project| {
+                let workspace = project.workspace.map(|workspace| workspace.gid);
+                Project::new(project.gid, project.name, false).in_workspace(workspace)
+            }));
 
             match page.next_page {
                 Some(next_page) => offset = Some(next_page.offset),
@@ -568,6 +594,103 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
         Ok(())
     }
 
+    fn create_task(&self, task: &NewTask) -> Result<TaskDto> {
+        let mut data = serde_json::Map::new();
+        data.insert("name".to_string(), Value::from(task.name.clone()));
+        if let Some(parent) = &task.parent_gid {
+            data.insert("parent".to_string(), Value::from(parent.clone()));
+        }
+        if let Some(project) = &task.project_gid {
+            data.insert(
+                "projects".to_string(),
+                Value::Array(vec![Value::from(project.clone())]),
+            );
+        }
+        // Asana wants exactly one of these. A task with a parent or a project
+        // already has its workspace decided, and naming it again is refused.
+        if task.parent_gid.is_none() && task.project_gid.is_none() {
+            let workspace = task.workspace_gid.as_deref().ok_or_else(|| {
+                Error::Backend(
+                    "a task in no project needs a workspace, and none is known".to_string(),
+                )
+            })?;
+            data.insert("workspace".to_string(), Value::from(workspace.to_string()));
+        }
+
+        let body = serde_json::json!({ "data": Value::Object(data) });
+        let json = self.transport.post_json(
+            &format!("tasks?opt_fields={TASK_OPT_FIELDS}"),
+            &body,
+            &self.personal_access_token,
+        )?;
+        let response: ResourceResponse<TaskDto> = serde_json::from_value(json)
+            .map_err(|err| Error::Backend(format!("failed to decode created task: {err}")))?;
+
+        // Second, and only on the first's success: a section is not a field
+        // on create.
+        if let Some(section) = &task.section_gid {
+            self.add_task_to_section(section, &response.data.gid)?;
+        }
+        Ok(response.data)
+    }
+
+    fn delete_task(&self, task_gid: &str) -> Result<()> {
+        self.transport
+            .delete_json(&format!("tasks/{task_gid}"), &self.personal_access_token)?;
+        Ok(())
+    }
+
+    fn set_task_parent(&self, task_gid: &str, parent_gid: Option<&str>) -> Result<()> {
+        let body = serde_json::json!({ "data": { "parent": parent_gid } });
+        self.transport.post_json(
+            &format!("tasks/{task_gid}/setParent"),
+            &body,
+            &self.personal_access_token,
+        )?;
+        Ok(())
+    }
+
+    fn add_task_to_section(&self, section_gid: &str, task_gid: &str) -> Result<()> {
+        let body = serde_json::json!({ "data": { "task": task_gid } });
+        self.transport.post_json(
+            &format!("sections/{section_gid}/addTask"),
+            &body,
+            &self.personal_access_token,
+        )?;
+        Ok(())
+    }
+
+    fn create_section(
+        &self,
+        project_gid: &str,
+        name: &str,
+        insert_after: Option<&str>,
+    ) -> Result<SectionDto> {
+        let mut data = serde_json::Map::new();
+        data.insert("name".to_string(), Value::from(name.to_string()));
+        if let Some(after) = insert_after {
+            data.insert("insert_after".to_string(), Value::from(after.to_string()));
+        }
+
+        let body = serde_json::json!({ "data": Value::Object(data) });
+        let json = self.transport.post_json(
+            &format!("projects/{project_gid}/sections"),
+            &body,
+            &self.personal_access_token,
+        )?;
+        let response: ResourceResponse<SectionDto> = serde_json::from_value(json)
+            .map_err(|err| Error::Backend(format!("failed to decode created section: {err}")))?;
+        Ok(response.data)
+    }
+
+    fn delete_section(&self, section_gid: &str) -> Result<()> {
+        self.transport.delete_json(
+            &format!("sections/{section_gid}"),
+            &self.personal_access_token,
+        )?;
+        Ok(())
+    }
+
     fn current_user_gid(&self) -> Result<String> {
         let json = self.transport.get_json(
             "users/me",
@@ -598,6 +721,8 @@ mod tests {
         puts: RefCell<Vec<(String, serde_json::Value)>>,
         /// Every `post_json` call, as `(path, body)`.
         posts: RefCell<Vec<(String, serde_json::Value)>>,
+        /// Every `delete_json` call, as a path.
+        deletes: RefCell<Vec<String>>,
         responses: RefCell<Vec<serde_json::Value>>,
     }
 
@@ -607,6 +732,7 @@ mod tests {
                 requests: RefCell::new(Vec::new()),
                 puts: RefCell::new(Vec::new()),
                 posts: RefCell::new(Vec::new()),
+                deletes: RefCell::new(Vec::new()),
                 responses: RefCell::new(responses),
             }
         }
@@ -651,6 +777,13 @@ mod tests {
             self.posts
                 .borrow_mut()
                 .push((path.to_string(), body.clone()));
+            Ok(self.responses.borrow_mut().remove(0))
+        }
+
+        fn delete_json(&self, path: &str, _token: &str) -> Result<serde_json::Value> {
+            // A delete has no body, so it is logged as one with an empty
+            // object: the tests ask which path went out, not what was in it.
+            self.deletes.borrow_mut().push(path.to_string());
             Ok(self.responses.borrow_mut().remove(0))
         }
     }

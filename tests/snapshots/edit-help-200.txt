@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                                                                                                                                              │
+│▍   ★ Platform Infrastructure                                                                                                                                                                         │
+│    ☆ Backlog                                                                                                                                                                                         │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                           ┏ Help · edit mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                                                           │
+│                                                           ┃Create                                   Modes                                ┃                                                           │
+└───────────────────────────────────────────────────────────┃i         new task beside this one       p         projects                   ┃───────────────────────────────────────────────────────────┘
+┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃I         new subtask of this one        f         filters                    ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11 tasks · row 1 ┓
+┃   Task                                                    ┃S         new section after this one     t         tasks                      ┃ Due │  Start │ St │ Projects           │ Parent │ Priority┃
+┃                                                           ┃                                         m         toggle tasks               ┃                                                           ┃
+┃▌Northwind BTX 4412 ───────────────────────────────────────┃Move & remove                                                                 ┃───────────────────────────────────────────────────────────┃
+┃                                                           ┃K/J       move between sections          Panes                                ┃                                                           ┃
+┃   Study Kit Design ·······································┃␣         select, then mark              [/]       shrink / grow              ┃···························································┃
+┃▍  Draft the assay validation protocol                     ┃x         mark for deletion              {         minimize                   ┃l 10 │ Jun 15 │ ○  │ Northwind BTX 4412 │ —      │ High    ┃
+┃   Review shipment requirements doc                        ┃⏎         delete what is marked          }         maximize                   ┃g 19 │  Aug 3 │ ○  │ Northwind BTX 4412 │ —      │ High    ┃
+┃   Ship release candidate to the study team                ┃X         delete an empty section        0         restore                    ┃oday │ Aug 10 │ ○  │ Northwind BTX 4412 │ —      │ High    ┃
+┃   Confirm carrier pickup window with the vendor           ┃esc       clear the marks, then leave                                         ┃ Wed │ Aug 17 │ ○  │ Northwind BTX 4412 │ —      │ —       ┃
+┃   Update the sample intake SOP                            ┃                                         App                                  ┃ep 4 │ Aug 20 │ ○  │ Northwind BTX 4412 │ —      │ Medium  ┃
+┃   Qualify the second reagent supplier                     ┃Move                                     r         refresh                    ┃p 12 │  Jul 1 │ ○  │ Northwind BTX 4412 │ —      │ Medium  ┃
+┃                                                           ┃j/k       down / up                      q ^c      quit                       ┃                                                           ┃
+┃   Shipment ···············································┃^d/^u     page down / up                 ?         close this help            ┃···························································┃
+┃   Book the courier for the pilot run                      ┃home/end  top / bottom                                                        ┃p 15 │  Sep 1 │ ○  │ Northwind BTX 4412 │ —      │ Low     ┃
+┃   Label the retention samples                             ┃                                                                              ┃ct 9 │      — │ ○  │ Northwind BTX 4412 │ —      │ Medium  ┃
+┃   Reconcile the freight invoices                          ┃                                                                    ? to close┃t 30 │ Sep 20 │ ○  │ Northwind BTX 4412 │ —      │ Low     ┃
+┃   Close out packaging vendor contract                     ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛v 14 │  Oct 1 │ ○  │ Northwind BTX 4412 │ —      │ Low     ┃
+┃   Close the quarter's shipping report                                                                                 │ Priya Raman  │  Dec 18 │  Nov 2 │ ○  │ Northwind BTX 4412 │ —      │ Low     ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┃                                                                                                                                                                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+i new task   I new subtask   S new section   K/J move section   x mark delete   X drop empty section   esc done   ␣ select   ? help                                                   r refresh   q quit
+ EDIT

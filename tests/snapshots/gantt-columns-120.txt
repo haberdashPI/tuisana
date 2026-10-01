@@ -37,4 +37,4 @@
 ┃                                                                                                                      ┃
 ┗ █ Alex Chen  █ Dana Ruiz  █ Jo Park  █ Kim Alvarez  █ Morgan Ellis  █ Priya Raman  ▒ other ━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 h/l scroll   -/+ zoom   t today   </> columns   c color   ⏎ order   g close   ? help                  r refresh   q quit
- GANTT                                                                              gantt · color assignee · columns 4/7
+ GANTT                                                                              gantt · color assignee · columns 4/8

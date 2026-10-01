@@ -127,6 +127,67 @@ impl ProjectEdit {
     }
 }
 
+/// One re-parenting: a task hung off another task, or off nothing at all.
+///
+/// Deliberately not a [`TaskFieldEdit`], for the same reason [`ProjectEdit`]
+/// is not: Asana does not accept `parent` in a task update, it takes it
+/// through `POST /tasks/{gid}/setParent`. It rejoins the field edits at the
+/// app's pending-edit channel, so there is still one burst counter, one
+/// border chip, and one rollback path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParentEdit {
+    /// The task being re-parented.
+    pub gid: String,
+    /// The new parent, or `None` to promote the task to top level.
+    pub parent_gid: Option<String>,
+    /// The parent's title, which is what the record's `Parent` cell shows.
+    pub parent_name: Option<String>,
+    /// The parent it had, for the rollback.
+    pub previous_gid: Option<String>,
+    pub previous_name: Option<String>,
+}
+
+impl ParentEdit {
+    /// The change that puts the parent back.
+    pub fn undo(&self) -> Self {
+        Self {
+            gid: self.gid.clone(),
+            parent_gid: self.previous_gid.clone(),
+            parent_name: self.previous_name.clone(),
+            previous_gid: self.parent_gid.clone(),
+            previous_name: self.parent_name.clone(),
+        }
+    }
+
+    /// Writes this change onto a record.
+    ///
+    /// The gid and the title together, so the cell reads as the new parent's
+    /// name even when that parent is not a loaded row. The depth is not
+    /// written: it is recomputed from the surviving parent chain on every
+    /// rebuild, so re-parenting a task that has children of its own moves the
+    /// whole limb with no extra work here.
+    pub fn apply(&self, record: &mut TaskRecord) {
+        record.parent_gid = self.parent_gid.clone();
+        record.parent_name = self.parent_name.clone();
+    }
+}
+
+/// A task that does not exist yet, in the shape `POST /tasks` takes it.
+///
+/// `section_gid` is the odd one out: Asana does not accept a section on
+/// create, it takes one through `POST /sections/{gid}/addTask`. It travels
+/// here anyway because the draft row is where the section was decided, and
+/// the client is the right place to know it costs a second request.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NewTask {
+    pub name: String,
+    pub parent_gid: Option<String>,
+    pub project_gid: Option<String>,
+    /// Required by Asana for a task that joins no project and no parent.
+    pub workspace_gid: Option<String>,
+    pub section_gid: Option<String>,
+}
+
 fn insert_sorted(values: &mut Vec<String>, value: &str) {
     if values.iter().any(|existing| existing == value) {
         return;

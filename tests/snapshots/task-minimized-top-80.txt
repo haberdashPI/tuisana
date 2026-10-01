@@ -36,5 +36,5 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ␣ select   ⏎ edit   d done   h/l column   o open   r refresh   q quit
+j/k move   ␣ select   ⏎ edit   t add   d done   h/l column    r refresh   q quit
  TASK

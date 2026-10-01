@@ -1,6 +1,113 @@
-# Milestone 15: Create and delete tasks and sections
+# Milestone 15: Create and delete tasks and sections ✓
 
 [← all milestones](../plan.md)
+
+Delivered. Eleven deliberate deviations from the plan below.
+
+1. **The create, delete, and section writes are synchronous.** §12 says they
+   do not go through `PendingEdit`, and gives the reason: the rollback is a
+   different operation on each, so sharing the channel would mean a variant
+   that cannot roll back. It does not say what replaces it. They go out on the
+   UI thread, like `list_users` in [14.5](14.5-assign-people-and-projects.md):
+   each one is a deliberate keystroke rather than something that happens while
+   you are reading, and §5.3 already requires the create to wait for its reply
+   before the row means anything — the gid it does not know yet is what every
+   subsequent edit of that row needs. The re-parent in §6.2 *is* a
+   `PendingEdit`, as the plan says, because it is optimistic and rolls back
+   like a field edit.
+2. **`i` beside a subtask sends no section either.** §5.1's table says the
+   section is not sent for `I`, and inherited for `i`. But `i` beside a
+   subtask produces a *sibling subtask* — the same table says so one row down
+   — and a subtask belongs to its parent whichever key created it. The rule is
+   therefore "no section when the draft has a parent", which collapses the two
+   rows into one sentence.
+3. **"A section is otherwise on screen" has nothing to match yet.** §5.1 tests
+   section inheritance on grouping *or* a section being visible some other
+   way. There is no section column, so grouping is the whole test. The
+   `Projects` column half of the same rule is real, and is answered by the
+   renderer: `TaskState::set_visible_columns` records what was drawn, in the
+   same division of labour `ensure_column_visible` and `set_cell_edit_window`
+   already follow. Unrendered reads as "visible", because a caller that has
+   not drawn anything has not hidden anything.
+4. **The draft is injected into the finished rows, not into the records.**
+   §5.2 says "injected into the rows `refresh_table` builds", which is what
+   happens — after the cursor is resolved and the status decided, so a draft
+   cannot make an empty table look populated. Threading a placeholder record
+   through the sort, the filter, and `arrange_hierarchy` would have meant
+   special-casing it in all three; positioning it after a named neighbour is
+   both simpler and what "directly after the cursor row" actually asks for.
+5. **A second `i` committing the first draft is a guard, not a keystroke.**
+   §5.2 says a second `i` while one is open commits the first. With the
+   draft's cell open the mode is `column_edit`, where every letter types —
+   that is what makes a title typeable — so `i` cannot reach the insert
+   binding. The guard is kept in `insert_task` for a config that rebinds it,
+   and the documented run is `i`, a title, `enter`, and again.
+6. **The `Parent` column is built from the parent link as it was loaded.**
+   §6 wants the cell to show the parent's title. `arrange_hierarchy`
+   deliberately clears `parent_gid` on a row whose parent the filter dropped,
+   so the orphan reads as a root — which would have blanked exactly the cells
+   that most need filling. The link is taken before the filter and the layout
+   run, and the title falls back to the bare gid for a parent the session
+   never loaded, as `Projects` already does.
+7. **`ctrl-n` keeps its filter meaning and only ctrl-p is newly bound there.**
+   §10 says the negation is gated on the overlay being open rather than
+   moved, and that is what happens: in filter-edit mode `ctrl-n` resolves to
+   `filter_negate_field`, which walks the candidates when an overlay is up.
+   The gate lives in `handle_action` rather than in the routing layer, because
+   the "no overlay" meaning is the action's own and not a second lookup. In
+   column-edit mode, where nothing was bound, both keys are
+   `highlight_next_candidate` / `highlight_prev_candidate` outright.
+8. **The highlight is its own state, beside the `tab` cycle.** §10 reads as
+   though `ctrl-n` drives the same cursor `tab` does. They differ in exactly
+   one thing — `tab` replaces the typed text with the candidate it lands on,
+   `ctrl-n` does not — so `AutocompleteState` keeps `highlight` apart from
+   `cycle`. Both set it, so the overlay still has one place to read, and
+   `commit` takes the highlight when there is one.
+9. **`X` takes the cursor row's *project's* first empty section, not the
+   section the cursor row is in.** §8 says `X` deletes "the section the cursor
+   is in", refused unless it is empty. Those two cannot both hold. Asana
+   deletes a section only when it holds no tasks; the table draws a heading
+   only where there is something under it; and the row cursor only ever sits
+   on a task. So the section the cursor is in always holds at least the row
+   under the cursor, and a faithful `X` could *only* refuse — or, worse, send
+   a request Asana rejects. It therefore reads the cursor row's project and
+   takes its first empty section, which is exactly the case the key exists
+   for: undoing an `S` you did not mean. The notice names what went, and
+   repeating it clears them one at a time.
+10. **The prompt names the backup file in its body rather than on the `y`
+   line.** §3.2's mockup puts the filename in the choice. A key column, a
+   sentence, and a path do not fit in a 56-cell window, and the filename
+   is the part that has to be on screen — so it moved to a body line of its
+   own and the choice reads `back it up first, then migrate`.
+
+11. **A subtask is created with its parent and nothing else.** §5.1's table
+   says `I` inherits the project ("same"). It cannot: naming the project makes
+   the new task a direct member of it, and Asana files a new project member in
+   the project's *first* section — so the subtask comes back as a top-level
+   row under an arbitrary heading rather than nested under its parent. The
+   project is still kept on the draft, because that is where the record is
+   cached and what keeps the new row in view beside its parent; it is simply
+   not sent. The plan's own reasoning for the section applies one level up.
+   Reading such a task back is deliberately left alone: Asana returns a
+   project-member subtask in the project's task list and shows it as a
+   top-level row, and tuisana shows the same thing rather than quietly nesting
+   it and disagreeing with the app it is a view of.
+
+Two things found along the way:
+
+- **`tuisana.toml.example` named a command that no longer existed.** `t` was
+  bound to `toggle_task_view`, which was renamed before this milestone, and an
+  unknown command is a hard startup error — so the shipped example config
+  would not have loaded. A test now parses the example and binds every command
+  it names, which is what caught it.
+- **`TaskTableModel::sort_column` read a custom field for `Parent`.** It fell
+  through to `custom_field_columns[index - FIRST_CUSTOM_COLUMN]` with a
+  saturating subtraction, so the new built-in column at index 6 resolved to
+  the first custom field. It is now an explicit `None` — ordering the table by
+  what each row hangs off would fight the parent-first layout, which is
+  already an ordering by parent — and the subtraction is checked.
+
+## The plan as written
 
 Goal:
 

@@ -28,6 +28,13 @@ pub struct Project {
     pub hidden: bool,
     /// Whether this is a real Asana project or the assigned-to-me pseudo-project.
     pub kind: ProjectKind,
+    /// The workspace this project belongs to.
+    ///
+    /// Kept on the project because `auth.workspace_gid` is optional and
+    /// creating a task that belongs to no project at all still needs one.
+    /// Asked for in the project list's `opt_fields`, so the workspace is
+    /// known whenever any project is.
+    pub workspace_gid: Option<String>,
 }
 
 impl Project {
@@ -39,7 +46,14 @@ impl Project {
             starred,
             hidden: false,
             kind: ProjectKind::Normal,
+            workspace_gid: None,
         }
+    }
+
+    /// The same, carrying the workspace Asana reported for it.
+    pub fn in_workspace(mut self, workspace_gid: Option<String>) -> Self {
+        self.workspace_gid = workspace_gid;
+        self
     }
 
     /// Builds a project with explicit visibility metadata.
@@ -55,6 +69,7 @@ impl Project {
             starred,
             hidden,
             kind: ProjectKind::Normal,
+            workspace_gid: None,
         }
     }
 
@@ -68,6 +83,7 @@ impl Project {
             starred: false,
             hidden: false,
             kind: ProjectKind::AssignedToMe,
+            workspace_gid: None,
         }
     }
 }

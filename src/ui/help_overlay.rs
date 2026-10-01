@@ -54,7 +54,8 @@ impl HelpGroup {
 pub fn groups_for(mode: Mode) -> Vec<HelpGroup> {
     let mut groups = match mode {
         Mode::Task => task_groups(),
-        Mode::TaskEdit => {
+        Mode::Edit => edit_groups(),
+        Mode::ColumnEdit => {
             let mut groups = task_groups();
             groups.push(text_editing_group());
             groups
@@ -140,19 +141,24 @@ fn task_groups() -> Vec<HelpGroup> {
         HelpGroup::new(
             "Edit",
             vec![
+                // First, because it is the only way to reach creating a task
+                // — and because the split is the thing to understand: the
+                // keys below change what a row says, edit mode changes which
+                // rows there are.
+                Hint::new(&[Action::SetEditMode], "add & delete rows"),
                 Hint::new(&[Action::TaskColumnPrev, Action::TaskColumnNext], "column cursor"),
-                Hint::new(&[Action::BeginTaskEdit], "edit the cell"),
+                Hint::new(&[Action::EditColumn], "edit the cell"),
                 Hint::new(&[Action::ToggleTaskCompleted], "open / done"),
-                Hint::new(&[Action::CommitTaskEdit], "save the edit"),
-                Hint::new(&[Action::CancelTaskEdit], "cancel the edit"),
+                Hint::new(&[Action::CommitColumnEdit], "save the edit"),
+                Hint::new(&[Action::CancelColumnEdit], "cancel the edit"),
                 Hint::new(
                     &[
-                        Action::TaskEditCycleValue(1),
-                        Action::TaskEditCycleValue(-1),
+                        Action::ColumnEditCycleValue(1),
+                        Action::ColumnEditCycleValue(-1),
                     ],
                     "pick a value",
                 ),
-                Hint::new(&[Action::TaskEditClear], "clear the value"),
+                Hint::new(&[Action::ColumnEditClear], "clear the value"),
                 Hint::new(
                     &[
                         Action::CompleteCandidate(1),
@@ -171,6 +177,38 @@ fn task_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::ToggleSubtaskVisibility], "subtasks"),
                 Hint::new(&[Action::ScrollLeft, Action::ScrollRight], "scroll columns"),
                 Hint::new(&[Action::ToggleRecentPane], "recently edited"),
+            ],
+        ),
+    ]
+}
+
+/// The structural edits. Short on purpose: the whole mode is twelve keys,
+/// and the case split is the mnemonic — lowercase acts on the task,
+/// uppercase on the structure around it.
+fn edit_groups() -> Vec<HelpGroup> {
+    vec![
+        HelpGroup::new(
+            "Create",
+            vec![
+                Hint::new(&[Action::InsertTask], "new task beside this one"),
+                Hint::new(&[Action::InsertSubtask], "new subtask of this one"),
+                Hint::new(&[Action::InsertSection], "new section after this one"),
+            ],
+        ),
+        HelpGroup::new(
+            "Move & remove",
+            vec![
+                Hint::new(
+                    &[Action::MoveTaskToSection(-1), Action::MoveTaskToSection(1)],
+                    "move between sections",
+                ),
+                // Beside the marking rather than with the cursor keys:
+                // what a selection is *for* here is `x`.
+                Hint::new(&[Action::ToggleTaskSelection], "select, then mark"),
+                Hint::new(&[Action::MarkForDeletion], "mark for deletion"),
+                Hint::new(&[Action::DeleteMarkedTasks], "delete what is marked"),
+                Hint::new(&[Action::DeleteSection], "delete an empty section"),
+                Hint::new(&[Action::EditCancel], "clear the marks, then leave"),
             ],
         ),
     ]
@@ -707,7 +745,7 @@ mod tests {
     #[test]
     fn the_text_editing_help_lists_the_cut_keys_in_every_mode_that_has_them() {
         let theme = Theme::default();
-        for mode in [Mode::FilterEdit, Mode::TaskEdit] {
+        for mode in [Mode::FilterEdit, Mode::ColumnEdit] {
             let resolved = resolve(groups_for(mode), &keymap(), mode, &theme);
             let (_, entries) = resolved
                 .iter()

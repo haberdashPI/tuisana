@@ -494,8 +494,11 @@ impl Theme {
             // field, so the color only needs to signal "you are typing".
             Mode::Calendar => Color::Yellow,
             Mode::Task => Color::Green,
+            // Red, alone among the modes: this is the one whose keys change
+            // which rows exist rather than what a row says.
+            Mode::Edit => Color::Red,
             // Yellow, like every other mode where something is being typed.
-            Mode::TaskEdit => Color::Yellow,
+            Mode::ColumnEdit => Color::Yellow,
             Mode::Gantt => Color::Cyan,
             // Yellow, like the other modes where something is being edited.
             Mode::GanttOrder => Color::Yellow,

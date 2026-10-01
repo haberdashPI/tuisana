@@ -97,7 +97,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, theme: &Theme, view: &Completio
         // answer: there is nothing here by that name.
         false => vec![Chip::toned("no match", Tone::Danger)],
     };
-    let block = pane_block(theme, true, Mode::TaskEdit, &view.title, &chips);
+    let block = pane_block(theme, true, Mode::ColumnEdit, &view.title, &chips);
     let inner = block.inner(box_area);
 
     frame.render_widget(Clear, box_area);

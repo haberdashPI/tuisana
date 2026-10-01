@@ -13,7 +13,7 @@
 ┏ Recently edited ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1 hidden by filter ┓
 ┃▍  Draft the assay validation protocol           │ Priya Raman  │  Jul 10 │ Ju┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10 tasks · row 1 · columns 0/41 ┓
+┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10 tasks · row 1 · columns 0/50 ┓
 ┃   Task                                          │ Assignee     │     Due │  S┃
 ┃                                                                              ┃
 ┃▌Northwind BTX 4412 ──────────────────────────────────────────────────────────┃
@@ -36,5 +36,5 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ␣ select   ⏎ edit   d done   h/l column   o open   r refresh   q quit
+j/k move   ␣ select   ⏎ edit   t add   d done   h/l column    r refresh   q quit
  TASK

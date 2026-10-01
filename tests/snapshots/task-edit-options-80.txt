@@ -10,25 +10,25 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-┏ Tasks ━━━━━━━━━━━━ editing 2 · 11 tasks · row 3 · 2 selected · columns 41/41 ┓
-┃        │ Assignee     │     Due │  Start │ St │ Projects           │ Priority┃
+┏ Tasks ━━━━━━━━━━━━ editing 2 · 11 tasks · row 3 · 2 selected · columns 39/50 ┓
+┃          │ Assignee     │     Due │  Start │ St │ Projects           │ Parent┃
 ┃                                                                              ┃
 ┃▌Northwind BTX 4412 ──────────────────────────────────────────────────────────┃
 ┃                                                                              ┃
 ┃   Study Kit Design ··························································┃
-┃ ●      │ Priya Raman  │ !Jul 10 │ Jun 15 │ ○  │ Northwind BTX 4412 │ High    ┃
-┃ ●      │ Morgan Ellis │ !Aug 19 │  Aug 3 │ ○  │ Northwind BTX 4412 │ High    ┃
-┃▍       │ Alex Chen    │   Today │ Aug 10 │ ○  │ Northwind BTX 4412 │ Low     ┃
-┃   ndor │ —            │     Wed │ Aug 17 │ ○  │ Northwind BTX 4412 │ —       ┃
-┃        │ Kim Alvarez  │   Sep 4 │ Aug 20 │ ○  │ Northwind BTX 4412 │ Medium  ┃
-┃        │ Dana Ruiz    │  Sep 12 │  Jul 1 │ ○  │ Northwind BTX 4412 │ Medium  ┃
+┃ ●        │ Priya Raman  │ ┏ Parent ━━━━ no match ┓Northwind BTX 4412 │ —     ┃
+┃ ●        │ Morgan Ellis │ ┃nothing matches       ┃Northwind BTX 4412 │ —     ┃
+┃▍  m      │ Alex Chen    │ ┗━━━━━━━━━━━━━━━━━━━━━━┛Northwind BTX 4412 │ j     ┃
+┃   vendor │ —            │     Wed │ Aug 17 │ ○  │ Northwind BTX 4412 │ —     ┃
+┃          │ Kim Alvarez  │   Sep 4 │ Aug 20 │ ○  │ Northwind BTX 4412 │ —     ┃
+┃          │ Dana Ruiz    │  Sep 12 │  Jul 1 │ ○  │ Northwind BTX 4412 │ —     ┃
 ┃                                                                              ┃
 ┃   Shipment ··································································┃
-┃        │ Sam Okafor   │  Sep 15 │  Sep 1 │ ○  │ Northwind BTX 4412 │ Low     ┃
-┃        │ Jo Park      │   Oct 9 │      — │ ○  │ Northwind BTX 4412 │ Medium  ┃
-┃        │ Robin Fox    │  Oct 30 │ Sep 20 │ ○  │ Northwind BTX 4412 │ Low     ┃
-┃        │ Alex Chen    │  Nov 14 │  Oct 1 │ ○  │ Northwind BTX 4412 │ Low     ┃
-┃        │ Priya Raman  │  Dec 18 │  Nov 2 │ ○  │ Northwind BTX 4412 │ Low     ┃
+┃          │ Sam Okafor   │  Sep 15 │  Sep 1 │ ○  │ Northwind BTX 4412 │ —     ┃
+┃          │ Jo Park      │   Oct 9 │      — │ ○  │ Northwind BTX 4412 │ —     ┃
+┃          │ Robin Fox    │  Oct 30 │ Sep 20 │ ○  │ Northwind BTX 4412 │ —     ┃
+┃          │ Alex Chen    │  Nov 14 │  Oct 1 │ ○  │ Northwind BTX 4412 │ —     ┃
+┃          │ Priya Raman  │  Dec 18 │  Nov 2 │ ○  │ Northwind BTX 4412 │ —     ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
@@ -36,5 +36,5 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-⏎ save   esc cancel   j/k value   d clear
- TASK EDIT
+⏎ save   esc cancel   ⇥/⇤ complete   ^l clear   M-b/M-f word   ^a/^e ends
+ COLUMN

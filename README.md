@@ -29,9 +29,57 @@ Start from [`tuisana.toml.example`](./tuisana.toml.example) and copy it to `tuis
 Leave these unchanged:
 
 - `header.type = "tuisana"`
-- `header.version = 1.0`
+- `header.version = 2.0`
 
 These values identify the config format and are validated by the app.
+
+**Version 1 files are still readable, and are migrated once.** Version 2
+renamed six command names and one mode name, and made shift+letter a key
+namespace of its own — so a version-1 binding of `key = "G"`, which used to
+mean `g`, would silently become a different key. Rather than let that happen
+quietly, the first run against a version-1 config asks before touching it:
+
+```
+┌ Config format changed ──────────────────────────┐
+│                                                 │
+│ tuisana.toml is in the version 1 format. Six    │
+│ command names and one mode name have been       │
+│ renamed, and uppercase letters are now distinct │
+│ keys.                                           │
+│                                                 │
+│ tuisana will rewrite it in the version 2 format.│
+│ A backup would go to tuisana.backup.toml.       │
+│                                                 │
+│ y        back it up first, then migrate         │
+│ n        migrate without a backup               │
+│ q / esc  quit and change nothing                │
+│                                                 │
+└─────────────────────────────────────────────────┘
+```
+
+- `y` copies the file byte for byte first, so the backup keeps your comments,
+  key order, and formatting — none of which survive being re-serialized. An
+  existing `tuisana.backup.toml` is not clobbered; the next free name is
+  `tuisana.backup.2.toml`, and the window names the file it will actually
+  write.
+- `q` and `esc` quit without touching anything, and the prompt returns next
+  time. Nothing can write the config while it is up, so a file you meant to
+  edit by hand is still the file you left.
+
+A file with no `[header]` at all is read as version 1, not as the current
+version. A file from the future is rejected.
+
+The renames, if you would rather apply them yourself:
+
+| version 1 | version 2 |
+| --- | --- |
+| `mode = "task_edit"` | `mode = "column_edit"` |
+| `begin_task_edit` | `edit_column` |
+| `commit_task_edit` | `commit_column_edit` |
+| `cancel_task_edit` | `cancel_column_edit` |
+| `task_edit_next_value` | `column_edit_next_value` |
+| `task_edit_prev_value` | `column_edit_prev_value` |
+| `task_edit_clear` | `column_edit_clear` |
 
 ### `auth.personal_access_token`
 
@@ -201,7 +249,7 @@ The `[[bind]]` section maps keyboard input to command names.
 If you omit a command from your config, the built-in default binding for that command still applies.
 
 Each binding may include an optional `mode` field to restrict it to a specific UI context.
-Available modes are `any` (default), `project`, `project_search`, `filter`, `filter_edit`, `calendar`, `task`, `task_edit`, `gantt`, and `gantt_order`.
+Available modes are `any` (default), `project`, `project_search`, `filter`, `filter_edit`, `calendar`, `task`, `edit`, `column_edit`, `gantt`, and `gantt_order`.
 
 Example:
 
@@ -220,6 +268,15 @@ command = "filter_done_editing"
 `enter`, `esc`, `backspace`, `space`, `home`, `end`, `left`, `right`, `up`,
 `down`, `pageup`, and `pagedown`. A modifier is a prefix: `ctrl-x` for Control
 and `alt-x` for Option/Alt.
+
+**Case matters on a single letter.** `J` and `j` are different keys, which is
+what edit mode's `I`, `J`, `K`, `S`, and `X` are bound in. Case does *not*
+matter anywhere else: `ESC` is `esc`, and `ctrl-J` is `ctrl-j` because a
+terminal cannot reliably tell it from the lowercase form — binding the
+uppercase form would be binding a key that never fires. (This is also why the
+subtask key is `I` rather than `ctrl-i`, which is the byte `tab`.) Punctuation
+that is itself shift-produced — `?`, `!`, `@`, `*`, `<`, `>`, `{`, `}` —
+arrives as its own character and is unaffected.
 
 `alt-` needs your terminal to send Option as a **modifier** rather than as an
 escape prefix — in macOS Terminal, Profiles → Keyboard → "Use Option as Meta
@@ -243,7 +300,6 @@ All bindable commands:
 - `scroll_right`
 - `refresh`
 - `toggle_help_details`
-- `toggle_task_view`
 - `toggle_task_mode`
 - `set_project_mode`
 - `set_filter_mode`
@@ -327,6 +383,8 @@ All bindable commands:
 - `filter_delete_label`
 - `complete_next_candidate`
 - `complete_prev_candidate`
+- `highlight_next_candidate`
+- `highlight_prev_candidate`
 - `filter_caret_left`
 - `filter_caret_right`
 - `text_caret_word_back`
@@ -342,15 +400,22 @@ All bindable commands:
 - `search_substring`
 - `search_regex`
 
-**Task edit mode** (a table cell is open for editing)
+`filter_negate_field` is bound to `ctrl-n` here and keeps that meaning — but
+with a completion overlay open, where `ctrl-n` is the obvious key for "next
+candidate", it walks the candidates instead. `!` on the row in filter-browse
+mode is the other way to negate it.
 
-- `commit_task_edit`
-- `cancel_task_edit`
-- `task_edit_next_value`
-- `task_edit_prev_value`
-- `task_edit_clear`
+**Column edit mode** (a table cell is open for editing)
+
+- `commit_column_edit`
+- `cancel_column_edit`
+- `column_edit_next_value`
+- `column_edit_prev_value`
+- `column_edit_clear`
 - `complete_next_candidate`
 - `complete_prev_candidate`
+- `highlight_next_candidate`
+- `highlight_prev_candidate`
 - `filter_caret_left`
 - `filter_caret_right`
 - `text_caret_word_back`
@@ -360,6 +425,19 @@ All bindable commands:
 - `text_cut_char`
 - `text_cut_word`
 - `text_cut_to_end`
+
+**Edit mode** (the keys that change which rows exist)
+
+- `insert_task`
+- `insert_subtask`
+- `insert_section`
+- `delete_section`
+- `move_task_to_next_section`
+- `move_task_to_prev_section`
+- `mark_for_deletion`
+- `delete_marked_tasks`
+- `edit_cancel`
+- `toggle_task_selection`
 
 **Task mode**
 
@@ -374,10 +452,11 @@ All bindable commands:
 - `move_project_down`
 - `task_column_prev`
 - `task_column_next`
-- `begin_task_edit`
+- `edit_column`
 - `toggle_task_completed`
 - `toggle_recent_pane`
 - `set_gantt_mode`
+- `set_edit_mode`
 
 **Gantt mode**
 
@@ -680,14 +759,14 @@ left alone.
 ### Editing tasks
 
 The task table is writable. `h` and `l` walk a **column cursor** left and right
-through `Task`, `Assignee`, `Due`, `Start`, `State`, `Projects`, and whatever
-custom fields the loaded projects carry. The column under it is banded in the
-header, the cell under it on the cursor row is underlined, and moving onto a
-column that is off to the right scrolls the table to it.
+through `Task`, `Assignee`, `Due`, `Start`, `State`, `Projects`, `Parent`, and
+whatever custom fields the loaded projects carry. The column under it is banded
+in the header, the cell under it on the cursor row is underlined, and moving
+onto a column that is off to the right scrolls the table to it.
 
-The cursor is only drawn in task and task-edit modes. In gantt mode `h` and `l`
-already scroll the timeline, and a cursor you cannot move is a cursor that lies
-about what the keys do.
+The cursor is only drawn in task, edit, and column-edit modes. In gantt mode
+`h` and `l` already scroll the timeline, and a cursor you cannot move is a
+cursor that lies about what the keys do.
 
 `enter` opens the cell under the cursor. Which editor you get depends on the
 column, and each one is the filter panel's editor for that kind of field:
@@ -697,7 +776,7 @@ column, and each one is the filter panel's editor for that kind of field:
 | `Task`, text and number custom fields | a text field with a caret | type, `backspace`, the motions above, `ctrl-d`/`alt-d`/`ctrl-k` to cut |
 | `Due`, `Start` | the date picker | `h`/`l` day, `j`/`k` month, `t` today, `d` clear |
 | `State`, enum custom fields | a value picker | `j`/`k` through the options, `d` for no value |
-| `Assignee`, `Projects` | completion over the names that exist | type to filter, `tab`/`shift-tab` to complete, `backspace` to delete an item, `ctrl-l` to clear |
+| `Assignee`, `Projects`, `Parent` | completion over the names that exist | type to rank, `tab`/`shift-tab` to complete, `ctrl-n`/`ctrl-p` to walk, `backspace` to delete an item, `ctrl-l` to clear |
 
 The three cuts are the deletions the word and line motions imply, and they work
 in every field that has those motions — the filter panel and the cell editor
@@ -713,16 +792,29 @@ refused), and a value picker holds one value rather than a list.
 A picker offers the options the custom field **declares**, not the values tasks
 happen to carry — the whole point may be to be the first task marked `Blocked`.
 
-**`Assignee` and `Projects` complete.** Both are references to something with a
-name and a gid, so both get the same editor: a list of items, typed with
-completion over the names that actually exist. The candidates appear in an
-overlay positioned like the date picker, because the cell is far too narrow to
-list names in.
+**`Assignee`, `Projects`, and `Parent` complete.** All three are references to
+something with a name and a gid, so all three get the same editor: a list of
+items, typed with completion over the names that actually exist. The candidates
+appear in an overlay positioned like the date picker, because the cell is far
+too narrow to list names in.
 
-`tab` *cycles* rather than picks — pressing it repeatedly walks the candidates
-with the typed prefix intact, so a wrong first match costs one more keystroke
-instead of an undo. Nothing is entered that is not a candidate: a typed prefix
-that matches nothing commits nothing and says so.
+The list is **ranked, not filtered**, and matches a **subsequence** rather than
+a substring: `shp rc` finds `Ship the release candidate`, and `alex` puts
+`Alex Chen` above `Alexandra Pemberton-Clarke`. A contiguous run, a match at a
+word boundary, and a match at the very start all score better, which is what
+keeps a long directory readable without typing much of it.
+
+Two ways to pick, and they compose:
+
+- `tab` / `shift-tab` **complete** the typed prefix to the next candidate,
+  walking them with the prefix intact — so a wrong first match costs one more
+  keystroke instead of an undo. Type, `tab` until it reads right, `enter`.
+- `ctrl-n` / `ctrl-p` **walk the highlight** without touching the text, and
+  `enter` takes whatever it landed on. With nothing typed, that is the whole
+  interaction.
+
+Nothing is entered that is not a candidate: a typed prefix that matches nothing
+commits nothing and says so.
 
 - **Assignee** is a list capped at one, so typing a second name replaces the
   first. Committing it empty unassigns the task. The candidates are the
@@ -734,6 +826,21 @@ that matches nothing commits nothing and says so.
   session loaded. A commit becomes one `addProject` or `removeProject` request
   per change. Asana will not store a task in no projects at all, so committing
   an empty list is refused with a message rather than sent.
+- **Parent** is capped at one, like `Assignee`: a task hangs off one other
+  task. It shows the parent's **title** — including when the parent is not a
+  row on screen, because a filter can drop a parent out from under its
+  children and a gid is not a name. The title travels with the subtask from
+  the moment it is loaded, so it survives any filter; only a parent the
+  session has never loaded at all falls back to the bare gid, which is the
+  same fallback `Projects` makes for a project it never saw. The cell is empty
+  for a top-level task. Clearing it promotes a subtask to a top-level task. Its candidates are every loaded task, ordered
+  by **the cursor task's own section first, then the rest of its project, then
+  everything else** — so with nothing typed the parent you want is usually at
+  the top, because it is usually a few rows up. The task itself and all of its
+  descendants are never offered: that would be a cycle Asana would reject
+  anyway, and a refusal from the API is a worse answer than a list that never
+  had it. A bulk re-parent is allowed — unlike a title, "these five are
+  subtasks of that one" is a sentence someone means.
 
 ### Recently edited
 
@@ -787,10 +894,135 @@ Two consequences worth knowing before they surprise you:
   down to Asana does not hide the task — it is already in the cache, and the
   cache is what the table is built from.
 
-Not yet editable: creating and deleting tasks, project membership (the
-`Projects` column), subtask level and position in the list, and `date`,
+Not yet editable: a task's position *within* a section, and `date`,
 `multi_enum`, and `people` custom fields. Each says so rather than doing
 nothing.
+
+### Edit mode
+
+Creating a task, re-parenting it, moving it between sections, and deleting it
+are the edits that change *which rows exist*. They share a problem the field
+edits never had — the target does not exist yet, or is about to stop existing —
+and they would each want a key in task mode, which is full. So they get a mode
+of their own.
+
+`t` from task mode enters **edit mode**; `esc` leaves. Same pane, same rows,
+same cursor and selection, different keys. Everything that reads the table —
+sort, grouping, the completed filter, the column cursor, the Gantt chart —
+stays in task mode. The split is not "safe keys and dangerous keys"; it is
+"keys about what the table *says* and keys about what it *contains*".
+
+| key | what it does |
+| --- | --- |
+| `i` | a new task beside the one under the cursor |
+| `I` | a new subtask of the one under the cursor |
+| `x` | mark the task — or the selection — for deletion |
+| `X` | delete the first empty section of the cursor row's project |
+| `S` | a new section after the cursor's section |
+| `J` | move the task to the next section down |
+| `K` | move the task to the previous section up |
+| `space` | toggle selection, as in task mode |
+| `enter` | carry out the marked deletions |
+| `esc` | clear the marks, or leave edit mode when there are none |
+
+The case split is the whole mnemonic: **lowercase acts on the task, uppercase
+acts on the structure around it.** `i`/`I` is a task and a nested task, `x`/`X`
+is a task and the section holding it, `j`/`k` moves the cursor and `J`/`K`
+moves the task.
+
+Because the structural keys live here, `i` and `x` go back to meaning insert
+and delete — and they still mean `invert_task_selection` and
+`clear_task_selection` in task mode, because the two modes no longer compete
+for them. Edit mode keeps the global keys, so `j`, `k`, `ctrl-u`, `ctrl-d`,
+`home`, `end`, `r`, `q`, and `?` all work; it does *not* inherit task mode's
+own, so `[` and `]` resize the top pane here rather than moving by section.
+
+**Creating a task.** `i` opens a **draft**: a local row, directly after the
+cursor row, with the `Task` cell already open — so `i` costs one keystroke
+before you start typing. Nothing is sent until `enter`, and `esc` or an empty
+title throws it away with nothing having happened. `i`, a title, `enter`, and
+again is a run of new tasks.
+
+A draft is exempt from the filters, because a row with no title cannot match a
+`Title` filter and a task that vanished the instant you created it would not be
+a feature.
+
+What it inherits is one sentence: **a field is inherited when the view would
+have shown it, and left blank when it would not.**
+
+| what | `i` | `I` |
+| --- | --- | --- |
+| project | the cursor row's project, when project grouping is on **or** the `Projects` column is on screen | not sent — see below |
+| section | the cursor row's section, when section grouping is on | not sent — a subtask belongs to its parent |
+| parent | the cursor row's parent, so a new task beside a subtask is a sibling subtask | the cursor row itself |
+
+**A subtask is sent with its parent and nothing else.** Naming the project as
+well would make it a *direct member* of that project, and Asana files a new
+project member in the project's **first section** — so the subtask would come
+back as a top-level row under an arbitrary heading, which is exactly what it is
+not. The same reasoning as the section, one level up. A subtask created beside
+a sibling (`i` on a subtask) is sent the same way.
+
+If you do have subtasks that are direct project members — made in Asana, or by
+an earlier version of tuisana — they are shown the way Asana shows them: as
+top-level rows in the section they were filed in. tuisana reads the project's
+task list and does not second-guess it.
+
+The "would have shown it" test matters. Grouping off and the `Projects` column
+scrolled out of view means the screen never said which project the cursor row
+was in, and filing a new task there would be a guess you cannot see being made.
+A blank project is recoverable — the cell is editable — where a wrong one is a
+task filed somewhere nobody will look. With nothing to inherit the task is a
+bare workspace task; with no project loaded at all there is no workspace to
+name it in either, and the insert is refused with a message.
+
+This is the one write in the app that is **not** optimistic. The other edits
+have a local value to show while the request is in flight; a create has a gid
+it does not know yet, and every subsequent edit of that row needs it. A create
+that fails leaves the draft and its title on screen, because the alternative is
+losing what you just typed to a 403.
+
+**Sections.** `S` opens a draft section — the same shape as a draft task, a
+heading row being typed, with `enter` to create and `esc` to discard.
+
+`X` is how you take one back. Asana deletes a section only when it holds no
+tasks, and a section with no tasks has no row for the cursor to stand on — the
+table draws a heading only where there is something under it. So `X` takes the
+cursor row's **project** and deletes the first section of it that is empty, in
+the order the project puts them; the notice names the one that went, and
+repeating it clears them one at a time. A populated section is never sent,
+which is the point: Asana's own refusal is a worse error than saying so here.
+
+`X` does not join the mark-and-confirm flow below. That exists because deleting
+tasks destroys work, and an empty section holds none.
+
+`J` and `K` move the task under the cursor between its project's sections, in
+the order the project puts them, appending it to the target. Off the end in
+either direction does nothing — there is no "no section" position below the
+last one. They are refused, with a message, on a subtask (subtasks are not in
+sections), when the project has only one section, and when no project can be
+resolved for the row: section membership is per project, so a task in several
+projects moves within the one it is *grouped under*, and with grouping off
+there is no such answer.
+
+**Deleting tasks.** Deletion is the one edit with nothing to put back, so it is
+the one edit that is not a single keystroke.
+
+- `x` marks the task under the cursor, or **every selected task** when there is
+  a selection. `x` again unmarks.
+- A marked row is drawn **struck through** — a glyph change, not a colour
+  change, so it reads under `variant = "mono"` too — and the pane border says
+  `deleting 3`, beside where it says `editing 3`.
+- **A marked parent takes its subtasks with it.** Asana does that server-side,
+  so its loaded subtasks are struck through too: they are going, and a
+  confirmation that did not show it would be a confirmation of the wrong thing.
+  One request is still sent, for the parent.
+- `esc` clears the marks and stays in edit mode. With no marks, `esc` leaves
+  the mode. One key, one sentence: back out of whatever is pending.
+- `enter` deletes them, one request per marked task. The rows go at confirm
+  time and come back if a request fails, with the usual
+  `could not delete 1 of 3: …` in the corner. The cursor lands where the first
+  deleted row was.
 
 ### Gantt chart
 

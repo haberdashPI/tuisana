@@ -19,7 +19,10 @@
 //! - **The value is a list.** `Assignee` caps it at one and `Projects` does
 //!   not, which is the only difference between the two.
 
-use crate::app::text_edit::{TextCut, TextEdit};
+use crate::{
+    app::text_edit::{TextCut, TextEdit},
+    util::fuzzy_score,
+};
 
 /// What separates two items when the list is rendered as one string.
 const ITEM_SEPARATOR: &str = ", ";
@@ -72,6 +75,14 @@ pub struct AutocompleteState {
     /// candidate: without the original prefix, a second `tab` would be
     /// completing the first match rather than walking past it.
     cycle: Option<(String, usize)>,
+    /// Which match the highlight is on, as an index into
+    /// [`AutocompleteState::matches`].
+    ///
+    /// Apart from `cycle` because the two keys differ in exactly one thing:
+    /// `tab` replaces the typed text with the candidate it lands on, and
+    /// `ctrl-n` only moves the highlight. Both set this, so the overlay has
+    /// one place to read.
+    highlight: Option<usize>,
     /// How many items this field can hold. `Assignee` is one; `Projects` is
     /// unbounded.
     max_items: usize,
@@ -87,6 +98,7 @@ impl AutocompleteState {
             item_caret,
             candidates,
             cycle: None,
+            highlight: None,
             max_items: max_items.max(1),
         }
     }
@@ -162,10 +174,14 @@ impl AutocompleteState {
         (text, caret)
     }
 
-    /// The candidates the typed text currently matches, in offer order.
+    /// The candidates the typed text currently matches, best first.
     ///
-    /// Prefix matches first, so `me` leads the list for someone who typed
-    /// `me` rather than hiding behind every name with those letters in it.
+    /// Ranked rather than filtered: `util::fuzzy_score` orders a tight match
+    /// above a loose one, which is the difference between a parent picker and
+    /// a list of every task that happens to share some letters. The supplied
+    /// candidate order is the tie-break — the sort is stable — so a caller
+    /// that banded its candidates keeps that banding among equal matches.
+    ///
     /// Everything already picked is left out: offering it again would be
     /// offering a no-op.
     pub fn matches(&self) -> Vec<&Candidate> {
@@ -173,8 +189,7 @@ impl AutocompleteState {
     }
 
     fn matches_for(&self, typed: &str) -> Vec<&Candidate> {
-        let needle = typed.trim().to_ascii_lowercase();
-        let mut matches = self
+        let mut scored = self
             .candidates
             .iter()
             .filter(|candidate| {
@@ -183,25 +198,45 @@ impl AutocompleteState {
                     .iter()
                     .any(|item| item.handle == candidate.handle)
             })
-            .filter(|candidate| {
-                needle.is_empty() || candidate.display.to_ascii_lowercase().contains(&needle)
+            .filter_map(|candidate| {
+                fuzzy_score(&candidate.display, typed).map(|score| (score, candidate))
             })
             .collect::<Vec<_>>();
-        matches.sort_by_key(|candidate| {
-            !candidate.display.to_ascii_lowercase().starts_with(&needle)
-        });
-        matches
+        scored.sort_by(|(left, _), (right, _)| right.cmp(left));
+        scored.into_iter().map(|(_, candidate)| candidate).collect()
     }
 
-    /// Where the `tab` cycle currently sits in [`AutocompleteState::matches`].
+    /// Which match the highlight is on, if any.
     pub fn highlighted(&self) -> Option<usize> {
-        self.cycle.as_ref().map(|(_, index)| *index)
+        self.highlight
+    }
+
+    /// Moves the highlight through the matches, leaving the text alone.
+    ///
+    /// The other half of the pair `tab` is: type, walk, `enter`. Answers
+    /// whether there was anything to walk.
+    pub fn move_highlight(&mut self, delta: i32) -> bool {
+        let len = self.matches().len();
+        if len == 0 {
+            return false;
+        }
+        self.highlight = Some(match self.highlight {
+            Some(index) => (index as i32 + delta).rem_euclid(len as i32) as usize,
+            // A first press lands on the first match going forward and the
+            // last one going back, following `complete`.
+            None => match delta >= 0 {
+                true => 0,
+                false => len - 1,
+            },
+        });
+        true
     }
 
     /// Inserts a typed character, which starts the candidate list over.
     pub fn push_char(&mut self, ch: char) {
         self.buffer.insert(ch);
         self.cycle = None;
+        self.highlight = None;
     }
 
     /// Deletes a character, or the item before the caret when there is none.
@@ -210,6 +245,7 @@ impl AutocompleteState {
     /// nothing typed, the thing before the caret *is* the previous item.
     pub fn delete_back(&mut self) {
         self.cycle = None;
+        self.highlight = None;
         if !self.buffer.is_empty() {
             self.buffer.delete_back();
             return;
@@ -232,6 +268,7 @@ impl AutocompleteState {
         // changed the prefix a `tab` cycle is walking.
         if !taken.is_empty() {
             self.cycle = None;
+            self.highlight = None;
         }
         taken
     }
@@ -260,6 +297,7 @@ impl AutocompleteState {
         self.buffer.clear();
         self.item_caret = 0;
         self.cycle = None;
+        self.highlight = None;
     }
 
     /// Completes the typed prefix to the next candidate, or the previous one.
@@ -294,6 +332,7 @@ impl AutocompleteState {
 
         self.buffer.set_text_at_end(displays[next].clone());
         self.cycle = Some((typed, next));
+        self.highlight = Some(next);
         true
     }
 
@@ -304,6 +343,16 @@ impl AutocompleteState {
     /// because a name Asana will not take is worse than an edit that did not
     /// happen.
     pub fn commit(mut self) -> Result<Vec<Candidate>, Unresolved> {
+        // The highlight wins when there is one: the user walked the list and
+        // stopped somewhere, which is a choice and not a prefix to resolve.
+        if let Some(candidate) = self
+            .highlight
+            .and_then(|index| self.matches().get(index).map(|candidate| (*candidate).clone()))
+        {
+            self.push_item(candidate);
+            return Ok(self.items);
+        }
+
         let typed = self.buffer.text().trim().to_string();
         if typed.is_empty() {
             return Ok(self.items);
@@ -354,6 +403,7 @@ impl AutocompleteState {
         self.item_caret = at;
         self.buffer.clear();
         self.cycle = None;
+        self.highlight = None;
     }
 }
 

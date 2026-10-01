@@ -10,7 +10,7 @@ use crate::{
         calendar::CalendarState,
         text_edit::TextEdit,
     },
-    domain::{CivilDate, ProjectEdit, TaskEdit},
+    domain::{CivilDate, ParentEdit, ProjectEdit, TaskEdit},
 };
 
 /// What resolving an edit needs that `TaskState` does not own.
@@ -35,6 +35,13 @@ pub struct EditContext {
     /// fallback to the people named by loaded tasks the ordinary case rather
     /// than an error path.
     pub people: Vec<(String, String)>,
+    /// The workspace a task created outside every project belongs to.
+    ///
+    /// Taken from any loaded project, since every project carries its
+    /// workspace: `auth.workspace_gid` is optional, so it cannot be relied
+    /// on. `None` means no project has loaded at all, which is the one case
+    /// where creating a task has to be refused.
+    pub workspace_gid: Option<String>,
 }
 
 impl EditContext {
@@ -75,11 +82,14 @@ impl EditContext {
 pub struct CommittedEdits {
     pub fields: Vec<TaskEdit>,
     pub projects: Vec<ProjectEdit>,
+    /// Re-parentings, which are a third endpoint again: Asana does not accept
+    /// `parent` in a task update.
+    pub parents: Vec<ParentEdit>,
 }
 
 impl CommittedEdits {
     pub fn is_empty(&self) -> bool {
-        self.fields.is_empty() && self.projects.is_empty()
+        self.fields.is_empty() && self.projects.is_empty() && self.parents.is_empty()
     }
 }
 

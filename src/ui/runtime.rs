@@ -116,7 +116,9 @@ fn classify(event: Event) -> InputEvent {
 /// from.
 fn focused_pane(mode: Mode, filter_focused: bool) -> FocusedPane {
     match mode {
-        Mode::Task | Mode::TaskEdit | Mode::Gantt | Mode::GanttOrder => FocusedPane::Task,
+        Mode::Task | Mode::Edit | Mode::ColumnEdit | Mode::Gantt | Mode::GanttOrder => {
+            FocusedPane::Task
+        }
         Mode::Calendar if !filter_focused => FocusedPane::Task,
         Mode::Project
         | Mode::ProjectSearch
@@ -179,7 +181,7 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
             // The cursor is drawn only where it can be moved: in Gantt mode
             // `h` and `l` scroll the timeline, so there is no column cursor
             // to show there.
-            let cursor_column = matches!(mode, Mode::Task | Mode::TaskEdit)
+            let cursor_column = matches!(mode, Mode::Task | Mode::Edit | Mode::ColumnEdit)
                 .then(|| app.tasks.selected_column());
             let task_view = regions.task_pane.map(|area| {
                 task_table::render_task_table(
@@ -226,12 +228,19 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
             // unchanged, which is the whole point of an overlay. Only one
             // shows at a time.
             //
-            // A confirmation wins outright: every key goes to it until it is
-            // answered, and `?` is not among them, so help showing over it
-            // would be stale and unclosable. Below that help wins, because it
-            // *is* reachable from inside the picker via `?` and asking for it
-            // has to actually show it.
-            if let Some(confirm) = filter_sets::confirm_view(&app.tasks) {
+            // The migration prompt wins over everything, including the
+            // filter-set confirmations: it is answered before the session
+            // really starts, and nothing else on screen can be acted on
+            // while it is up.
+            //
+            // Below it a confirmation wins outright: every key goes to it
+            // until it is answered, and `?` is not among them, so help
+            // showing over it would be stale and unclosable. Below that help
+            // wins, because it *is* reachable from inside the picker via `?`
+            // and asking for it has to actually show it.
+            if let Some(confirm) = app.pending_migration_backup().map(migration_view) {
+                filter_sets::render_confirm(frame, regions.body, &theme, mode, &confirm);
+            } else if let Some(confirm) = filter_sets::confirm_view(&app.tasks) {
                 filter_sets::render_confirm(frame, regions.body, &theme, mode, &confirm);
             } else if help_visible(app, mode) {
                 help_overlay::render(frame, regions.body, &theme, keymap, mode);
@@ -259,12 +268,48 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
         .map(|_| page_size)
 }
 
+/// The window that asks before a version-1 config is rewritten.
+///
+/// Built here rather than in `App` because it is a view: the app holds the
+/// decision and the file name, and this is the shape they are read in. It
+/// reuses the filter sets' confirmation window, which is already the app's
+/// vocabulary for "answer this before anything else happens".
+fn migration_view(backup_path: &std::path::Path) -> filter_sets::ConfirmView {
+    let backup = backup_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| backup_path.to_string_lossy().to_string());
+
+    filter_sets::ConfirmView {
+        title: "Config format changed",
+        body: vec![
+            "tuisana.toml is in the version 1 format. Six".to_string(),
+            "command names and one mode name have been".to_string(),
+            "renamed, and uppercase letters are now distinct".to_string(),
+            "keys.".to_string(),
+            String::new(),
+            "tuisana will rewrite it in the version 2 format.".to_string(),
+            // The file name is in the body rather than on the `y` line
+            // because the choice has to be made with the right name on
+            // screen, and a key column plus a sentence plus a path does not
+            // fit in a window this narrow.
+            format!("A backup would go to {backup}."),
+        ],
+        choices: vec![
+            ("y", "back it up first, then migrate".to_string()),
+            ("n", "migrate without a backup".to_string()),
+            ("q / esc", "quit and change nothing".to_string()),
+        ],
+    }
+}
+
 /// Whether the help overlay is showing, using the same per-pane toggle the
 /// inline help used before.
 fn help_visible<C: AsanaClient + Clone + Send + 'static>(app: &App<C>, mode: Mode) -> bool {
     match mode {
         Mode::Task
-        | Mode::TaskEdit
+        | Mode::Edit
+        | Mode::ColumnEdit
         | Mode::Gantt
         | Mode::GanttOrder
         | Mode::Filter
@@ -337,7 +382,7 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
     let context = hints::HintContext {
         searching: app.projects.search_active() || !app.projects.search_query().is_empty(),
         has_selection: match mode {
-            Mode::Task | Mode::TaskEdit => app.tasks.selected_task_count() > 0,
+            Mode::Task | Mode::Edit | Mode::ColumnEdit => app.tasks.selected_task_count() > 0,
             Mode::Filter | Mode::FilterEdit | Mode::FilterSetName | Mode::Calendar => false,
             _ => app.projects.selected_count() > 0,
         },
@@ -356,6 +401,7 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
         task_edit_completes: app.tasks.cell_edit_is_complete()
             || app.tasks.filter_autocomplete_open(),
         has_recent_edits: app.tasks.recent_hidden_count() > 0,
+        marked_for_deletion: app.tasks.marked_for_deletion_count(),
     };
 
     let line = hints::hint_line(

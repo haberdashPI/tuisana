@@ -27,7 +27,8 @@ pub use project::{Project, ProjectKind};
 pub use task::{
     group_custom_fields_by_name, CustomFieldColumn, CustomFieldDefinition, CustomFieldKind,
     EnumOption, Section, SortDirection,
-    SubtaskVisibility, ASSIGNEE_COLUMN, DUE_COLUMN, FIRST_CUSTOM_COLUMN, PROJECTS_COLUMN,
+    SubtaskVisibility, ASSIGNEE_COLUMN, DUE_COLUMN, FIRST_CUSTOM_COLUMN, PARENT_COLUMN,
+    PROJECTS_COLUMN,
     START_COLUMN, STATE_COLUMN, TITLE_COLUMN,
     TaskFilter, TaskRecord, TaskRow, TaskRowKind, TaskSort,
     TaskSortColumn, TaskSortRule, TaskTableModel, TaskTableSettings, merge_task_record,
@@ -35,5 +36,6 @@ pub use task::{
 /// The write model: one field of one task, and the parsing that builds it.
 pub use task_edit::{
     parse_custom_value, parse_date_value, resolve_assignee, AssigneeRef, CustomFieldValue,
-    CustomValueKind, ProjectEdit, ProjectMembership, TaskEdit, TaskFieldEdit,
+    CustomValueKind, NewTask, ParentEdit, ProjectEdit, ProjectMembership, TaskEdit,
+    TaskFieldEdit,
 };
