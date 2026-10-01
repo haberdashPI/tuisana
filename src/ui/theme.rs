@@ -246,6 +246,13 @@ pub struct Theme {
     /// A band rather than a color: the header is already accented, so the cue
     /// that survives next to it has to be a different kind of thing.
     pub header_cursor: Style,
+    /// A cell in the cursor column, on a row an edit would change.
+    ///
+    /// Patched over the cell's own tone rather than replacing it, so it sets a
+    /// background and modifiers and no foreground: an overdue date stays red
+    /// while it is banded. See the mono assertions below, which hold it to
+    /// that.
+    pub target_cell: Style,
     /// A key name in the hint bar or help overlay.
     pub key: Style,
     /// The app-name badge in the header bar.
@@ -319,6 +326,7 @@ impl Theme {
                 header: plain.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
                 header_cursor: plain
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED | Modifier::REVERSED),
+                target_cell: plain.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
                 key: plain.add_modifier(Modifier::BOLD),
                 brand: plain.add_modifier(Modifier::REVERSED | Modifier::BOLD),
                 zebra: None,
@@ -364,6 +372,14 @@ impl Theme {
             // one on a light terminal, without either end knowing which it is.
             header_cursor: plain
                 .fg(accent)
+                .bg(cursor_bg)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            // The same band as the header's cursor cell, deliberately: the
+            // banded header and the banded rows under it are one gesture —
+            // this column, these rows — and two different highlights would
+            // read as two different things. No foreground, so the cell keeps
+            // the colour its own value earned.
+            target_cell: Style::default()
                 .bg(cursor_bg)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             key: plain.fg(accent).add_modifier(Modifier::BOLD),
@@ -502,6 +518,9 @@ impl Theme {
             Mode::Gantt => Color::Cyan,
             // Yellow, like the other modes where something is being edited.
             Mode::GanttOrder => Color::Yellow,
+            // Red, like edit mode, and for the same reason: what is about to
+            // happen is not what a row says but how many rows it says it to.
+            Mode::Confirm => Color::Red,
             Mode::Any => return None,
         })
     }
@@ -597,6 +616,7 @@ mod tests {
             theme.marker,
             theme.header,
             theme.header_cursor,
+            theme.target_cell,
             theme.key,
             theme.danger,
         ] {

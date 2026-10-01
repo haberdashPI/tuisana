@@ -128,7 +128,22 @@ impl Session {
         Self::start_with(client().with_update_failure(gid))
     }
 
+    /// A session that asks before changing more than `threshold` tasks.
+    ///
+    /// The fixtures are three tasks and the default threshold is five, so
+    /// every other test here never meets a confirmation. Lowering it is how
+    /// the gate is reached without a hundred rows of fixture.
+    fn confirming_above(threshold: usize) -> Self {
+        Self::start_with_config(client(), |config| {
+            config.edit.confirm_threshold = threshold;
+        })
+    }
+
     fn start_with(client: FakeAsanaClient) -> Self {
+        Self::start_with_config(client, |_| {})
+    }
+
+    fn start_with_config(client: FakeAsanaClient, tune: impl FnOnce(&mut Config)) -> Self {
         // Projects the config never names start hidden, so the one with the
         // fixtures has to be named.
         let mut config = Config::default();
@@ -144,6 +159,7 @@ impl Session {
                 hidden: false,
             },
         ];
+        tune(&mut config);
         let mut app = App::new(config, client.clone());
         app.load_projects().expect("projects load");
         let keymap = app.keymap().expect("keymap builds");
@@ -414,6 +430,183 @@ fn d_marks_a_whole_selection_done_in_one_press() {
     session.press(KeyCode::Char('d'), KeyModifiers::NONE);
     assert_eq!(session.cell("t1", STATE_COLUMN), "open");
     assert_eq!(session.cell("t2", STATE_COLUMN), "open");
+}
+
+#[test]
+fn a_bulk_edit_past_the_threshold_sends_nothing_until_it_is_confirmed() {
+    let mut session = Session::confirming_above(1);
+    session.show_open_and_done();
+
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char('d'), KeyModifiers::NONE);
+
+    // Not even the optimistic local update: the row the user is looking at has
+    // to agree with the server right up until they say yes.
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Confirm);
+    assert_eq!(
+        session.app.pending_bulk_edit_view(),
+        Some((2, "set State to done".to_string()))
+    );
+    assert!(session.updates().is_empty(), "nothing went over the wire");
+    assert_eq!(session.cell("t1", STATE_COLUMN), "open");
+    assert_eq!(session.cell("t2", STATE_COLUMN), "open");
+
+    session.press(KeyCode::Char('y'), KeyModifiers::NONE);
+
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Task);
+    assert!(session.app.pending_bulk_edit_view().is_none());
+    assert_eq!(session.updates().len(), 2);
+    assert_eq!(session.cell("t1", STATE_COLUMN), "done");
+    assert_eq!(session.cell("t2", STATE_COLUMN), "done");
+}
+
+#[test]
+fn answering_no_leaves_every_row_exactly_as_it_was() {
+    let mut session = Session::confirming_above(1);
+
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char('d'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('n'), KeyModifiers::NONE);
+
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Task);
+    assert!(session.updates().is_empty());
+    assert_eq!(session.cell("t1", STATE_COLUMN), "open");
+    // Said back, because a cancelled bulk edit that reported nothing would be
+    // indistinguishable from a keypress that did not register.
+    assert_eq!(
+        session.app.tasks.edit_notice(),
+        Some("cancelled: 2 tasks unchanged")
+    );
+    // Still selected: `n` means "not like that", not "forget what I picked".
+    assert_eq!(session.app.tasks.selected_task_count(), 2);
+}
+
+#[test]
+fn esc_answers_a_confirmation_the_same_way_no_does() {
+    let mut session = Session::confirming_above(1);
+
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char('d'), KeyModifiers::NONE);
+    session.press(KeyCode::Esc, KeyModifiers::NONE);
+
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Task);
+    assert!(session.updates().is_empty());
+}
+
+/// Otherwise `j` would move a cursor nobody can see, and the next `y` would
+/// confirm an edit the user had stopped looking at.
+#[test]
+fn a_confirmation_swallows_every_key_that_is_not_an_answer() {
+    let mut session = Session::confirming_above(1);
+
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    let row = session.app.tasks.selected_task_position();
+    session.press(KeyCode::Char('d'), KeyModifiers::NONE);
+
+    session.press(KeyCode::Char('j'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('q'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('?'), KeyModifiers::NONE);
+
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Confirm);
+    assert_eq!(session.app.tasks.selected_task_position(), row);
+    assert!(session.updates().is_empty());
+}
+
+#[test]
+fn an_edit_at_the_threshold_goes_without_asking() {
+    // Two rows against a threshold of two: "more than a few" is strictly
+    // more, so this is the largest edit that still happens on the keystroke.
+    let mut session = Session::confirming_above(2);
+    session.show_open_and_done();
+
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char('d'), KeyModifiers::NONE);
+
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Task);
+    assert_eq!(session.updates().len(), 2);
+    assert_eq!(session.cell("t1", STATE_COLUMN), "done");
+}
+
+#[test]
+fn a_confirmed_cell_edit_names_the_column_and_the_value_it_will_write() {
+    let mut session = Session::confirming_above(1);
+
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    // Onto Assignee, then type a name from the directory and commit.
+    session.press(KeyCode::Char('l'), KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    session.press(KeyCode::Char('l'), KeyModifiers::CONTROL);
+    session.type_keys("priya");
+    session.press(KeyCode::Tab, KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(
+        session.app.pending_bulk_edit_view(),
+        Some((2, "set Assignee to Priya Raman".to_string()))
+    );
+    // The editor is already closed: the value is decided, and the question is
+    // only about how many rows it lands on.
+    assert!(!session.app.tasks.cell_edit_open());
+
+    session.press(KeyCode::Char('y'), KeyModifiers::NONE);
+    assert_eq!(session.updates().len(), 2);
+    assert_eq!(session.cell("t1", ASSIGNEE_COLUMN), "Priya Raman");
+}
+
+#[test]
+fn a_projects_edit_is_counted_in_writes_rather_than_in_tasks() {
+    let mut session = Session::confirming_above(1);
+
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    for _ in 0..PROJECTS_COLUMN {
+        session.press(KeyCode::Char('l'), KeyModifiers::NONE);
+    }
+    // Backlog added, Inbox kept: one write per task, phrased the same way, so
+    // the summary is the phrase rather than a count.
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    session.type_keys("back");
+    session.press(KeyCode::Tab, KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(
+        session.app.pending_bulk_edit_view(),
+        Some((2, "add to Backlog".to_string()))
+    );
+
+    session.press(KeyCode::Char('y'), KeyModifiers::NONE);
+    assert_eq!(session.project_updates().len(), 2);
+}
+
+/// Two tasks, four writes — because "be in these projects" is an `add` for a
+/// task that is not and a `remove` for one that is. The phrases disagree, so
+/// the summary counts instead of picking one and misreporting the other.
+#[test]
+fn a_mixture_of_changes_is_summarised_as_a_count() {
+    let mut session = Session::confirming_above(1);
+
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    for _ in 0..PROJECTS_COLUMN {
+        session.press(KeyCode::Char('l'), KeyModifiers::NONE);
+    }
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    session.press(KeyCode::Char('l'), KeyModifiers::CONTROL);
+    session.type_keys("back");
+    session.press(KeyCode::Tab, KeyModifiers::NONE);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(
+        session.app.pending_bulk_edit_view(),
+        Some((4, "make 4 changes".to_string())),
+        "two tasks leaving Inbox for Backlog is four requests"
+    );
 }
 
 #[test]

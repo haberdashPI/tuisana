@@ -64,7 +64,10 @@ pub fn groups_for(mode: Mode) -> Vec<HelpGroup> {
         Mode::GanttOrder => gantt_order_groups(),
         Mode::Filter | Mode::FilterEdit | Mode::FilterSetName => filter_groups(),
         Mode::Calendar => calendar_groups(),
-        Mode::Project | Mode::ProjectSearch | Mode::Any => project_groups(),
+        // Grouped with task mode because that is what the confirmation is
+        // asking about and what `n` goes back to. It is never actually
+        // reachable: `?` is not one of the keys a confirmation reads.
+        Mode::Project | Mode::ProjectSearch | Mode::Any | Mode::Confirm => project_groups(),
     };
     groups.extend(shared_groups());
     groups

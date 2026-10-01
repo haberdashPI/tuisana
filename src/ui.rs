@@ -12,7 +12,9 @@
 //!   handed. The last two are centered modals drawn over the panes.
 //!   [`gantt`] is the exception to "a region": it hands [`task_table`] spans to
 //!   append to each row, so a row and its bar are one line. [`completion`] is
-//!   a third modal, over the field an editor is completing. [`notice`] is the
+//!   a third modal, over the field an editor is completing. [`confirm`] is a
+//!   fourth: one window shared by every question that has to be answered
+//!   before anything else happens. [`notice`] is the
 //!   one that is not centered: it sits in the bottom-right corner, over
 //!   everything else, and says what the last edit refused or failed to do.
 //!
@@ -22,6 +24,7 @@
 pub mod calendar;
 pub mod chrome;
 pub mod completion;
+pub mod confirm;
 pub mod date;
 pub mod filter_panel;
 pub mod filter_sets;

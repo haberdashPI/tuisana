@@ -12,17 +12,14 @@
 use ratatui::{
     layout::Rect,
     text::{Line, Span},
-    widgets::{Clear, Paragraph},
-    Frame,
 };
 
 use crate::{
     app::task::{SidebarPrompt, TaskState, MAX_SIDEBAR_ROWS},
-    config::{Mode, NamedFilterSet},
+    config::NamedFilterSet,
     ui::{
-        chrome::{pane_block, Chip},
-        hints::key_column_spans,
-        layout,
+        chrome::Chip,
+        confirm::ConfirmView,
         text::{fill, truncate_with_ellipsis, visible_width},
         theme::Theme,
     },
@@ -211,19 +208,6 @@ pub fn prompt_line(state: &TaskState) -> Option<PromptLine> {
     }
 }
 
-/// Widest the confirmation will grow, so its lines stay readable.
-const CONFIRM_WIDTH: u16 = 56;
-
-/// A decision that has to be answered before anything else happens.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConfirmView {
-    pub title: &'static str,
-    /// What is about to happen, and to what.
-    pub body: Vec<String>,
-    /// `(keys, what they do)`, in the order they are offered.
-    pub choices: Vec<(&'static str, String)>,
-}
-
 /// The confirmation the panel is waiting on, if it is waiting on one.
 pub fn confirm_view(state: &TaskState) -> Option<ConfirmView> {
     match state.filter_set_prompt()? {
@@ -231,7 +215,7 @@ pub fn confirm_view(state: &TaskState) -> Option<ConfirmView> {
         SidebarPrompt::ConfirmLoad { name } => {
             let filters = state.active_filter_count_across_sets();
             Some(ConfirmView {
-                title: "Discard filters?",
+                title: "Discard filters?".to_string(),
                 body: vec![
                     "This filter panel has no name, so the".to_string(),
                     format!(
@@ -247,7 +231,7 @@ pub fn confirm_view(state: &TaskState) -> Option<ConfirmView> {
             })
         }
         SidebarPrompt::ConfirmDelete { name } => Some(ConfirmView {
-            title: "Delete filter set?",
+            title: "Delete filter set?".to_string(),
             body: vec![
                 format!("{name} is removed from tuisana.toml."),
                 "The panel keeps what it is showing.".to_string(),
@@ -258,66 +242,6 @@ pub fn confirm_view(state: &TaskState) -> Option<ConfirmView> {
             ],
         }),
     }
-}
-
-/// Renders the confirmation centred over `area`.
-///
-/// A modal rather than a line on the sidebar's border, and drawn with the
-/// focused border, because every key goes to it until it is answered — which
-/// is exactly what a prompt hidden in a frame fails to say.
-pub fn render_confirm(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    theme: &Theme,
-    mode: Mode,
-    view: &ConfirmView,
-) {
-    let key_width = view
-        .choices
-        .iter()
-        .map(|(keys, _)| visible_width(keys))
-        .max()
-        .unwrap_or(0);
-
-    let mut lines = vec![Line::default()];
-    for text in &view.body {
-        lines.push(Line::from(Span::styled(text.clone(), theme.text)));
-    }
-    lines.push(Line::default());
-    for (keys, label) in &view.choices {
-        lines.push(Line::from(key_column_spans(
-            keys,
-            label,
-            key_width,
-            theme.key,
-            theme.text,
-        )));
-    }
-    lines.push(Line::default());
-
-    let content = lines
-        .iter()
-        .map(|line| visible_width(&line.to_string()))
-        .max()
-        .unwrap_or(0);
-    // Two for the border, two for the gutter the text sits in.
-    let width = ((content as u16).saturating_add(4)).min(CONFIRM_WIDTH).min(area.width);
-
-    let box_area = layout::centered(area, width, lines.len() as u16 + 2);
-    let block = pane_block(theme, true, mode, view.title, &[]);
-    let inner = block.inner(box_area);
-
-    frame.render_widget(Clear, box_area);
-    frame.render_widget(block, box_area);
-    // One column of gutter, so the text does not butt up against the frame.
-    frame.render_widget(
-        Paragraph::new(lines),
-        Rect {
-            x: inner.x.saturating_add(1),
-            width: inner.width.saturating_sub(2),
-            ..inner
-        },
-    );
 }
 
 /// Renders the sidebar's body. Exactly one line per row.

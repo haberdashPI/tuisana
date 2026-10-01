@@ -22,6 +22,8 @@ This file is the quickest way to understand the codebase without reading everyth
     the one-line text buffer every editable field runs on.
 15. `src/app/autocomplete.rs` is the completion state machine behind
     `Assignee`, `Projects`, and the filter panel's `list` match mode.
+16. `src/asana/throttle.rs` is the write budget: how many actions may be in
+    flight and how fast they may go.
 
 The async task-data path is split across two modules:
 
@@ -98,10 +100,22 @@ a convention.
   keys. Both allow the `Any` fallback, so `j`/`k`, `q`, and `?` keep working.
 - `GanttViewState` is the chart's session state; only its colour order is ever
   written back to config.
-- An edit is **optimistic**. `dispatch_task_edits` writes it onto the cached
-  record and the visible dataset at once, then sends one request per task on a
-  worker thread; `poll_task_edits` takes the server's `modified_at` on success
-  and puts the old value back on failure. The local write deliberately bypasses
+- A bulk edit **says how wide it is before it happens, and asks when it is
+  wide**. `TaskTableView::is_edit_target` bands the cursor column's cell on
+  every row the commit would write to, which is `TaskState::edit_targets`
+  rendered — the selection when there is one, the cursor row when there is
+  not. The two have to agree: a band is the only thing on screen that says how
+  far the next edit reaches. It follows that the cursor row does **not** band
+  while a selection it is not part of exists, because `space` leaves the
+  cursor a row past the last thing it marked and a band there would promise an
+  edit that is not going to happen. Past `edit.confirm_threshold` writes the
+  question too, as `Mode::Confirm`: `submit_writes` holds the resolved writes
+  on `App` and applies *nothing* — not even the optimistic update — until `y`,
+  so `n` leaves a table that never moved.
+- An edit is **optimistic**. `apply_and_enqueue` writes it onto the cached
+  record and the visible dataset at once, then queues it for the write pool;
+  `poll_task_edits` takes the server's `modified_at` on success and puts the
+  old value back on failure. The local write deliberately bypasses
   `TaskCache::upsert_record`: `merge_task_record` is monotone — `completed |=
   incoming`, and a `None` never overwrites a `Some` — so un-completing a task
   or clearing a date through it is a silent no-op. `confirm_edit` exists for
@@ -139,6 +153,19 @@ a convention.
   `ProjectEdit`s rather than `TaskFieldEdit`s and goes out through
   `addProject` / `removeProject`. Both kinds share one write channel, one
   burst counter, and one rollback path: see `PendingEdit` in `src/app.rs`.
+- **Batching buys round trips, not quota.** Asana's `/batch` takes ten actions
+  and counts, in its own words, "as though you had made a separate HTTP request
+  for every individual action" — against both the per-minute limiter and the
+  15-concurrent-write one. So `AsanaClient::write_tasks` chunks to ten and
+  `WriteThrottle` is what actually keeps us under the ceiling, counting
+  **actions rather than requests**: a chunk costs its length, plus one for each
+  start-date edit, because that edit cannot be built without a read of its own.
+  The old shape — `thread::spawn` once per edit — opened forty sockets for
+  forty selected rows, nearly three times the write ceiling. `WritePool` is a
+  fixed two threads over a queue instead, and the permits rather than the
+  thread count are the limit. `ReqwestTransport::send_with_retry` is the
+  backstop under all of it: a `429` is waited out on its own `Retry-After`,
+  because a rejected request counts against the quota too.
 - The **recently-edited pane** is the price of those two edits: they are the
   ones most likely to make a row vanish. `TaskViewState` keeps the gids, and
   `refresh_table` rebuilds the pane from them right after the table, because
@@ -168,6 +195,16 @@ a convention.
 - To change how a name is completed, start in `src/app/autocomplete.rs`; the
   candidate overlay is `src/ui/completion.rs` and is drawn for whichever of
   the two callers has an editor open (`TaskState::open_completion`).
+- To change when a bulk edit is asked about, the threshold is
+  `EditConfig::needs_confirmation` in `src/config/mod.rs`, the gate is
+  `App::submit_writes`, the keys are `App::handle_confirm_input`, and the
+  window is `ui::confirm::bulk_edit_view`. `ui::confirm` is one window shared
+  by three callers — the filter sidebar, the config migration, and this — so a
+  change to how it is drawn moves all three.
+- To change how fast writes go out, the constants are in
+  `src/asana/throttle.rs` and nothing else should hold a number: `TokenBucket`
+  is pure and takes the instant, so every pacing rule is testable without a
+  clock.
 - To change what a failed or refused edit says, the message is built where the
   edit fails (`reconcile_task_edit` and the `Err` arms in `src/app.rs`), stored
   as `edit_notice` on `TaskState`, and drawn by `src/ui/notice.rs` — a box in

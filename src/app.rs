@@ -1,5 +1,5 @@
 use crate::{
-    asana::{AsanaClient, TaskQuery, TaskTarget},
+    asana::{AsanaClient, TaskQuery, TaskTarget, TaskWrite, MAX_BATCH_ACTIONS},
     config::{Config, Mode, NamedFilterSet, TopPaneState, ViewConfig},
     domain::{ParentEdit, Project, ProjectEdit, ProjectKind, Section, TaskEdit},
     error::Result,
@@ -7,8 +7,12 @@ use crate::{
 };
 
 use std::{
+    collections::VecDeque,
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc, Condvar, Mutex,
+    },
     thread,
 };
 
@@ -180,6 +184,69 @@ pub struct App<C> {
     /// the file on disk is untouched until it is answered. While it is set,
     /// the prompt owns every key and nothing may write the config.
     pending_migration: Option<PendingMigration>,
+    /// The bulk edit waiting on a `y`.
+    ///
+    /// Holding the writes here rather than sending them is the whole point:
+    /// nothing is applied, locally or remotely, until the count on screen has
+    /// been agreed to. `n` drops it and the table never moved.
+    pending_bulk_edit: Option<PendingBulkEdit>,
+    /// The threads that send batched writes.
+    ///
+    /// `None` until the first write of the session: most of a session is
+    /// reading, and two threads blocked on a condvar for a user who never
+    /// edits anything are two threads that should never have been started.
+    write_pool: Option<WritePool>,
+}
+
+/// A bulk edit that has been composed but not sent.
+///
+/// The writes are already resolved — the editor is closed and the value
+/// decided — so answering `y` is a dispatch and nothing more. That ordering
+/// matters: resolving them after the question would mean the dialog could
+/// name a count the commit then disagreed with.
+#[derive(Clone, Debug)]
+struct PendingBulkEdit {
+    /// What it will do, in the dialog's words. One line, no count: the count
+    /// is the title, because it is the thing being agreed to.
+    summary: String,
+    /// The writes, already chunked by `enqueue_writes` when they go.
+    writes: Vec<PendingEdit>,
+    /// The mode to go back to, whichever way it is answered.
+    ///
+    /// Carried rather than assumed: `d` is pressed in task mode and `enter`
+    /// closes a cell editor, and both have to land back where they were.
+    return_mode: Mode,
+}
+
+impl PendingBulkEdit {
+    fn count(&self) -> usize {
+        self.writes.len()
+    }
+}
+
+/// One phrase naming what a run of writes will do.
+///
+/// Every write in a bulk edit is the same change to a different task, so the
+/// first one describes the lot — with one exception worth spelling out: a
+/// projects edit resolves per task, so "be in these projects" becomes an
+/// `add` for one row and a `remove` for another. When the writes disagree,
+/// the summary counts them instead of picking one and misreporting the rest.
+fn bulk_edit_summary(writes: &[PendingEdit], column: Option<&str>) -> String {
+    let phrases = writes
+        .iter()
+        .map(|write| match write {
+            PendingEdit::Field(edit) => edit.field.summary(column),
+            PendingEdit::Project(edit) => edit.summary(),
+            PendingEdit::Parent(edit) => edit.summary(),
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let mut phrases = phrases.into_iter();
+    match (phrases.next(), phrases.next()) {
+        (Some(only), None) => only,
+        (Some(_), Some(_)) => format!("make {} changes", writes.len()),
+        _ => String::new(),
+    }
 }
 
 /// A version-1 config waiting for permission to be rewritten.
@@ -213,6 +280,120 @@ impl PendingEdit {
             Self::Project(edit) => &edit.gid,
             Self::Parent(edit) => &edit.gid,
         }
+    }
+
+    /// The same write, stripped of what it needs to undo itself.
+    ///
+    /// The client has no business with the rollback — that is what keeps
+    /// `TaskWrite` free of a `previous` field it would never read.
+    fn as_write(&self) -> TaskWrite {
+        match self {
+            Self::Field(edit) => TaskWrite::Field {
+                gid: edit.gid.clone(),
+                edit: edit.field.clone(),
+            },
+            Self::Project(edit) => TaskWrite::Project(edit.clone()),
+            Self::Parent(edit) => TaskWrite::Parent {
+                gid: edit.gid.clone(),
+                parent_gid: edit.parent_gid.clone(),
+            },
+        }
+    }
+}
+
+/// How many worker threads send batches.
+///
+/// Two, because the real limit is Asana's concurrent-action ceiling and
+/// `WriteThrottle` is what enforces it: at ten actions a batch, two workers
+/// already have more in flight than the budget allows, and a third would only
+/// queue inside `acquire`. Two is enough for one worker to be building the
+/// next chunk's reads while the other is waiting on the wire.
+const WRITE_WORKERS: usize = 2;
+
+/// The threads that send batched writes, and the queue they take from.
+///
+/// One pool for the session rather than a thread per edit. The old shape —
+/// `thread::spawn` once per task — meant selecting forty rows and pressing
+/// `d` opened forty sockets at once, which is nearly three times Asana's
+/// concurrent-write ceiling and the quickest way to be told `429`. Here the
+/// work is chunked to [`MAX_BATCH_ACTIONS`] and handed to a fixed pool, and
+/// `WriteThrottle` inside the client paces what the pool is allowed to send.
+///
+/// The workers outlive every burst and block on the condvar between them, so a
+/// second bulk edit costs no thread spawns. They are never joined: there is
+/// nothing to flush at exit that `settle_task_edits` has not already waited
+/// for.
+#[derive(Debug)]
+struct WritePool {
+    queue: Arc<WriteQueue>,
+}
+
+/// Chunks waiting for a worker.
+#[derive(Debug)]
+struct WriteQueue {
+    chunks: Mutex<VecDeque<Vec<PendingEdit>>>,
+    queued: Condvar,
+}
+
+impl WritePool {
+    /// Starts the pool. Each worker gets its own client clone and a handle on
+    /// the one reply channel.
+    fn new<C: AsanaClient + Clone + Send + 'static>(
+        client: &C,
+        sender: &Sender<TaskEditMessage>,
+    ) -> Self {
+        let queue = Arc::new(WriteQueue {
+            chunks: Mutex::new(VecDeque::new()),
+            queued: Condvar::new(),
+        });
+
+        for _ in 0..WRITE_WORKERS {
+            let queue = Arc::clone(&queue);
+            let client = client.clone();
+            let sender = sender.clone();
+            thread::spawn(move || loop {
+                let chunk = {
+                    let mut chunks = match queue.chunks.lock() {
+                        Ok(chunks) => chunks,
+                        Err(_) => return,
+                    };
+                    loop {
+                        if let Some(chunk) = chunks.pop_front() {
+                            break chunk;
+                        }
+                        chunks = match queue.queued.wait(chunks) {
+                            Ok(chunks) => chunks,
+                            Err(_) => return,
+                        };
+                    }
+                };
+
+                let writes = chunk.iter().map(PendingEdit::as_write).collect::<Vec<_>>();
+                let results = client.write_tasks(&writes);
+                // Zipped, so a client that answered with the wrong number of
+                // results loses the extras rather than panicking. Every reply
+                // decrements the outstanding count, which is why a missing one
+                // would wedge `settle_task_edits` — and why `write_tasks`
+                // promises one result per write.
+                for (edit, result) in chunk.into_iter().zip(results) {
+                    if sender.send(TaskEditMessage { edit, result }).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+
+        Self { queue }
+    }
+
+    /// Queues one chunk and wakes a worker.
+    fn submit(&self, chunk: Vec<PendingEdit>) {
+        let Ok(mut chunks) = self.queue.chunks.lock() else {
+            return;
+        };
+        chunks.push_back(chunk);
+        drop(chunks);
+        self.queue.queued.notify_one();
     }
 }
 
@@ -280,6 +461,8 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             people: None,
             view_restored: false,
             pending_migration: None,
+            pending_bulk_edit: None,
+            write_pool: None,
         };
         app.apply_view_config();
         // Last, so nothing above it can have written the file: a version-1
@@ -829,11 +1012,23 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         let removed = self.tasks.remove_tasks_locally(&marked);
         let mut failed = Vec::new();
         let mut error = None;
-        for gid in &marked {
-            if let Err(err) = self.client.delete_task(gid) {
-                debug_log(&format!("task delete failed: {err}"));
-                failed.push(gid.clone());
-                error = Some(err.to_string());
+        // Batched and throttled like every other bulk write, but sent on this
+        // thread rather than through the pool: the rollback below has to put
+        // a failed task's whole limb of subtasks back, and that is a decision
+        // over the *whole* result rather than one reply at a time. Marking
+        // thirty tasks and deleting them is the one place the UI blocks, and
+        // it blocks after a confirmation the user is already waiting on.
+        for chunk in marked.chunks(MAX_BATCH_ACTIONS) {
+            let writes = chunk
+                .iter()
+                .map(|gid| TaskWrite::Delete { gid: gid.clone() })
+                .collect::<Vec<_>>();
+            for (gid, result) in chunk.iter().zip(self.client.write_tasks(&writes)) {
+                if let Err(err) = result {
+                    debug_log(&format!("task delete failed: {err}"));
+                    failed.push(gid.clone());
+                    error = Some(err.to_string());
+                }
             }
         }
 
@@ -1197,12 +1392,34 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     /// is still on screen, and still the one to fix.
     fn commit_open_cell_edit(&mut self) {
         let context = self.edit_context();
+        // Read before the commit closes the editor, because that is what
+        // names a custom field in the confirmation: `TaskFieldEdit` carries
+        // the gid, and the label lives on the table.
+        let column = self
+            .tasks
+            .table()
+            .columns
+            .get(self.tasks.selected_column())
+            .cloned();
+
         match self.tasks.commit_cell_edit(&context) {
             Ok(edits) => {
-                self.dispatch_task_edits(edits.fields);
-                self.dispatch_project_edits(edits.projects);
-                self.dispatch_parent_edits(edits.parents);
+                // All three lists as one run of writes. They go to three
+                // endpoints, but they are one edit as far as the user is
+                // concerned — and so one question, with one count.
+                let writes = edits
+                    .fields
+                    .into_iter()
+                    .map(PendingEdit::Field)
+                    .chain(edits.projects.into_iter().map(PendingEdit::Project))
+                    .chain(edits.parents.into_iter().map(PendingEdit::Parent))
+                    .collect::<Vec<_>>();
+                // Before the gate: whichever way the question is answered,
+                // the cell editor is closed and the keys belong to the table.
+                // `submit_writes` moves on to `Mode::Confirm` from here when
+                // it has to, and `return_mode` carries this back.
                 self.set_task_mode();
+                self.submit_writes(writes, column.as_deref());
             }
             Err(message) => self.tasks.set_edit_notice(message),
         }
@@ -1867,7 +2084,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             }
             Action::ToggleTaskCompleted if self.tasks.visible() => {
                 let edits = self.tasks.toggle_completed_edits();
-                self.dispatch_task_edits(edits);
+                self.submit_writes(edits.into_iter().map(PendingEdit::Field).collect(), None);
             }
             // The dialog is a list of its own, so the cursor keys drive it
             // rather than the task rows underneath. Same shape as the filter
@@ -2075,6 +2292,18 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             event.code, event.modifiers
         ));
 
+        // Under the migration prompt and over everything else, matching the
+        // order the overlays are drawn in: a confirmation is a question about
+        // a write that has not happened, and no key may do anything else
+        // until it is answered.
+        //
+        // Every key, answered or not: a modal that let an unrecognized letter
+        // through to the table underneath would be a modal in name only.
+        if matches!(self.mode, Mode::Confirm) {
+            self.handle_confirm_input(event);
+            return Ok(None);
+        }
+
         // Ahead of the keymap: the prompt owns every key it is shown, so an
         // unbound letter types rather than falling through to a binding.
         if matches!(self.mode, Mode::FilterSetName)
@@ -2209,79 +2438,153 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         people
     }
 
-    /// Applies a batch of edits locally, then sends each one in the background.
+    /// Sends a run of writes, or asks first if there are enough of them.
     ///
-    /// One thread per edit, following `start_task_data_fetch`: the table does
-    /// not freeze while twelve tasks are marked done.
-    fn dispatch_task_edits(&mut self, edits: Vec<TaskEdit>) {
-        if edits.is_empty() {
+    /// The gate every bulk edit goes through. Below the threshold the writes
+    /// go straight out, which is what keeps editing one row as immediate as
+    /// it was. Above it nothing happens at all until the count on screen is
+    /// agreed to — not even the optimistic local update, so cancelling leaves
+    /// a table that never moved.
+    ///
+    /// `column` is the table's label for the column being written, which is
+    /// the only way a custom field is named rather than numbered in the
+    /// question.
+    fn submit_writes(&mut self, writes: Vec<PendingEdit>, column: Option<&str>) {
+        if writes.is_empty() {
+            return;
+        }
+
+        // Counted in writes rather than in tasks. They are the same number
+        // for a field edit, and for a projects edit one task can be several
+        // writes — which is the case where the larger number is the honest
+        // one, because it is the one the server will be asked to do.
+        if !self.config.edit.needs_confirmation(writes.len()) {
+            self.apply_and_enqueue(writes);
             return;
         }
 
         self.tasks.clear_edit_notice();
-        self.tasks.apply_edits_locally(&edits);
-        self.begin_writes(edits.len());
+        self.pending_bulk_edit = Some(PendingBulkEdit {
+            summary: bulk_edit_summary(&writes, column),
+            writes,
+            return_mode: self.mode,
+        });
+        self.mode = Mode::Confirm;
+    }
 
-        for edit in edits {
-            let client = self.client.clone();
-            let sender = self.task_edit_events.0.clone();
-            thread::spawn(move || {
-                let result = client
-                    .update_task(&edit.gid, &edit.field)
-                    .map(|task| task.modified_at);
-                let _ = sender.send(TaskEditMessage {
-                    edit: PendingEdit::Field(edit),
-                    result,
-                });
-            });
+    /// Applies writes locally and queues them. Past every confirmation.
+    fn apply_and_enqueue(&mut self, writes: Vec<PendingEdit>) {
+        let fields = writes
+            .iter()
+            .filter_map(|write| match write {
+                PendingEdit::Field(edit) => Some(edit.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let projects = writes
+            .iter()
+            .filter_map(|write| match write {
+                PendingEdit::Project(edit) => Some(edit.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let parents = writes
+            .iter()
+            .filter_map(|write| match write {
+                PendingEdit::Parent(edit) => Some(edit.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        // One rebuild each rather than one for the lot: the three apply to
+        // different parts of the record and each already batches its own.
+        if !fields.is_empty() {
+            self.tasks.apply_edits_locally(&fields);
+        }
+        if !projects.is_empty() {
+            self.tasks.apply_project_edits_locally(&projects);
+        }
+        if !parents.is_empty() {
+            self.tasks.apply_parent_edits_locally(&parents);
+        }
+
+        self.enqueue_writes(writes);
+    }
+
+    /// The bulk edit waiting on an answer, for the renderer.
+    pub fn pending_bulk_edit_view(&self) -> Option<(usize, String)> {
+        self.pending_bulk_edit
+            .as_ref()
+            .map(|pending| (pending.count(), pending.summary.clone()))
+    }
+
+    /// `y`: sends the bulk edit that was waiting.
+    fn confirm_bulk_edit(&mut self) {
+        let Some(pending) = self.pending_bulk_edit.take() else {
+            return;
+        };
+        self.mode = pending.return_mode;
+        self.apply_and_enqueue(pending.writes);
+    }
+
+    /// `n` or `esc`: drops it. Nothing was applied, so nothing is undone.
+    ///
+    /// The count is said back deliberately: the one thing worse than an
+    /// unnoticed bulk edit is an unnoticed cancelled one, and the cell the
+    /// user typed into has already gone back to its old value on screen.
+    fn cancel_bulk_edit(&mut self) {
+        let Some(pending) = self.pending_bulk_edit.take() else {
+            return;
+        };
+        self.mode = pending.return_mode;
+        self.tasks.set_edit_notice(format!(
+            "cancelled: {} tasks unchanged",
+            pending.count()
+        ));
+    }
+
+    /// Reads the one key a confirmation accepts, outside the keymap.
+    ///
+    /// Outside it for the same reason the sidebar's prompt is: every other
+    /// key has to be swallowed rather than fall through to the binding it
+    /// carries, and `j` reaching the table under a modal would move a cursor
+    /// nobody can see.
+    fn handle_confirm_input(&mut self, event: crossterm::event::KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let typed = !event
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+
+        match event.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') if typed => self.confirm_bulk_edit(),
+            KeyCode::Char('n') | KeyCode::Char('N') if typed => self.cancel_bulk_edit(),
+            KeyCode::Esc => self.cancel_bulk_edit(),
+            // Everything else is ignored rather than acted on. The caller
+            // swallows it either way.
+            _ => {}
         }
     }
 
-    /// The same, for membership changes: one request per project, per task.
-    fn dispatch_project_edits(&mut self, edits: Vec<ProjectEdit>) {
-        if edits.is_empty() {
+    /// Chunks writes to the batch limit and queues them for the pool.
+    ///
+    /// The one place every background write goes out, whichever endpoint it
+    /// is bound for: a batch can carry a field change, a membership change,
+    /// and a re-parenting together, and they are counted and reported as one
+    /// burst regardless.
+    fn enqueue_writes(&mut self, writes: Vec<PendingEdit>) {
+        if writes.is_empty() {
             return;
         }
 
         self.tasks.clear_edit_notice();
-        self.tasks.apply_project_edits_locally(&edits);
-        self.begin_writes(edits.len());
+        self.begin_writes(writes.len());
 
-        for edit in edits {
-            let client = self.client.clone();
-            let sender = self.task_edit_events.0.clone();
-            thread::spawn(move || {
-                let result = client.update_task_project(&edit).map(|()| None);
-                let _ = sender.send(TaskEditMessage {
-                    edit: PendingEdit::Project(edit),
-                    result,
-                });
-            });
-        }
-    }
-
-    /// The same, for re-parentings: `setParent` is a third endpoint again.
-    fn dispatch_parent_edits(&mut self, edits: Vec<ParentEdit>) {
-        if edits.is_empty() {
-            return;
-        }
-
-        self.tasks.clear_edit_notice();
-        self.tasks.apply_parent_edits_locally(&edits);
-        self.begin_writes(edits.len());
-
-        for edit in edits {
-            let client = self.client.clone();
-            let sender = self.task_edit_events.0.clone();
-            thread::spawn(move || {
-                let result = client
-                    .set_task_parent(&edit.gid, edit.parent_gid.as_deref())
-                    .map(|()| None);
-                let _ = sender.send(TaskEditMessage {
-                    edit: PendingEdit::Parent(edit),
-                    result,
-                });
-            });
+        let pool = self
+            .write_pool
+            .get_or_insert_with(|| WritePool::new(&self.client, &self.task_edit_events.0));
+        for chunk in writes.chunks(MAX_BATCH_ACTIONS) {
+            pool.submit(chunk.to_vec());
         }
     }
 

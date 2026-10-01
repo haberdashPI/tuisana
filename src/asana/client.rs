@@ -3,6 +3,8 @@
 //! This module turns the app's abstract `AsanaClient` trait into concrete
 //! requests against the public Asana REST API.
 
+use std::{sync::Arc, time::Duration};
+
 use reqwest::blocking::Client;
 use serde_json::Value;
 
@@ -12,7 +14,8 @@ use crate::{
             CollectionResponse, ProjectCustomFieldSettingDto, ProjectDto, ResourceResponse,
             SectionDto, TaskDto, UserDto,
         },
-        AsanaClient, TaskLoadScope, TaskQuery, TaskTarget,
+        throttle::WriteThrottle,
+        AsanaClient, TaskLoadScope, TaskQuery, TaskTarget, TaskWrite, MAX_BATCH_ACTIONS,
     },
     config::AuthConfig,
     domain::{NewTask, Project, ProjectEdit, ProjectMembership, TaskFieldEdit},
@@ -51,6 +54,21 @@ pub struct ReqwestTransport {
     base_url: String,
 }
 
+/// How many times a rate-limited request is re-sent before giving up.
+///
+/// Asana's `Retry-After` is usually a second or two, so three attempts covers
+/// the ordinary case. Past that the limiter is telling us something the client
+/// cannot fix by waiting longer, and the error belongs on screen.
+const RATE_LIMIT_ATTEMPTS: usize = 3;
+/// Longest a single `Retry-After` will be honoured.
+///
+/// A header asking for five minutes would freeze the worker thread holding it
+/// — and the write budget with it — for five minutes. Past this the request
+/// fails and says so.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
+/// What a `429` with no usable `Retry-After` waits.
+const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(2);
+
 impl ReqwestTransport {
     /// Builds a transport configured for the public Asana API.
     pub fn new() -> Result<Self> {
@@ -59,78 +77,110 @@ impl ReqwestTransport {
             base_url: ASANA_API_BASE_URL.to_string(),
         })
     }
+
+    fn url(&self, path: &str) -> String {
+        format!(
+            "{}/{}",
+            self.base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        )
+    }
+
+    /// Sends a request, waiting out a `429` and trying again.
+    ///
+    /// `build` is a closure rather than a `RequestBuilder` because a retry
+    /// needs a *second* request: a builder is consumed by `send`, and
+    /// `try_clone` fails on exactly the bodies that would be worth retrying.
+    ///
+    /// Honouring `Retry-After` is not politeness, it is arithmetic — Asana
+    /// counts a rejected request against the quota too, so retrying early
+    /// digs the hole deeper. The client-side throttle is what should keep us
+    /// from getting here at all; this is the backstop for the case where
+    /// something else on the account is spending the same quota.
+    fn send_with_retry(
+        &self,
+        path: &str,
+        build: impl Fn() -> reqwest::blocking::RequestBuilder,
+    ) -> Result<Value> {
+        for attempt in 1..=RATE_LIMIT_ATTEMPTS {
+            let response = build()
+                .send()
+                .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
+
+            if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS
+                || attempt == RATE_LIMIT_ATTEMPTS
+            {
+                return decode(response, path);
+            }
+
+            let wait = retry_after(response.headers());
+            crate::app::debug_log(&format!(
+                "asana rate limited on {path}, waiting {:?} (attempt {attempt})",
+                wait
+            ));
+            std::thread::sleep(wait);
+        }
+
+        // Unreachable: the loop returns on its last attempt.
+        Err(Error::Backend(format!(
+            "asana request failed: rate limited for {path}"
+        )))
+    }
+}
+
+/// How long a `429` asked us to wait, clamped to something a UI can survive.
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Duration {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_RETRY_AFTER)
+        .min(MAX_RETRY_AFTER)
 }
 
 impl Transport for ReqwestTransport {
     fn get_json(&self, path: &str, query: &[(&str, String)], token: &str) -> Result<Value> {
-        let url = format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        );
-        let response = self
-            .client
-            .get(url)
-            .bearer_auth(token)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .query(query)
-            .send()
-            .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
-
-        decode(response, path)
+        let url = self.url(path);
+        self.send_with_retry(path, || {
+            self.client
+                .get(&url)
+                .bearer_auth(token)
+                .header(reqwest::header::ACCEPT, "application/json")
+                .query(query)
+        })
     }
 
     fn put_json(&self, path: &str, body: &Value, token: &str) -> Result<Value> {
-        let url = format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        );
-        let response = self
-            .client
-            .put(url)
-            .bearer_auth(token)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .json(body)
-            .send()
-            .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
-
-        decode(response, path)
+        let url = self.url(path);
+        self.send_with_retry(path, || {
+            self.client
+                .put(&url)
+                .bearer_auth(token)
+                .header(reqwest::header::ACCEPT, "application/json")
+                .json(body)
+        })
     }
 
     fn post_json(&self, path: &str, body: &Value, token: &str) -> Result<Value> {
-        let url = format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        );
-        let response = self
-            .client
-            .post(url)
-            .bearer_auth(token)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .json(body)
-            .send()
-            .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
-
-        decode(response, path)
+        let url = self.url(path);
+        self.send_with_retry(path, || {
+            self.client
+                .post(&url)
+                .bearer_auth(token)
+                .header(reqwest::header::ACCEPT, "application/json")
+                .json(body)
+        })
     }
 
     fn delete_json(&self, path: &str, token: &str) -> Result<Value> {
-        let url = format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        );
-        let response = self
-            .client
-            .delete(url)
-            .bearer_auth(token)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .send()
-            .map_err(|err| Error::Backend(format!("asana request failed: {err}")))?;
-
-        decode(response, path)
+        let url = self.url(path);
+        self.send_with_retry(path, || {
+            self.client
+                .delete(&url)
+                .bearer_auth(token)
+                .header(reqwest::header::ACCEPT, "application/json")
+        })
     }
 }
 
@@ -166,8 +216,15 @@ fn decode(response: reqwest::blocking::Response, path: &str) -> Result<Value> {
 /// else — an HTML gateway page, an empty body — is dropped rather than shown,
 /// since the status already says as much as it would.
 fn asana_error_message(body: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(body).ok()?;
-    let messages = value
+    asana_error_detail(&serde_json::from_str::<Value>(body).ok()?)
+}
+
+/// The same, for a body that has already been parsed.
+///
+/// Which is every action in a batch: those arrive as JSON inside a `200`, so
+/// there is no text to re-parse.
+fn asana_error_detail(body: &Value) -> Option<String> {
+    let messages = body
         .get("errors")?
         .as_array()?
         .iter()
@@ -175,6 +232,36 @@ fn asana_error_message(body: &str) -> Option<String> {
         .collect::<Vec<_>>()
         .join("; ");
     (!messages.is_empty()).then(|| format!(": {messages}"))
+}
+
+/// Turns one entry of a batch response into that write's result.
+///
+/// The timestamp is read out of the body rather than the whole task being
+/// decoded: a successful write's record is already correct locally — the
+/// optimistic update wrote it — and `modified_at` is the one thing only the
+/// server knows.
+fn batch_result(result: &Value) -> Result<Option<String>> {
+    let status = result
+        .get("status_code")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+
+    if !(200..300).contains(&status) {
+        let detail = result
+            .get("body")
+            .and_then(asana_error_detail)
+            .unwrap_or_default();
+        return Err(Error::Backend(format!(
+            "asana request failed: {status}{detail}"
+        )));
+    }
+
+    Ok(result
+        .get("body")
+        .and_then(|body| body.get("data"))
+        .and_then(|data| data.get("modified_at"))
+        .and_then(Value::as_str)
+        .map(str::to_string))
 }
 
 /// The `data` object one field change sends.
@@ -213,6 +300,12 @@ pub struct HttpAsanaClient<T = ReqwestTransport> {
     transport: T,
     personal_access_token: String,
     workspace_gid: Option<String>,
+    /// The write budget, shared by every clone of this client.
+    ///
+    /// Behind an `Arc` because the write pool clones the client once per
+    /// worker thread: a budget that was cloned with it would be no budget at
+    /// all. See [`crate::asana::throttle`] for what it counts and why.
+    throttle: Arc<WriteThrottle>,
 }
 
 impl HttpAsanaClient<ReqwestTransport> {
@@ -222,6 +315,7 @@ impl HttpAsanaClient<ReqwestTransport> {
             transport: ReqwestTransport::new()?,
             personal_access_token: config.personal_access_token.clone(),
             workspace_gid: config.workspace_gid.clone(),
+            throttle: Arc::new(WriteThrottle::default()),
         })
     }
 }
@@ -238,6 +332,9 @@ impl<T: Transport> HttpAsanaClient<T> {
             transport,
             personal_access_token: personal_access_token.into(),
             workspace_gid,
+            // Effectively off: a test that waited out a real rate limit would
+            // be a test of `std::thread::sleep`.
+            throttle: Arc::new(WriteThrottle::new(usize::MAX, f64::MAX)),
         }
     }
 
@@ -262,6 +359,98 @@ impl<T: Transport> HttpAsanaClient<T> {
             Some(due_at) if !due_at.is_null() => Ok(("due_at", due_at.clone())),
             _ => Ok(("due_on", data.get("due_on").cloned().unwrap_or(Value::Null))),
         }
+    }
+
+    /// Turns one write into an entry for the `actions` array.
+    ///
+    /// `Err` here is a *per-write* failure: the only thing that can go wrong
+    /// is the read a start-date edit needs, and one task whose due date could
+    /// not be read must not take the other nine down with it.
+    fn batch_action(&self, write: &TaskWrite) -> Result<Value> {
+        use serde_json::json;
+
+        Ok(match write {
+            TaskWrite::Field { gid, edit } => {
+                let mut data = update_body(edit);
+                if matches!(edit, TaskFieldEdit::Start(_)) {
+                    // Not nested in the batch: `/batch` refuses to call
+                    // itself, and this is a read the write cannot be built
+                    // without. Charged for by `chunk_cost`.
+                    let (key, due) = self.current_due(gid)?;
+                    if let Some(data) = data.as_object_mut() {
+                        data.insert(key.to_string(), due);
+                    }
+                }
+                json!({
+                    "relative_path": format!("/tasks/{gid}"),
+                    "method": "put",
+                    "data": data,
+                    // A list of names, not the comma-separated string the
+                    // query parameter takes.
+                    "options": { "fields": TASK_OPT_FIELDS.split(',').collect::<Vec<_>>() },
+                })
+            }
+            TaskWrite::Project(edit) => {
+                let verb = match edit.membership {
+                    ProjectMembership::Add => "addProject",
+                    ProjectMembership::Remove => "removeProject",
+                };
+                json!({
+                    "relative_path": format!("/tasks/{}/{verb}", edit.gid),
+                    "method": "post",
+                    "data": { "project": edit.project_gid },
+                })
+            }
+            TaskWrite::Parent { gid, parent_gid } => json!({
+                "relative_path": format!("/tasks/{gid}/setParent"),
+                "method": "post",
+                "data": { "parent": parent_gid },
+            }),
+            TaskWrite::Delete { gid } => json!({
+                "relative_path": format!("/tasks/{gid}"),
+                "method": "delete",
+            }),
+        })
+    }
+
+    /// Sends one chunk of actions and answers one result per action, in order.
+    ///
+    /// Asana answers a batch with `200` and an array of per-action results
+    /// even when every action in it failed, so the statuses in the body are
+    /// the only place a refusal is reported.
+    fn send_batch(&self, actions: Vec<Value>) -> Result<Vec<Result<Option<String>>>> {
+        let count = actions.len();
+        let body = serde_json::json!({ "data": { "actions": actions } });
+        let json = self
+            .transport
+            .post_json("batch", &body, &self.personal_access_token)?;
+
+        let results = json
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::Backend("failed to decode batch response".to_string()))?;
+
+        Ok((0..count)
+            .map(|index| match results.get(index) {
+                Some(result) => batch_result(result),
+                // Asana returns results positionally, so a short array is not
+                // something to guess about.
+                None => Err(Error::Backend(format!(
+                    "asana answered {} of {count} batched writes",
+                    results.len()
+                ))),
+            })
+            .collect())
+    }
+
+    /// What the throttle is charged for a chunk, in actions.
+    ///
+    /// Every write is one action, plus one for each read a start-date edit
+    /// has to make first — those reads spend the same per-minute quota, and a
+    /// budget that ignored them would be wrong by a factor of two on exactly
+    /// the edit most likely to be done in bulk.
+    fn chunk_cost(writes: &[TaskWrite]) -> usize {
+        writes.len() + writes.iter().filter(|write| write.needs_read()).count()
     }
 
     fn list_projects_page(&self, offset: Option<&str>) -> Result<CollectionResponse<ProjectDto>> {
@@ -650,6 +839,73 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
         Ok(())
     }
 
+    /// Sends a chunk of writes as one `/batch` request, under the throttle.
+    ///
+    /// The batch buys round trips, not quota: Asana counts a ten-action batch
+    /// as ten requests against both the per-minute and the concurrent
+    /// limiters. Which is why the throttle is acquired here rather than left
+    /// to the caller — the one place that knows how many actions are about to
+    /// be spent is the one building them.
+    ///
+    /// A chunk longer than [`MAX_BATCH_ACTIONS`] would be refused outright,
+    /// so it is split rather than sent; callers that already chunk pay
+    /// nothing for the check.
+    fn write_tasks(&self, writes: &[TaskWrite]) -> Vec<Result<Option<String>>> {
+        let mut results = Vec::with_capacity(writes.len());
+
+        for chunk in writes.chunks(MAX_BATCH_ACTIONS) {
+            // Taken before the actions are built, because building them is
+            // where a start-date edit's read is made — and that read is part
+            // of what the chunk costs.
+            let _budget = self.throttle.acquire(Self::chunk_cost(chunk));
+
+            // Built first, so a write that cannot be expressed at all fails
+            // on its own rather than as part of the batch. `sent` maps a
+            // position in the request back to a position in `chunk`.
+            let mut actions = Vec::with_capacity(chunk.len());
+            let mut sent = Vec::with_capacity(chunk.len());
+            let mut chunk_results: Vec<Option<Result<Option<String>>>> =
+                chunk.iter().map(|_| None).collect();
+            for (index, write) in chunk.iter().enumerate() {
+                match self.batch_action(write) {
+                    Ok(action) => {
+                        actions.push(action);
+                        sent.push(index);
+                    }
+                    Err(err) => chunk_results[index] = Some(Err(err)),
+                }
+            }
+
+            if !actions.is_empty() {
+                match self.send_batch(actions) {
+                    Ok(replies) => {
+                        for (index, reply) in sent.iter().zip(replies) {
+                            chunk_results[*index] = Some(reply);
+                        }
+                    }
+                    // The request itself failed, so every write in it did.
+                    // Cloned as text because `Error` is not `Clone` — and the
+                    // message is the whole of what the notice shows.
+                    Err(err) => {
+                        let message = err.to_string();
+                        for index in &sent {
+                            chunk_results[*index] =
+                                Some(Err(Error::Backend(message.clone())));
+                        }
+                    }
+                }
+            }
+
+            results.extend(chunk_results.into_iter().map(|result| {
+                result.unwrap_or_else(|| {
+                    Err(Error::Backend("write was never sent".to_string()))
+                })
+            }));
+        }
+
+        results
+    }
+
     fn add_task_to_section(&self, section_gid: &str, task_gid: &str) -> Result<()> {
         let body = serde_json::json!({ "data": { "task": task_gid } });
         self.transport.post_json(
@@ -710,9 +966,9 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{asana_error_message, HttpAsanaClient, Transport, TASK_OPT_FIELDS};
-    use crate::asana::{AsanaClient, TaskLoadScope, TaskQuery};
-    use crate::domain::TaskFieldEdit;
+    use super::{asana_error_message, retry_after, HttpAsanaClient, Transport, TASK_OPT_FIELDS};
+    use crate::asana::{AsanaClient, TaskLoadScope, TaskQuery, TaskWrite};
+    use crate::domain::{ProjectEdit, TaskFieldEdit};
     use crate::error::{Error, Result};
 
     struct MockTransport {
@@ -786,6 +1042,188 @@ mod tests {
             self.deletes.borrow_mut().push(path.to_string());
             Ok(self.responses.borrow_mut().remove(0))
         }
+    }
+
+    /// One entry of a `/batch` reply, as Asana shapes it.
+    fn batch_reply(status: u64, body: serde_json::Value) -> serde_json::Value {
+        json!({ "status_code": status, "headers": {}, "body": body })
+    }
+
+    #[test]
+    fn a_run_of_writes_goes_out_as_one_batch_naming_each_endpoint() {
+        let transport = MockTransport::new(vec![json!({
+            "data": [
+                batch_reply(200, json!({ "data": { "gid": "t1", "modified_at": "2026-10-01T09:00:00Z" } })),
+                batch_reply(200, json!({ "data": {} })),
+                batch_reply(200, json!({ "data": {} })),
+                batch_reply(200, json!({ "data": {} })),
+            ]
+        })]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        let results = client.write_tasks(&[
+            TaskWrite::Field {
+                gid: "t1".to_string(),
+                edit: TaskFieldEdit::Completed(true),
+            },
+            TaskWrite::Project(ProjectEdit::remove("t2", "p9", "Backlog")),
+            TaskWrite::Parent {
+                gid: "t3".to_string(),
+                parent_gid: None,
+            },
+            TaskWrite::Delete {
+                gid: "t4".to_string(),
+            },
+        ]);
+
+        // One request for four writes, which is the whole reason the batch
+        // endpoint is worth the second code path.
+        let posts = client.transport.posts.borrow();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].0, "batch");
+
+        let actions = posts[0].1["data"]["actions"]
+            .as_array()
+            .expect("an actions array");
+        assert_eq!(actions.len(), 4);
+        assert_eq!(actions[0]["relative_path"], "/tasks/t1");
+        assert_eq!(actions[0]["method"], "put");
+        assert_eq!(actions[0]["data"]["completed"], true);
+        assert_eq!(actions[1]["relative_path"], "/tasks/t2/removeProject");
+        assert_eq!(actions[1]["method"], "post");
+        assert_eq!(actions[1]["data"]["project"], "p9");
+        assert_eq!(actions[2]["relative_path"], "/tasks/t3/setParent");
+        assert_eq!(actions[2]["data"]["parent"], serde_json::Value::Null);
+        assert_eq!(actions[3]["relative_path"], "/tasks/t4");
+        assert_eq!(actions[3]["method"], "delete");
+
+        // The field write's timestamp comes back; the three verb endpoints
+        // have none to give.
+        assert_eq!(
+            results[0].as_ref().expect("the field write"),
+            &Some("2026-10-01T09:00:00Z".to_string())
+        );
+        assert!(results[1..].iter().all(|result| matches!(result, Ok(None))));
+    }
+
+    #[test]
+    fn a_batch_longer_than_the_endpoints_cap_is_split() {
+        let page = |count: usize| {
+            json!({
+                "data": (0..count)
+                    .map(|_| batch_reply(200, json!({ "data": {} })))
+                    .collect::<Vec<_>>()
+            })
+        };
+        let transport = MockTransport::new(vec![page(10), page(2)]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        let writes = (0..12)
+            .map(|index| TaskWrite::Delete {
+                gid: format!("t{index}"),
+            })
+            .collect::<Vec<_>>();
+        let results = client.write_tasks(&writes);
+
+        assert_eq!(results.len(), 12, "one result per write, across both");
+        assert!(results.iter().all(Result::is_ok));
+        let posts = client.transport.posts.borrow();
+        assert_eq!(posts.len(), 2, "ten and then two");
+        assert_eq!(posts[0].1["data"]["actions"].as_array().unwrap().len(), 10);
+        assert_eq!(posts[1].1["data"]["actions"].as_array().unwrap().len(), 2);
+    }
+
+    /// Asana answers a batch with `200` whatever the actions did, so the only
+    /// place a refusal is reported is the per-action status — and a batch
+    /// where one of three failed has to roll back exactly that one.
+    #[test]
+    fn one_refused_action_fails_alone() {
+        let transport = MockTransport::new(vec![json!({
+            "data": [
+                batch_reply(200, json!({ "data": {} })),
+                batch_reply(403, json!({ "errors": [{ "message": "not your task" }] })),
+                batch_reply(200, json!({ "data": {} })),
+            ]
+        })]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        let results = client.write_tasks(&[
+            TaskWrite::Delete { gid: "t1".to_string() },
+            TaskWrite::Delete { gid: "t2".to_string() },
+            TaskWrite::Delete { gid: "t3".to_string() },
+        ]);
+
+        assert!(results[0].is_ok());
+        assert_eq!(
+            results[1].as_ref().expect_err("the refusal").to_string(),
+            "backend error: asana request failed: 403: not your task"
+        );
+        assert!(results[2].is_ok());
+    }
+
+    #[test]
+    fn a_short_reply_fails_the_writes_it_said_nothing_about() {
+        // Rather than guessing: the results are positional, so a missing one
+        // cannot be matched to a write by anything but its index.
+        let transport = MockTransport::new(vec![json!({
+            "data": [batch_reply(200, json!({ "data": {} }))]
+        })]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        let results = client.write_tasks(&[
+            TaskWrite::Delete { gid: "t1".to_string() },
+            TaskWrite::Delete { gid: "t2".to_string() },
+        ]);
+
+        assert!(results[0].is_ok());
+        assert!(results[1]
+            .as_ref()
+            .expect_err("no reply")
+            .to_string()
+            .contains("answered 1 of 2"));
+    }
+
+    /// Asana refuses a `start_on` that does not restate the due date, and
+    /// `/batch` refuses to call itself — so the read has to happen before the
+    /// actions are built, one per start-date write.
+    #[test]
+    fn a_batched_start_date_restates_the_due_date_it_read_first() {
+        let transport = MockTransport::new(vec![
+            json!({ "data": { "due_on": "2026-10-20", "due_at": null } }),
+            json!({ "data": [batch_reply(200, json!({ "data": {} }))] }),
+        ]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        let results = client.write_tasks(&[TaskWrite::Field {
+            gid: "t1".to_string(),
+            edit: TaskFieldEdit::Start(Some("2026-10-15".to_string())),
+        }]);
+
+        assert!(results[0].is_ok());
+        assert_eq!(client.transport.requests.borrow()[0].0, "tasks/t1");
+        let posts = client.transport.posts.borrow();
+        let action = &posts[0].1["data"]["actions"][0];
+        assert_eq!(action["data"]["start_on"], "2026-10-15");
+        assert_eq!(action["data"]["due_on"], "2026-10-20");
+    }
+
+    #[test]
+    fn a_retry_after_header_is_honoured_and_clamped() {
+        use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("3"));
+        assert_eq!(retry_after(&headers).as_secs(), 3);
+
+        // A header asking for five minutes would freeze the worker holding
+        // the write budget for five minutes.
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("300"));
+        assert_eq!(retry_after(&headers).as_secs(), 30);
+
+        // A `429` with no usable header still waits rather than hammering.
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("soon"));
+        assert_eq!(retry_after(&headers).as_secs(), 2);
+        assert_eq!(retry_after(&HeaderMap::new()).as_secs(), 2);
     }
 
     #[test]

@@ -57,6 +57,21 @@ recent = true
 # is dropped at startup.
 projects = []
 
+# How much of a bulk edit goes through without being asked about.
+[edit]
+# A cell edit or `d` with a selection changes every selected row at once.
+# Above this many, a window says how many rows are about to change and waits
+# for `y` or `n` — and nothing happens at all, locally or in Asana, until it
+# is answered. At or below it the edit goes on the keystroke.
+#
+# `0` asks about every edit, including single-row ones. A number larger than
+# any selection turns the question off.
+#
+# Independent of this, the column cell of every row an edit would change is
+# banded while the selection stands, so the blast radius is visible before the
+# key is pressed.
+confirm_threshold = 5
+
 # Projects not listed here default to hidden.
 
 [[bind]]

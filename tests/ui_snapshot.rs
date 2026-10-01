@@ -907,6 +907,28 @@ fn filter_mode_naming_a_set() {
     );
 }
 
+/// `d` over a selection past the threshold, so the question a bulk edit asks
+/// — and the count in its title — are pinned.
+///
+/// The column band that goes with it cannot be snapshotted: these capture
+/// symbols, not styles. `ui::task_table::tests` covers that half.
+#[test]
+fn task_mode_confirming_a_bulk_edit() {
+    let mut config = config();
+    // Two rows is already "more than a few" here, which keeps the fixture
+    // small enough to read.
+    config.edit.confirm_threshold = 1;
+
+    assert_snapshot_with(config, WIDTHS.to_vec(), "bulk-edit-confirm", || {
+        vec![
+            enter_task_mode(),
+            // `space` selects and moves down, so the cursor ends on a third
+            // row that is not among the targets.
+            vec![key(' '), key(' '), key('d')],
+        ]
+    });
+}
+
 /// A digit pressed over an unnamed panel that is filtering, so the
 /// border-mounted confirmation and the `y`/`n` hints are pinned.
 #[test]

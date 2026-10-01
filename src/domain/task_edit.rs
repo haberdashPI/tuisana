@@ -98,6 +98,14 @@ impl ProjectEdit {
         }
     }
 
+    /// One phrase naming the change, for a confirmation.
+    pub fn summary(&self) -> String {
+        match self.membership {
+            ProjectMembership::Add => format!("add to {}", self.project_name),
+            ProjectMembership::Remove => format!("remove from {}", self.project_name),
+        }
+    }
+
     /// The change that puts the membership back.
     pub fn undo(&self) -> Self {
         Self {
@@ -148,6 +156,14 @@ pub struct ParentEdit {
 }
 
 impl ParentEdit {
+    /// One phrase naming the change, for a confirmation.
+    pub fn summary(&self) -> String {
+        match &self.parent_name {
+            Some(name) => format!("hang off {name}"),
+            None => "promote to a top-level task".to_string(),
+        }
+    }
+
     /// The change that puts the parent back.
     pub fn undo(&self) -> Self {
         Self {
@@ -227,6 +243,61 @@ pub struct TaskEdit {
 }
 
 impl TaskFieldEdit {
+    /// The column this change is to, as the table labels it.
+    ///
+    /// A custom field answers its gid, because the gid is all this type
+    /// carries — the *name* belongs to the project's field definition, and
+    /// resolving it here would mean a write model that could not be built
+    /// without the dataset. Callers with a column label to hand should use
+    /// that instead; [`TaskFieldEdit::summary`] is for the ones that don't.
+    pub fn column_label(&self) -> &str {
+        match self {
+            Self::Name(_) => "Title",
+            Self::Completed(_) => "State",
+            Self::Due(_) => "Due",
+            Self::Start(_) => "Start",
+            Self::Assignee(_) => "Assignee",
+            Self::CustomField { gid, .. } => gid,
+        }
+    }
+
+    /// What this change is setting, as the user typed it.
+    ///
+    /// Empty for a cleared value, which is what lets a caller word the two
+    /// cases differently — "set Due to 2026-10-15" against "clear Due".
+    pub fn value_label(&self) -> String {
+        match self {
+            Self::Name(name) => name.clone(),
+            Self::Completed(completed) => match completed {
+                true => "done".to_string(),
+                false => "open".to_string(),
+            },
+            Self::Due(date) | Self::Start(date) => date.clone().unwrap_or_default(),
+            Self::Assignee(assignee) => assignee
+                .as_ref()
+                .map(|assignee| assignee.display.clone())
+                .unwrap_or_default(),
+            Self::CustomField { value, .. } => value
+                .as_ref()
+                .map(CustomFieldValue::display)
+                .unwrap_or_default(),
+        }
+    }
+
+    /// One phrase naming the whole change, for a confirmation.
+    ///
+    /// `column` is the label the table is using, which is the only way a
+    /// custom field gets named rather than numbered. Passing `None` falls
+    /// back to [`TaskFieldEdit::column_label`].
+    pub fn summary(&self, column: Option<&str>) -> String {
+        let column = column.unwrap_or_else(|| self.column_label());
+        let value = self.value_label();
+        if value.is_empty() {
+            return format!("clear {column}");
+        }
+        format!("set {column} to {value}")
+    }
+
     /// Writes this change onto a record.
     ///
     /// Used for the optimistic update *and* for the rollback, and deliberately

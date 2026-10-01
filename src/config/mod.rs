@@ -32,6 +32,9 @@ pub struct Config {
     #[serde(skip_serializing_if = "ViewConfig::is_default")]
     pub view: ViewConfig,
     #[serde(default)]
+    #[serde(skip_serializing_if = "EditConfig::is_default")]
+    pub edit: EditConfig,
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
     #[serde(default)]
@@ -58,6 +61,7 @@ impl PartialEq for Config {
             && self.theme == other.theme
             && self.gantt == other.gantt
             && self.view == other.view
+            && self.edit == other.edit
             && self.auth == other.auth
             && self.bind == other.bind
             && self.project_visibility == other.project_visibility
@@ -72,6 +76,7 @@ impl Default for Config {
             theme: ThemeConfig::default(),
             gantt: GanttConfig::default(),
             view: ViewConfig::default(),
+            edit: EditConfig::default(),
             auth: None,
             bind: default_bindings(),
             project_visibility: Vec::new(),
@@ -408,6 +413,51 @@ impl ThemeConfig {
     }
 }
 
+/// How much of a bulk edit goes through without being asked about.
+///
+/// One knob, because there is only one judgement call here: how many rows is
+/// "a few". Everything else about the write path — how many actions go out at
+/// once and how fast — is a property of Asana's limits rather than a taste,
+/// and lives in [`crate::asana::throttle`] as constants.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EditConfig {
+    /// How many tasks an edit may change before it has to be confirmed.
+    ///
+    /// At or below this, the edit goes. Above it, a modal says how many rows
+    /// are about to change and waits. `0` confirms every bulk edit; a number
+    /// larger than any selection turns the confirmation off.
+    #[serde(default = "default_confirm_threshold")]
+    pub confirm_threshold: usize,
+}
+
+fn default_confirm_threshold() -> usize {
+    5
+}
+
+impl Default for EditConfig {
+    fn default() -> Self {
+        Self {
+            confirm_threshold: default_confirm_threshold(),
+        }
+    }
+}
+
+impl EditConfig {
+    /// Returns `true` when nothing has been customized, which keeps the
+    /// `[edit]` table out of configs the app rewrites.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// Whether changing `count` tasks at once needs to be confirmed.
+    ///
+    /// Strictly greater: a threshold of 5 lets five rows through and asks
+    /// about six, which is what "more than a few" means.
+    pub fn needs_confirmation(&self, count: usize) -> bool {
+        count > self.confirm_threshold
+    }
+}
+
 /// Gantt chart appearance settings.
 ///
 /// This is the *serialization* of what the gantt and colour-dialog modes set,
@@ -656,6 +706,12 @@ pub enum Mode {
     /// the same rows, the same cursor and selection, different keys. Task mode
     /// is about what the table *says*; this one is about what it *contains*.
     Edit,
+    /// A bulk edit is waiting to be confirmed.
+    ///
+    /// Owns every key while it is up, so it allows no `Any` fallback: a
+    /// modal that asks a question and then acts on `j` would be worse than
+    /// no modal at all.
+    Confirm,
     /// A task table cell is open for editing.
     ///
     /// `task_edit` is the version-1 spelling, kept as an alias so a config in
@@ -685,6 +741,7 @@ impl Mode {
                 | Self::FilterEdit
                 | Self::FilterSetName
                 | Self::Calendar
+                | Self::Confirm
                 // An unbound letter has to type into the cell rather than
                 // fire the global binding that letter carries.
                 | Self::ColumnEdit
@@ -700,6 +757,7 @@ impl Mode {
             Self::FilterEdit => "filter-edit",
             Self::FilterSetName => "set name",
             Self::Calendar => "calendar",
+            Self::Confirm => "confirm",
             Self::Task => "task",
             Self::Edit => "edit",
             Self::ColumnEdit => "column",
@@ -1389,6 +1447,61 @@ mod tests {
         .expect_err("empty type should be rejected");
 
         assert!(format!("{err}").contains("header.type must not be empty"));
+    }
+
+    #[test]
+    fn the_confirm_threshold_defaults_to_five_and_asks_above_it() {
+        let edit = super::EditConfig::default();
+
+        assert_eq!(edit.confirm_threshold, 5);
+        // Strictly greater, so five rows is the largest edit that still
+        // happens on the keystroke.
+        assert!(!edit.needs_confirmation(5));
+        assert!(edit.needs_confirmation(6));
+        // A single-row edit is never a bulk edit at the default.
+        assert!(!edit.needs_confirmation(1));
+    }
+
+    #[test]
+    fn a_zero_threshold_asks_about_every_write_and_a_huge_one_asks_about_none() {
+        let always = super::EditConfig {
+            confirm_threshold: 0,
+        };
+        let never = super::EditConfig {
+            confirm_threshold: usize::MAX,
+        };
+
+        assert!(always.needs_confirmation(1));
+        assert!(!never.needs_confirmation(10_000));
+    }
+
+    #[test]
+    fn the_edit_section_round_trips_and_stays_out_of_a_default_config() {
+        let config = Config::from_toml_str(
+            r#"
+                [header]
+                type = "tuisana"
+                version = 1.0
+
+                [edit]
+                confirm_threshold = 20
+            "#,
+        )
+        .expect("the edit section parses");
+
+        assert_eq!(config.edit.confirm_threshold, 20);
+        assert!(
+            toml::to_string_pretty(&config)
+                .expect("serializes")
+                .contains("confirm_threshold = 20"),
+            "a customized threshold is written back"
+        );
+        assert!(
+            !toml::to_string_pretty(&Config::default())
+                .expect("serializes")
+                .contains("[edit]"),
+            "and a default one does not churn the file"
+        );
     }
 
     #[test]

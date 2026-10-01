@@ -6,12 +6,65 @@
 pub mod client;
 pub mod dto;
 pub mod fake;
+pub mod throttle;
 
 use crate::{
     asana::dto::{ProjectCustomFieldSettingDto, SectionDto, TaskDto, UserDto},
     domain::{NewTask, Project, ProjectEdit, ProjectKind, TaskFieldEdit},
     error::Result,
 };
+
+/// Most actions Asana's `/batch` endpoint accepts in one request.
+///
+/// Its own hard cap, not a tuning choice: a longer `actions` array is refused
+/// outright.
+pub const MAX_BATCH_ACTIONS: usize = 10;
+
+/// One write to one task, in the shape the write pipeline queues it.
+///
+/// The four variants are four different endpoints — `PUT /tasks/{gid}`,
+/// `addProject`/`removeProject`, `setParent`, and `DELETE /tasks/{gid}` — and
+/// the reason they share a type is that [`AsanaClient::write_tasks`] can send
+/// any mixture of them in one batch. Deliberately free of rollback
+/// information: `PendingEdit` in `app.rs` is the one that remembers how to
+/// undo itself, and the client has no business knowing.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TaskWrite {
+    Field { gid: String, edit: TaskFieldEdit },
+    Project(ProjectEdit),
+    Parent {
+        gid: String,
+        parent_gid: Option<String>,
+    },
+    Delete { gid: String },
+}
+
+impl TaskWrite {
+    pub fn gid(&self) -> &str {
+        match self {
+            Self::Field { gid, .. } => gid,
+            Self::Project(edit) => &edit.gid,
+            Self::Parent { gid, .. } => gid,
+            Self::Delete { gid } => gid,
+        }
+    }
+
+    /// Whether this write needs a read of its own before it can be sent.
+    ///
+    /// Only a start-date edit does: see
+    /// [`client::HttpAsanaClient::current_due`]. It is asked here rather than
+    /// matched on inside the batch builder because the *cost* of a chunk — what
+    /// the throttle charges for it — has to be known before the chunk is built.
+    pub fn needs_read(&self) -> bool {
+        matches!(
+            self,
+            Self::Field {
+                edit: TaskFieldEdit::Start(_),
+                ..
+            }
+        )
+    }
+}
 
 /// The completion scope the Asana client should use when fetching tasks.
 ///
@@ -160,6 +213,40 @@ pub trait AsanaClient {
     /// Its own endpoint, like project membership: Asana does not accept
     /// `parent` in a task update.
     fn set_task_parent(&self, task_gid: &str, parent_gid: Option<&str>) -> Result<()>;
+    /// Sends a run of writes, answering one result per write, in order.
+    ///
+    /// The bulk path. One result per write rather than one for the lot,
+    /// because a batch where two of twelve fail has to roll back exactly
+    /// those two — and Asana reports each action's status separately for
+    /// precisely that reason. `Ok(Some(modified_at))` carries the server's
+    /// timestamp where the endpoint reports one; `addProject`, `setParent`,
+    /// and `DELETE` answer `Ok(None)`.
+    ///
+    /// `writes` must be no longer than [`MAX_BATCH_ACTIONS`]; the caller
+    /// chunks. The default implementation sends them one at a time through
+    /// the single-write methods above, which is both what the fake client
+    /// wants and what keeps this method from being a second,
+    /// separately-maintained spelling of each write.
+    fn write_tasks(&self, writes: &[TaskWrite]) -> Vec<Result<Option<String>>> {
+        writes.iter().map(|write| self.write_task(write)).collect()
+    }
+    /// One write, through whichever single-write method it names.
+    ///
+    /// Not part of the surface an implementation overrides — it is the
+    /// default [`AsanaClient::write_tasks`] expressed once so the fallback
+    /// and the per-action error paths agree.
+    fn write_task(&self, write: &TaskWrite) -> Result<Option<String>> {
+        match write {
+            TaskWrite::Field { gid, edit } => {
+                self.update_task(gid, edit).map(|task| task.modified_at)
+            }
+            TaskWrite::Project(edit) => self.update_task_project(edit).map(|()| None),
+            TaskWrite::Parent { gid, parent_gid } => self
+                .set_task_parent(gid, parent_gid.as_deref())
+                .map(|()| None),
+            TaskWrite::Delete { gid } => self.delete_task(gid).map(|()| None),
+        }
+    }
     /// Puts a task in a section, which takes it out of its old one.
     ///
     /// So there is no paired removal: moving a task between two sections of

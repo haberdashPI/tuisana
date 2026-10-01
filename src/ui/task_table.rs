@@ -216,6 +216,26 @@ impl TaskTableView {
         self.rows.is_empty()
     }
 
+    /// Whether an edit on the cursor column would change this row.
+    ///
+    /// The renderer's copy of `TaskState::edit_targets`, and it has to stay
+    /// one: this is the only thing on screen that says how wide the next edit
+    /// reaches, and a highlight that disagreed with the commit would be worse
+    /// than none. The rule is the same — the selection when there is one, the
+    /// cursor row when there is not.
+    ///
+    /// Which means the cursor row is **not** a target while a selection the
+    /// cursor is not part of exists. That is the point of banding the column
+    /// rather than the cell: `space`, `space`, `space` leaves the cursor a row
+    /// below the last thing it marked, and a cell highlighted there would
+    /// promise an edit that is not going to happen.
+    fn is_edit_target(&self, gid: &str, is_cursor: bool) -> bool {
+        if self.selected_task_ids.is_empty() {
+            return is_cursor;
+        }
+        self.selected_task_ids.contains(gid)
+    }
+
     /// Adds a scroll-position chip when columns extend past the pane.
     ///
     /// Columns clipped at the pane edge are otherwise invisible, so the border
@@ -686,8 +706,13 @@ fn task_line(
     // The editor only ever draws on the cursor row: the targets may be many,
     // but there is one cell being typed into.
     let editing = is_cursor.then_some(view.editing.as_ref()).flatten();
-    let cursor_column = is_cursor.then_some(view.cursor_column).flatten();
-    let mut cells = cell_spans(&row.cells, view, theme, false, editing, cursor_column);
+    // The band, however, goes on every row the commit would reach — which is
+    // what makes a bulk edit visible before it happens rather than after.
+    let target_column = view
+        .is_edit_target(&row.gid, is_cursor)
+        .then_some(view.cursor_column)
+        .flatten();
+    let mut cells = cell_spans(&row.cells, view, theme, false, editing, target_column);
     if row.marked_for_deletion {
         // On the spans rather than the whole `Line`, which keeps the chart's
         // "one line per row" invariant intact: the bar beside a marked row is
@@ -768,15 +793,17 @@ fn group_header_line(
 
 /// Renders a row of cells with column rules between them.
 ///
-/// `cursor_column` marks the column the cell cursor is on: banded in the
-/// header, underlined on the cursor row.
+/// `band_column` marks the column to emphasise on this row, or `None` for a
+/// row the column cursor does not apply to. The header passes the cursor
+/// column always; a task row passes it only when the row is one an edit would
+/// change.
 fn cell_spans(
     cells: &[RenderCell],
     view: &TaskTableView,
     theme: &Theme,
     is_header: bool,
     editing: Option<&CellEditView>,
-    cursor_column: Option<usize>,
+    band_column: Option<usize>,
 ) -> Vec<Span<'static>> {
     let mut spans = Vec::with_capacity(cells.len() * 4);
 
@@ -809,12 +836,14 @@ fn cell_spans(
             Align::Center => pad_cell_centered(&cell.text, text_width, theme.glyphs.ellipsis),
         };
         let mut style = cell.tone.style(theme);
-        if cursor_column == Some(index) {
-            // The header bands the whole cell; a row only underlines it. One
-            // band per column is a landmark, one per row is a second cursor.
+        if band_column == Some(index) {
+            // The same band in the header and on the rows, because they are
+            // saying the same thing: this is the column, and these are the
+            // rows it is about to be written to. Patched rather than replaced,
+            // so an overdue date stays red while it is banded.
             style = match is_header {
                 true => style.patch(theme.header_cursor),
-                false => style.add_modifier(ratatui::style::Modifier::UNDERLINED),
+                false => style.patch(theme.target_cell),
             };
         }
         spans.push(Span::styled(padded, style));
@@ -1560,6 +1589,91 @@ mod tests {
         assert!(struck(marked.0), "the marked row is struck through");
         assert!(!struck(kept.0), "and nothing else is");
         assert_eq!(state.marked_for_deletion_count(), 1);
+    }
+
+    /// Which rows band is the same question as which rows an edit changes, so
+    /// these assert the renderer agrees with `TaskState::edit_targets`.
+    fn banded_gids(view: &super::TaskTableView, theme: &Theme, cursor: Option<usize>) -> Vec<String> {
+        task_body_lines(view, cursor, theme, 120)
+            .iter()
+            .zip(view.rows.iter())
+            .filter(|(line, row)| {
+                row.kind.is_task()
+                    && line.spans.iter().any(|span| {
+                        span.style.bg == theme.target_cell.bg
+                            && span
+                                .style
+                                .add_modifier
+                                .contains(Modifier::UNDERLINED | Modifier::BOLD)
+                    })
+            })
+            .map(|(_, row)| row.gid.clone())
+            .collect()
+    }
+
+    #[test]
+    fn with_nothing_selected_only_the_cursor_rows_cell_bands() {
+        let mut state = state_with(vec![
+            task("t1", "Ship release", Some("2026-01-01"), false),
+            task("t2", "Write changelog", Some("2026-01-02"), false),
+        ]);
+        let theme = Theme::default();
+        let view = render_task_table(&mut state, 120, &theme, Some(2));
+
+        assert_eq!(
+            banded_gids(&view, &theme, state.selected_index()),
+            vec!["t1".to_string()],
+            "the cursor row is the target when there is no selection"
+        );
+    }
+
+    /// The whole point of the column band. `space` selects and moves down, so
+    /// after marking two rows the cursor sits on a third that is not being
+    /// changed — and a highlight there would promise an edit that is not
+    /// going to happen.
+    #[test]
+    fn with_a_selection_the_cells_that_band_are_the_selected_ones() {
+        let mut state = state_with(vec![
+            task("t1", "Ship release", Some("2026-01-01"), false),
+            task("t2", "Write changelog", Some("2026-01-02"), false),
+            task("t3", "Cut the tag", Some("2026-01-03"), false),
+        ]);
+        state.apply_action(&crate::input::Action::ToggleTaskSelection, 10, false);
+        state.apply_action(&crate::input::Action::ToggleTaskSelection, 10, false);
+        let theme = Theme::default();
+        let view = render_task_table(&mut state, 120, &theme, Some(2));
+
+        let mut banded = banded_gids(&view, &theme, state.selected_index());
+        banded.sort();
+        assert_eq!(banded, vec!["t1".to_string(), "t2".to_string()]);
+        assert_eq!(
+            state.edit_targets(),
+            vec!["t1".to_string(), "t2".to_string()],
+            "and they are exactly the tasks the commit would write to"
+        );
+    }
+
+    #[test]
+    fn a_banded_cell_keeps_the_colour_its_own_value_earned() {
+        // An overdue date is red. Banding it must not make it text-coloured:
+        // the band says "this is a target", not "this is ordinary".
+        let mut state = state_with(vec![task("t1", "Overdue", Some("2020-01-01"), false)]);
+        let theme = Theme::default();
+        let view = render_task_table(&mut state, 120, &theme, Some(crate::domain::DUE_COLUMN));
+
+        let line = task_body_lines(&view, state.selected_index(), &theme, 120)
+            .into_iter()
+            .zip(view.rows.iter())
+            .find(|(_, row)| row.gid == "t1")
+            .map(|(line, _)| line)
+            .expect("the task row");
+        let banded = line
+            .spans
+            .iter()
+            .find(|span| span.style.bg == theme.target_cell.bg)
+            .expect("a banded cell");
+
+        assert_eq!(banded.style.fg, Tone::Danger.style(&theme).fg);
     }
 
     #[test]

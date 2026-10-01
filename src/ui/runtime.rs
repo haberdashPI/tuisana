@@ -23,9 +23,10 @@ use crate::{
     config::Mode,
     input::KeyMap,
     ui::{
+        calendar, completion, confirm,
         chrome::{self, Chip, Tone},
-        calendar, completion, filter_panel, filter_sets, gantt, gantt_order, help_overlay,
-        hints, layout, notice, project_list,
+        filter_panel, filter_sets, gantt, gantt_order, help_overlay, hints, layout, notice,
+        project_list,
         task_table::{self, TaskTableView},
         theme::Theme,
     },
@@ -116,9 +117,14 @@ fn classify(event: Event) -> InputEvent {
 /// from.
 fn focused_pane(mode: Mode, filter_focused: bool) -> FocusedPane {
     match mode {
-        Mode::Task | Mode::Edit | Mode::ColumnEdit | Mode::Gantt | Mode::GanttOrder => {
-            FocusedPane::Task
-        }
+        Mode::Task
+        | Mode::Edit
+        | Mode::ColumnEdit
+        | Mode::Gantt
+        | Mode::GanttOrder
+        // The rows it is asking about are in the task pane, and `n` hands the
+        // keys straight back to them.
+        | Mode::Confirm => FocusedPane::Task,
         Mode::Calendar if !filter_focused => FocusedPane::Task,
         Mode::Project
         | Mode::ProjectSearch
@@ -235,13 +241,20 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
             //
             // Below it a confirmation wins outright: every key goes to it
             // until it is answered, and `?` is not among them, so help
-            // showing over it would be stale and unclosable. Below that help
-            // wins, because it *is* reachable from inside the picker via `?`
-            // and asking for it has to actually show it.
-            if let Some(confirm) = app.pending_migration_backup().map(migration_view) {
-                filter_sets::render_confirm(frame, regions.body, &theme, mode, &confirm);
-            } else if let Some(confirm) = filter_sets::confirm_view(&app.tasks) {
-                filter_sets::render_confirm(frame, regions.body, &theme, mode, &confirm);
+            // showing over it would be stale and unclosable. The bulk-edit
+            // question comes before the filter panel's for the same reason it
+            // comes first in `handle_key_event_inner`: it is the one holding
+            // writes that have not gone out, and the two cannot be up at
+            // once. Below them help wins, because it *is* reachable from
+            // inside the picker via `?` and asking for it has to actually
+            // show it.
+            if let Some(question) = app.pending_migration_backup().map(migration_view) {
+                confirm::render(frame, regions.body, &theme, mode, &question);
+            } else if let Some((count, summary)) = app.pending_bulk_edit_view() {
+                let question = confirm::bulk_edit_view(count, &summary);
+                confirm::render(frame, regions.body, &theme, mode, &question);
+            } else if let Some(question) = filter_sets::confirm_view(&app.tasks) {
+                confirm::render(frame, regions.body, &theme, mode, &question);
             } else if help_visible(app, mode) {
                 help_overlay::render(frame, regions.body, &theme, keymap, mode);
             } else if let Some(dialog) = app.tasks.gantt().dialog() {
@@ -274,14 +287,14 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
 /// decision and the file name, and this is the shape they are read in. It
 /// reuses the filter sets' confirmation window, which is already the app's
 /// vocabulary for "answer this before anything else happens".
-fn migration_view(backup_path: &std::path::Path) -> filter_sets::ConfirmView {
+fn migration_view(backup_path: &std::path::Path) -> confirm::ConfirmView {
     let backup = backup_path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| backup_path.to_string_lossy().to_string());
 
-    filter_sets::ConfirmView {
-        title: "Config format changed",
+    confirm::ConfirmView {
+        title: "Config format changed".to_string(),
         body: vec![
             "tuisana.toml is in the version 1 format. Six".to_string(),
             "command names and one mode name have been".to_string(),
@@ -319,6 +332,9 @@ fn help_visible<C: AsanaClient + Clone + Send + 'static>(app: &App<C>, mode: Mod
             app.tasks.help_details_visible()
         }
         Mode::Project | Mode::ProjectSearch | Mode::Any => app.projects.help_details_visible(),
+        // Never: the confirmation reads `y`, `n`, and `esc`, so help opened
+        // over it could neither be asked for nor closed.
+        Mode::Confirm => false,
     }
 }
 

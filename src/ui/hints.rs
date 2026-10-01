@@ -122,6 +122,9 @@ const GLOBAL_HINTS: &[Hint] = &[
 pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
     match mode {
         Mode::Project | Mode::Any => project_hints(context),
+        // The window names its own keys, right under the question. Repeating
+        // them on the bar would be the third place the same `y` is written.
+        Mode::Confirm => Vec::new(),
         Mode::ProjectSearch => vec![
             Hint::literal("esc", "done"),
             Hint::new(&[Action::ClearSearch], "clear"),

@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                                                              │
+│▍   ★ Platform Infrastructure                                                                                         │
+│    ☆ Backlog                                                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┏ Tasks ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11 tasks · row 3 · 2 selected · columns 0/10 ┓
+┃   Task                                          │ Assignee     │     Due │  Start │ St │ Projects           │ Parent ┃
+┃                                                                                                                      ┃
+┃▌Northwind BTX 4412 ────────────────┏ Change 2 tasks? ━━━━━━━━━━━━━━━━━━━━━━━━━━┓─────────────────────────────────────┃
+┃                                    ┃                                           ┃                                     ┃
+┃   Study Kit Design ················┃ set State to done on the 2 tasks you have ┃·····································┃
+┃ ● Draft the assay validation protoc┃ selected.                                 ┃5 │ ○  │ Northwind BTX 4412 │ —      ┃
+┃ ● Review shipment requirements doc ┃                                           ┃3 │ ○  │ Northwind BTX 4412 │ —      ┃
+┃▍  Ship release candidate to the stu┃ y        change 2 tasks                   ┃0 │ ○  │ Northwind BTX 4412 │ —      ┃
+┃   Confirm carrier pickup window wit┃ n / esc  change nothing                   ┃7 │ ○  │ Northwind BTX 4412 │ —      ┃
+┃   Update the sample intake SOP     ┃                                           ┃0 │ ○  │ Northwind BTX 4412 │ —      ┃
+┃   Qualify the second reagent suppli┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛1 │ ○  │ Northwind BTX 4412 │ —      ┃
+┃                                                                                                                      ┃
+┃   Shipment ··········································································································┃
+┃   Book the courier for the pilot run            │ Sam Okafor   │  Sep 15 │  Sep 1 │ ○  │ Northwind BTX 4412 │ —      ┃
+┃   Label the retention samples                   │ Jo Park      │   Oct 9 │      — │ ○  │ Northwind BTX 4412 │ —      ┃
+┃   Reconcile the freight invoices                │ Robin Fox    │  Oct 30 │ Sep 20 │ ○  │ Northwind BTX 4412 │ —      ┃
+┃   Close out packaging vendor contract           │ Alex Chen    │  Nov 14 │  Oct 1 │ ○  │ Northwind BTX 4412 │ —      ┃
+┃   Close the quarter's shipping report           │ Priya Raman  │  Dec 18 │  Nov 2 │ ○  │ Northwind BTX 4412 │ —      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+ CONFIRM
