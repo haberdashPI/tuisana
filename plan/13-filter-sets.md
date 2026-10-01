@@ -2132,7 +2132,7 @@ oversight.
   in set 2" is, and it belongs in `TaskState::apply_filter_panel`, which judges
   each record alone today.
 - **Filter sets are not persisted.** They live for the session, like the Gantt
-  chart's timeline window. [Milestone 15](15-hardening-and-polish.md)'s "persisted default project sets and
+  chart's timeline window. [Milestone 16](16-hardening-and-polish.md)'s "persisted default project sets and
   views" is where saved sets would belong, and naming them is most of that work.
 - **Sets cannot be reordered or named.** Tabs are numbered by position. Names
   would need an edit mode of their own, and the numbers are enough to tell two

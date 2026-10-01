@@ -8,8 +8,7 @@ Tuisana is a terminal UI for reviewing Asana projects and tasks the way "power u
 > of these files, but all code was written by Codex or Claude Code. Documentation is not yet
 > optimized for users at this point. This is not a project I have the time/resources to
 > manually develop by hand that I thought might be a plausible, well-constrained target for
-> an LLM to write. Later milestones may lead to edit abilities, but for now I have focused
-> on read-only features out of an abundance of caution.
+> an LLM to write.
 
 ## Installation
 

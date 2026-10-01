@@ -1,4 +1,4 @@
-# Milestone 15: Hardening and polish
+# Milestone 16: Hardening and polish
 
 [← all milestones](../plan.md)
 
