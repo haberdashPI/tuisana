@@ -31,7 +31,7 @@ use tuisana::{
         ThemeConfig, ThemeGlyphs, ThemeVariant,
     },
     domain::Project,
-    ui::runtime::{run_session, InputEvent, KeySource},
+    ui::runtime::{run_session, InputEvent, KeySource, RecordingHost},
 };
 
 const WIDTHS: [u16; 3] = [80, 120, 200];
@@ -366,14 +366,14 @@ fn render_with(config: Config, width: u16, batches: Vec<Vec<KeyEvent>>) -> Strin
     let mut terminal = Terminal::new(backend).expect("terminal");
 
     for keys in batches {
-        run_session(&mut app, &mut ScriptedSource { keys }, &mut terminal)
+        run_session(&mut app, &mut ScriptedSource { keys }, &mut terminal, &mut RecordingHost::default())
             .expect("session runs");
         drain_task_data(&mut app);
     }
 
     // A final pass with no input redraws the settled state, so a snapshot never
     // captures a spinner mid-load.
-    run_session(&mut app, &mut ScriptedSource { keys: Vec::new() }, &mut terminal)
+    run_session(&mut app, &mut ScriptedSource { keys: Vec::new() }, &mut terminal, &mut RecordingHost::default())
         .expect("session redraws");
 
     let buffer = terminal.backend_mut().buffer().clone();
@@ -859,6 +859,8 @@ fn named_sets_config() -> Config {
     fn entry(name: &str, key: &str, query: &str) -> NamedFilterSet {
         NamedFilterSet {
             name: name.to_string(),
+            scratch: false,
+            projects: None,
             sets: vec![SavedFilterSet {
                 negated: false,
                 fields: vec![SavedFilterField {
@@ -877,6 +879,12 @@ fn named_sets_config() -> Config {
         entry("Sprint triage", "title", "ship"),
         entry("Waiting on", "assignee", "jo"),
     ];
+    // One entry with a `projects` list and three without, so both halves of
+    // the absent/empty split are on screen somewhere: the confirmation's
+    // project lines appear for `Blocked` and the sidebar's project count is
+    // the live selection either way.
+    config.filter_sets[0].projects =
+        Some(vec!["project-2".to_string(), "project-3".to_string()]);
     config
 }
 
@@ -888,6 +896,56 @@ fn filter_mode_with_the_named_set_sidebar() {
     assert_snapshot_with(named_sets_config(), WIDTHS.to_vec(), "filter-sets-named", || {
         vec![enter_task_mode(), vec![key('f'), key('b'), key('3')]]
     });
+}
+
+/// The project view with the sidebar up, so the four-line header, its project
+/// count, the bound-set chip on the project pane's border, and the sidebar
+/// surviving at eighty columns — where the filter view drops it — are pinned.
+#[test]
+fn project_mode_with_the_named_set_sidebar() {
+    assert_snapshot_with(
+        named_sets_config(),
+        WIDTHS.to_vec(),
+        "project-sets-named",
+        || vec![vec![key(' '), key('b'), key('1')]],
+    );
+}
+
+/// `w` from the project view: the prompt on the sidebar's border, with the
+/// project list rather than the filter rows beside it.
+#[test]
+fn project_mode_naming_a_set() {
+    assert_snapshot_with(
+        named_sets_config(),
+        vec![120],
+        "project-sets-save-prompt",
+        || {
+            vec![
+                vec![key(' '), key('b'), key('w')],
+                "sprint".chars().map(key).collect(),
+            ]
+        },
+    );
+}
+
+/// `w` in the project view on a terminal too narrow for the sidebar: the
+/// prompt borrows the project pane's bottom border, where it displaces the
+/// search footer rather than sharing the line.
+#[test]
+fn project_mode_naming_a_set_without_room_for_the_sidebar() {
+    assert_snapshot_with(
+        named_sets_config(),
+        vec![40],
+        "project-sets-save-prompt-narrow",
+        || {
+            vec![
+                vec![key('/')],
+                "back".chars().map(key).collect(),
+                vec![enter(), key('w')],
+                "sprint".chars().map(key).collect(),
+            ]
+        },
+    );
 }
 
 /// Mid-`w`, with text typed, so the border-mounted prompt is pinned.
@@ -1099,6 +1157,7 @@ fn the_monochrome_theme_emits_no_color() {
             keys: enter_task_mode(),
         },
         &mut terminal,
+        &mut RecordingHost::default(),
     )
     .expect("session runs");
     drain_task_data(&mut app);
@@ -1125,10 +1184,11 @@ fn the_monochrome_theme_emits_no_color() {
         &mut app,
         &mut ScriptedSource { keys },
         &mut terminal,
+        &mut RecordingHost::default(),
     )
     .expect("session opens the calendar");
     drain_task_data(&mut app);
-    run_session(&mut app, &mut ScriptedSource { keys: Vec::new() }, &mut terminal)
+    run_session(&mut app, &mut ScriptedSource { keys: Vec::new() }, &mut terminal, &mut RecordingHost::default())
         .expect("session redraws");
 
     assert!(

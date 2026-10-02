@@ -90,6 +90,65 @@ impl KeySource for CrosstermKeySource {
     }
 }
 
+/// Where a session's effects on the world outside the terminal go.
+///
+/// The second seam beside [`KeySource`]: that one says where keys come from,
+/// this one says where `o` and `y` end up. It exists because running the real
+/// ones from a test reaches out of the process the test runs in — opening a
+/// browser window on whoever's machine is running `cargo test`, and
+/// overwriting the clipboard they were using. A test can assert that the
+/// session *would* have opened a URL without a window appearing.
+///
+/// Both methods swallow their own failures, as the code they replaced did:
+/// there is no sensible recovery from "this machine has no browser", and a
+/// session must not end because of it.
+pub trait HostEffects {
+    /// Opens `url` in whatever the machine uses for links.
+    fn open_url(&mut self, url: &str);
+    /// Puts `text` on the system clipboard.
+    fn set_clipboard(&mut self, text: &str);
+}
+
+/// The real one: the browser and clipboard of the machine the app is on.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemHost;
+
+impl HostEffects for SystemHost {
+    fn open_url(&mut self, url: &str) {
+        let _ = std::process::Command::new("open").arg(url).spawn();
+    }
+
+    fn set_clipboard(&mut self, text: &str) {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            let _ = clipboard.set_text(text);
+        }
+    }
+}
+
+/// A host that writes everything down and does nothing.
+///
+/// In the library rather than in each test file, for the same reason
+/// [`crate::asana::fake::FakeAsanaClient`] is: every test that drives a
+/// session needs one, and a test that reached for the real one by mistake is
+/// the bug this type exists to make impossible.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RecordingHost {
+    /// Every URL the session asked for, in order.
+    pub opened_urls: Vec<String>,
+    /// Every string the session put on the clipboard, in order.
+    pub clipboard_writes: Vec<String>,
+}
+
+impl HostEffects for RecordingHost {
+    fn open_url(&mut self, url: &str) {
+        self.opened_urls.push(url.to_string());
+    }
+
+    fn set_clipboard(&mut self, text: &str) {
+        self.clipboard_writes.push(text.to_string());
+    }
+}
+
 /// Maps a crossterm event onto the app's input model.
 ///
 /// Everything maps to *something*. This used to loop on `event::read()` until a
@@ -175,10 +234,49 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                 // mode. The filter panel stays put when the keys move to the
                 // table — `f` and `p` are what put the project list back —
                 // so the pane cannot be read off the mode any more.
-                page_size = if app.tasks.filter_panel_visible() {
-                    render_filter_pane(frame, area, app, &theme, mode, focused)
+                let filters = app.tasks.filter_panel_visible();
+                // The split is here rather than inside either pane: the
+                // sidebar is still not a frame region, but it belongs to
+                // whichever pane the top window is holding, and the two have
+                // different ideas of how narrow is too narrow.
+                let (sidebar, pane) = filter_sets::split_sidebar(
+                    area,
+                    app.tasks.filter_sets_sidebar_visible(),
+                    match filters {
+                        true => filter_sets::MIN_FILTER_WIDTH,
+                        false => filter_sets::MIN_PROJECT_WIDTH,
+                    },
+                );
+                if let Some(sidebar) = sidebar {
+                    render_filter_sets_pane(frame, sidebar, app, &theme, mode);
+                }
+                // The prompt normally rides the sidebar's border. When the
+                // sidebar has given way for width it borrows the pane's,
+                // because a prompt with nowhere to be makes `w` a blind edit.
+                let orphaned_prompt = sidebar
+                    .is_none()
+                    .then(|| filter_sets::prompt_line(&app.tasks))
+                    .flatten();
+                page_size = if filters {
+                    render_filter_pane(
+                        frame,
+                        pane,
+                        app,
+                        &theme,
+                        mode,
+                        focused,
+                        orphaned_prompt.as_ref(),
+                    )
                 } else {
-                    render_project_pane(frame, area, app, &theme, mode, focused)
+                    render_project_pane(
+                        frame,
+                        pane,
+                        app,
+                        &theme,
+                        mode,
+                        focused,
+                        orphaned_prompt.as_ref(),
+                    )
                 };
             }
 
@@ -248,12 +346,16 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
             // once. Below them help wins, because it *is* reachable from
             // inside the picker via `?` and asking for it has to actually
             // show it.
-            if let Some(question) = app.pending_migration_backup().map(migration_view) {
+            if let Some(question) = app.pending_migration_backup().map(|backup| {
+                migration_view(backup, app.pending_migration_from_version().unwrap_or(1.0))
+            }) {
                 confirm::render(frame, regions.body, &theme, mode, &question);
             } else if let Some((count, summary)) = app.pending_bulk_edit_view() {
                 let question = confirm::bulk_edit_view(count, &summary);
                 confirm::render(frame, regions.body, &theme, mode, &question);
-            } else if let Some(question) = filter_sets::confirm_view(&app.tasks) {
+            } else if let Some(question) =
+                filter_sets::confirm_view(&app.tasks, &app.config.filter_sets)
+            {
                 confirm::render(frame, regions.body, &theme, mode, &question);
             } else if help_visible(app, mode) {
                 help_overlay::render(frame, regions.body, &theme, keymap, mode);
@@ -287,27 +389,41 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
 /// decision and the file name, and this is the shape they are read in. It
 /// reuses the filter sets' confirmation window, which is already the app's
 /// vocabulary for "answer this before anything else happens".
-fn migration_view(backup_path: &std::path::Path) -> confirm::ConfirmView {
+/// The prompt shown over a config that has to be rewritten before it is used.
+///
+/// `from_version` decides what the window says: a version-1 file needs the
+/// renames *and* the project-selection move, a version-2 file only the
+/// second. Describing both to someone who needs one would be describing
+/// changes to their file that are not going to happen.
+fn migration_view(backup_path: &std::path::Path, from_version: f64) -> confirm::ConfirmView {
     let backup = backup_path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| backup_path.to_string_lossy().to_string());
 
+    let mut body = vec![format!(
+        "tuisana.toml is in the version {} format.",
+        from_version as i64
+    )];
+    if from_version < 2.0 {
+        body.push("Six command names and one mode name have".to_string());
+        body.push("been renamed, and uppercase letters are now".to_string());
+        body.push("distinct keys.".to_string());
+        body.push(String::new());
+    }
+    body.push("The selected projects move from [view] onto".to_string());
+    body.push("the filter sets, which is where a selection".to_string());
+    body.push("now lives.".to_string());
+    body.push(String::new());
+    body.push("tuisana will rewrite it in the version 3 format.".to_string());
+    // The file name is in the body rather than on the `y` line because the
+    // choice has to be made with the right name on screen, and a key column
+    // plus a sentence plus a path does not fit in a window this narrow.
+    body.push(format!("A backup would go to {backup}."));
+
     confirm::ConfirmView {
         title: "Config format changed".to_string(),
-        body: vec![
-            "tuisana.toml is in the version 1 format. Six".to_string(),
-            "command names and one mode name have been".to_string(),
-            "renamed, and uppercase letters are now distinct".to_string(),
-            "keys.".to_string(),
-            String::new(),
-            "tuisana will rewrite it in the version 2 format.".to_string(),
-            // The file name is in the body rather than on the `y` line
-            // because the choice has to be made with the right name on
-            // screen, and a key column plus a sentence plus a path does not
-            // fit in a window this narrow.
-            format!("A backup would go to {backup}."),
-        ],
+        body,
         choices: vec![
             ("y", "back it up first, then migrate".to_string()),
             ("n", "migrate without a backup".to_string()),
@@ -409,7 +525,7 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
         timeline_windowed: app.tasks.gantt().timeline_windowed(),
         many_filter_sets: app.tasks.filter_set_position().1 > 1,
         filter_sets_sidebar: app.tasks.filter_sets_sidebar_visible(),
-        saved_filter_sets: app.config.filter_sets.len(),
+        saved_filter_sets: app.config.named_filter_set_count(),
         filter_set_loaded: app.tasks.filter_set_loaded_name().is_some(),
         filter_set_confirm: app.tasks.filter_set_prompt_is_confirmation(),
         on_task_cell: app.tasks.cell_edit_open(),
@@ -437,10 +553,23 @@ fn render_project_pane<C: AsanaClient + Clone + Send + 'static>(
     theme: &Theme,
     mode: Mode,
     focused: bool,
+    orphaned_prompt: Option<&filter_sets::PromptLine>,
 ) -> usize {
-    let view = project_list::render_project_list(&app.projects);
+    let view =
+        project_list::render_project_list(&app.projects, app.tasks.filter_set_loaded_name());
     let mut block = chrome::pane_block(theme, focused, mode, &view.title, &view.counts);
-    if let Some(search) = &view.search {
+    // Ahead of the search footer, and displacing it: a prompt is being
+    // answered, where a search string is only being remembered.
+    if let Some(prompt) = orphaned_prompt {
+        block = block.title_bottom(
+            filter_sets::prompt_footer_line(
+                prompt,
+                theme,
+                area.width.saturating_sub(2) as usize,
+            )
+            .left_aligned(),
+        );
+    } else if let Some(search) = &view.search {
         block = block.title_bottom(project_list::search_footer_line(search, theme).left_aligned());
     }
     let inner = block.inner(area);
@@ -478,25 +607,11 @@ fn render_filter_pane<C: AsanaClient + Clone + Send + 'static>(
     theme: &Theme,
     mode: Mode,
     focused: bool,
+    orphaned_prompt: Option<&filter_sets::PromptLine>,
 ) -> usize {
     let Some(view) = filter_panel::render_filter_panel(&app.tasks) else {
         return 1;
     };
-
-    // The split is inside the filter pane rather than in `layout`: the
-    // sidebar belongs to the panel, not to the frame.
-    let (sidebar, area) =
-        filter_sets::split_sidebar(area, app.tasks.filter_sets_sidebar_visible());
-    if let Some(sidebar) = sidebar {
-        render_filter_sets_pane(frame, sidebar, app, theme, mode);
-    }
-    // The prompt normally rides the sidebar's border. When the sidebar has
-    // given way to the filter rows it borrows theirs, because a prompt with
-    // nowhere to be makes `w` a blind edit.
-    let orphaned_prompt = sidebar
-        .is_none()
-        .then(|| filter_sets::prompt_line(&app.tasks))
-        .flatten();
 
     // The tab strip rides the top border beside the title, so the sets cost no
     // interior line and the scroll offset stays a plain field index.
@@ -515,7 +630,7 @@ fn render_filter_pane<C: AsanaClient + Clone + Send + 'static>(
         tabs,
         &view.counts,
     );
-    if let Some(prompt) = &orphaned_prompt {
+    if let Some(prompt) = orphaned_prompt {
         block = block.title_bottom(
             filter_sets::prompt_footer_line(
                 prompt,
@@ -560,8 +675,11 @@ fn render_filter_sets_pane<C: AsanaClient + Clone + Send + 'static>(
     app.tasks
         .set_filter_sets_window(filter_sets::window_rows(area));
 
-    let Some(view) = filter_sets::render_filter_sets(&app.tasks, &app.config.filter_sets)
-    else {
+    let Some(view) = filter_sets::render_filter_sets(
+        &app.tasks,
+        &app.config.filter_sets,
+        app.projects.selected_count(),
+    ) else {
         return;
     };
 
@@ -725,15 +843,21 @@ fn list_state(selected: Option<usize>) -> ListState {
 /// This function is split out from `run_app` so integration tests can drive the
 /// session loop with a scripted `KeySource` and `TestBackend` without enabling
 /// crossterm raw mode.
-pub fn run_session<C, S, B>(
+///
+/// `host` is where `o` and `y` go. It is a required argument rather than a
+/// default so that a test cannot reach the real browser and clipboard by
+/// forgetting to say otherwise — see [`RecordingHost`].
+pub fn run_session<C, S, B, H>(
     app: &mut App<C>,
     source: &mut S,
     terminal: &mut Terminal<B>,
+    host: &mut H,
 ) -> io::Result<()>
 where
     C: AsanaClient + Clone + Send + 'static,
     S: KeySource,
     B: Backend,
+    H: HostEffects,
 {
     const TICK_RATE: Duration = Duration::from_millis(100);
 
@@ -759,13 +883,11 @@ where
                         page_size = draw(terminal, app, &keymap)?;
                     }
                     Ok(Some(crate::input::AppCommand::OpenUrl(url))) => {
-                        let _ = std::process::Command::new("open").arg(&url).spawn();
+                        host.open_url(&url);
                         page_size = draw(terminal, app, &keymap)?;
                     }
                     Ok(Some(crate::input::AppCommand::CopyToClipboard(text))) => {
-                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            let _ = clipboard.set_text(text);
-                        }
+                        host.set_clipboard(&text);
                         page_size = draw(terminal, app, &keymap)?;
                     }
                     Ok(None) => {
@@ -806,7 +928,7 @@ where
     S: KeySource,
 {
     crossterm::terminal::enable_raw_mode()?;
-    let result = run_session(app, source, terminal);
+    let result = run_session(app, source, terminal, &mut SystemHost);
     let _ = crossterm::terminal::disable_raw_mode();
     result
 }
@@ -818,7 +940,7 @@ mod tests {
 
     use crate::{asana::fake::FakeAsanaClient, config::Config, domain::Project};
 
-    use super::{run_session, InputEvent, KeySource};
+    use super::{run_session, InputEvent, KeySource, RecordingHost};
     use crate::app::App;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::time::Duration;
@@ -924,11 +1046,69 @@ mod tests {
 
         let mut app = App::new(Config::default(), client.clone());
         app.load_projects().expect("projects load");
+        // Selected, not just loaded: the filter view is unreachable with
+        // nothing selected, so a fixture that drives the filter panel has to
+        // have picked something first.
+        app.handle_action(&crate::input::Action::ToggleSelection, 10)
+            .expect("select the project");
         app.tasks
             .load_task_dataset_for_projects(&client, &projects)
             .expect("tasks load");
         app.tasks.set_visible(true);
         app
+    }
+
+    /// `o` and `enter` reach the browser through the host, so a test can
+    /// check what *would* have been opened without a window appearing on the
+    /// machine running the suite.
+    #[test]
+    fn opening_a_project_goes_through_the_host_rather_than_the_machine() {
+        let mut app = filtering_app();
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut host = RecordingHost::default();
+
+        // `p` puts the keys in the project list, where `enter` opens the row
+        // the cursor is on.
+        let mut source = ScriptedSource {
+            keys: vec![
+                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            ],
+        };
+        run_session(&mut app, &mut source, &mut terminal, &mut host)
+            .expect("session runs");
+
+        assert_eq!(host.opened_urls, vec!["https://app.asana.com/0/1".to_string()]);
+        assert!(host.clipboard_writes.is_empty());
+    }
+
+    /// The same seam, for the other command that reaches out of the process.
+    #[test]
+    fn copying_task_links_goes_through_the_host_rather_than_the_clipboard() {
+        let mut app = filtering_app();
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut host = RecordingHost::default();
+
+        // `t` moves to the table, `space` marks a row, `y` copies the links.
+        let mut source = ScriptedSource {
+            keys: vec![
+                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+            ],
+        };
+        run_session(&mut app, &mut source, &mut terminal, &mut host)
+            .expect("session runs");
+
+        assert_eq!(host.clipboard_writes.len(), 1, "{:?}", host.clipboard_writes);
+        assert!(
+            host.clipboard_writes[0].contains("app.asana.com"),
+            "{:?}",
+            host.clipboard_writes
+        );
+        assert!(host.opened_urls.is_empty());
     }
 
     #[test]
@@ -951,7 +1131,8 @@ mod tests {
                 .map(|ch| KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
         );
         let mut source = ScriptedSource { keys };
-        run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+        run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
 
         assert!(
             app.tasks.filtering_since().is_none(),
@@ -1112,13 +1293,23 @@ mod tests {
         let mut terminal = Terminal::new(backend).expect("terminal");
         // Draw at one size, then resize the backend under the app so the old
         // frame's geometry no longer matches.
-        run_session(&mut app, &mut ResizeThenClose { sent: true }, &mut terminal)
+        run_session(
+            &mut app,
+            &mut ResizeThenClose { sent: true },
+            &mut terminal,
+            &mut RecordingHost::default(),
+        )
             .expect("first session runs");
         terminal
             .backend_mut()
             .resize(60, 20);
 
-        run_session(&mut app, &mut ResizeThenClose { sent: false }, &mut terminal)
+        run_session(
+            &mut app,
+            &mut ResizeThenClose { sent: false },
+            &mut terminal,
+            &mut RecordingHost::default(),
+        )
             .expect("session runs");
 
         let lines = screen(&mut terminal);
@@ -1152,7 +1343,8 @@ mod tests {
         let backend = TestBackend::new(80, 12);
         let mut terminal = Terminal::new(backend).expect("terminal");
 
-        run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+        run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
 
         assert_eq!(app.projects.selected_index(), Some(1));
         let lines = screen(&mut terminal);
@@ -1169,7 +1361,8 @@ mod tests {
         let mut source = ScriptedSource { keys: Vec::new() };
         let backend = TestBackend::new(80, 12);
         let mut terminal = Terminal::new(backend).expect("terminal");
-        run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+        run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
 
         let lines = screen(&mut terminal);
         assert!(lines[0].contains("TUISANA"));
@@ -1186,13 +1379,15 @@ mod tests {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut source = ScriptedSource { keys: Vec::new() };
-        run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+        run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
         let before = screen(&mut terminal);
 
         let mut source = ScriptedSource {
             keys: vec![KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)],
         };
-        run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+        run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
         let with_help = screen(&mut terminal);
 
         assert!(app.projects.help_details_visible());

@@ -17,6 +17,12 @@ use crate::{
     util::fuzzy_match,
 };
 
+/// The token a `[[filter_set]]` uses for the assigned-to-me row.
+///
+/// Not the row's gid: that gid is whoever is logged in, and a shared config
+/// has to mean "my tasks" for each reader rather than for its author.
+pub const ASSIGNED_TO_ME_TOKEN: &str = "me";
+
 /// The search strategy used by the project list.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SearchMode {
@@ -394,7 +400,66 @@ impl ProjectListState {
     /// must not keep asking to be loaded. No history is pushed: `u` undoes
     /// what *you* did this session, and restoring the view is not that.
     pub fn restore_selection(&mut self, project_ids: &[String]) {
+        self.set_selection_from_ids(project_ids);
+    }
+
+    /// Replaces the selection with a named filter set's `projects` list.
+    ///
+    /// [`Self::restore_selection`] with the history pushed: a digit is a
+    /// keypress in the session, so `u` undoes it and `ctrl-y` puts it back
+    /// like every other selection change — which is what makes the selection
+    /// half of a load recoverable when the filter half is not.
+    pub fn apply_filter_set_selection(&mut self, project_ids: &[String]) {
+        self.push_selection_history();
+        self.set_selection_from_ids(project_ids);
+    }
+
+    /// The live selection in the shape a `[[filter_set]]` records it.
+    ///
+    /// `me` rather than the pinned row's gid, because that gid is the
+    /// *logged-in user's*: writing it raw would bake one person into a shared
+    /// file, and the entry loaded by anyone else would quietly select a
+    /// project that does not exist. The `Assignee` filter row resolves the
+    /// same token at match time for the same reason, and an Asana gid is
+    /// numeric so `me` cannot be mistaken for one.
+    ///
+    /// Written `me` first, matching where the row is pinned in the list, then
+    /// the gids sorted: a `HashSet` has no order, and without this the same
+    /// selection would rewrite the file differently run to run.
+    pub fn selection_for_filter_set(&self) -> Vec<String> {
+        let mut gids = Vec::new();
+        let mut assigned_to_me = false;
+        for project in &self.all_projects {
+            if !self.selected_ids.contains(&project.id) {
+                continue;
+            }
+            match project.kind {
+                ProjectKind::AssignedToMe => assigned_to_me = true,
+                ProjectKind::Normal => gids.push(project.id.clone()),
+            }
+        }
+        gids.sort();
+        if assigned_to_me {
+            gids.insert(0, ASSIGNED_TO_ME_TOKEN.to_string());
+        }
+        gids
+    }
+
+    /// The half [`Self::restore_selection`] and
+    /// [`Self::apply_filter_set_selection`] share.
+    ///
+    /// A gid the workspace no longer returns is dropped: the project list
+    /// holds the whole workspace, so an unrecognised gid is genuinely gone
+    /// rather than merely not loaded yet. The cursor stays on the project it
+    /// was on, through the same rebuild every other selection change uses.
+    fn set_selection_from_ids(&mut self, project_ids: &[String]) {
         let cursor_id = self.selected_project().map(|project| project.id.clone());
+        // Resolved up front because the `live` set borrows the same list.
+        let assigned_to_me_gid = self
+            .all_projects
+            .iter()
+            .find(|project| matches!(project.kind, ProjectKind::AssignedToMe))
+            .map(|project| project.id.clone());
         let live: HashSet<&str> = self
             .all_projects
             .iter()
@@ -402,8 +467,10 @@ impl ProjectListState {
             .collect();
         self.selected_ids = project_ids
             .iter()
-            .filter(|id| live.contains(id.as_str()))
-            .cloned()
+            .filter_map(|id| match id.as_str() {
+                ASSIGNED_TO_ME_TOKEN => assigned_to_me_gid.clone(),
+                gid => live.contains(gid).then(|| id.clone()),
+            })
             .collect();
         self.rebuild_visible_projects(cursor_id);
     }
@@ -1332,5 +1399,109 @@ mod tests {
             .project_visibility_config()
             .iter()
             .all(|project| project.gid != "user_1"));
+    }
+
+    /// The pinned row's gid is the logged-in user's, so a shared file has to
+    /// say `me` rather than bake one person into it.
+    #[test]
+    fn the_assigned_to_me_row_is_written_as_me_and_resolves_back() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1201", "Alpha", false),
+            Project::new("1202", "Beta", false),
+        ]);
+        state.set_assigned_to_me(Some(Project::assigned_to_me("user_1")));
+
+        state.apply_filter_set_selection(&[
+            "me".to_string(),
+            "1202".to_string(),
+            "1201".to_string(),
+        ]);
+
+        assert!(state.is_selected("user_1"), "`me` resolved to the pinned row");
+        assert!(state.is_selected("1201"));
+        assert!(state.is_selected("1202"));
+        // `me` first, matching where the row is pinned, then the gids sorted:
+        // without an order the same selection rewrites the file differently
+        // run to run.
+        assert_eq!(
+            state.selection_for_filter_set(),
+            vec!["me".to_string(), "1201".to_string(), "1202".to_string()],
+        );
+    }
+
+    /// The same selection read by a different user resolves to *their* row,
+    /// which is the whole point of the token.
+    #[test]
+    fn me_resolves_to_whoever_is_logged_in() {
+        let mut state =
+            ProjectListState::from_projects(vec![Project::new("1201", "Alpha", false)]);
+        state.set_assigned_to_me(Some(Project::assigned_to_me("user_2")));
+
+        state.apply_filter_set_selection(&["me".to_string()]);
+
+        assert!(state.is_selected("user_2"));
+        assert_eq!(state.selection_for_filter_set(), vec!["me".to_string()]);
+    }
+
+    /// The project list holds the whole workspace, so an unrecognised gid is
+    /// genuinely gone rather than merely not loaded yet.
+    #[test]
+    fn a_gid_the_workspace_no_longer_returns_is_skipped_on_load() {
+        let mut state =
+            ProjectListState::from_projects(vec![Project::new("1201", "Alpha", false)]);
+
+        state.apply_filter_set_selection(&["1201".to_string(), "9999".to_string()]);
+
+        assert_eq!(state.selected_count(), 1);
+        assert_eq!(state.selection_for_filter_set(), vec!["1201".to_string()]);
+    }
+
+    /// A digit is a keypress in the session, so `u` undoes it — which is what
+    /// makes the selection half of a load recoverable when the filter half is
+    /// not. Restoring the view at startup is deliberately not that.
+    #[test]
+    fn applying_a_set_pushes_the_history_where_restoring_the_view_does_not() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1201", "Alpha", false),
+            Project::new("1202", "Beta", false),
+        ]);
+
+        state.restore_selection(&["1201".to_string()]);
+        assert!(!state.can_undo_selection(), "the view is not an edit");
+
+        state.apply_filter_set_selection(&["1202".to_string()]);
+        assert!(state.can_undo_selection());
+
+        state.undo_selection();
+        assert_eq!(state.selection_for_filter_set(), vec!["1201".to_string()]);
+        state.redo_selection();
+        assert_eq!(state.selection_for_filter_set(), vec!["1202".to_string()]);
+    }
+
+    #[test]
+    fn applying_a_set_keeps_the_cursor_on_the_project_it_was_on() {
+        let mut state = ProjectListState::from_projects(vec![
+            Project::new("1201", "Alpha", false),
+            Project::new("1202", "Beta", false),
+            Project::new("1203", "Gamma", false),
+        ]);
+        state.move_down();
+        let before = state.selected_project().expect("a cursor").id.clone();
+
+        state.apply_filter_set_selection(&["1203".to_string()]);
+
+        assert_eq!(state.selected_project().expect("a cursor").id, before);
+    }
+
+    #[test]
+    fn an_empty_list_selects_nothing_rather_than_everything() {
+        let mut state =
+            ProjectListState::from_projects(vec![Project::new("1201", "Alpha", false)]);
+        state.toggle_current_selection();
+
+        state.apply_filter_set_selection(&[]);
+
+        assert_eq!(state.selected_count(), 0);
+        assert!(state.selection_for_filter_set().is_empty());
     }
 }

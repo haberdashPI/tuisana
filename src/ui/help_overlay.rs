@@ -108,7 +108,30 @@ fn project_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::SearchRegex], "regex"),
             ],
         ),
+        // The same seven keys the filter view offers, because a named set
+        // carries the selection these keys are standing in.
+        named_sets_group(),
     ]
+}
+
+/// The sets keys, shared by the two views the sidebar appears in.
+fn named_sets_group() -> HelpGroup {
+    HelpGroup::new(
+        "Named sets",
+        vec![
+            Hint::new(&[Action::FilterSetsToggle], "show the sidebar"),
+            Hint::literal("1-9", "load that entry"),
+            Hint::new(&[Action::FilterSetSave], "save under a name"),
+            Hint::new(&[Action::FilterSetCopyToNew], "copy to a new unnamed one"),
+            Hint::new(&[Action::FilterSetNew], "start from nothing"),
+            Hint::new(&[Action::FilterSetDelete], "delete the loaded one"),
+            Hint::new(
+                &[Action::FilterSetsPageBack, Action::FilterSetsPageForward],
+                "page the list",
+            ),
+            Hint::literal("loaded", "edits write through"),
+        ],
+    )
 }
 
 fn task_groups() -> Vec<HelpGroup> {
@@ -309,22 +332,7 @@ fn filter_groups() -> Vec<HelpGroup> {
                 Hint::literal("between sets", "results combine (OR)"),
             ],
         ),
-        HelpGroup::new(
-            "Named sets",
-            vec![
-                Hint::new(&[Action::FilterSetsToggle], "show the sidebar"),
-                Hint::literal("1-9", "load that entry"),
-                Hint::new(&[Action::FilterSetSave], "save under a name"),
-                Hint::new(&[Action::FilterSetCopyToNew], "copy to a new unnamed one"),
-                Hint::new(&[Action::FilterSetNew], "start from nothing"),
-                Hint::new(&[Action::FilterSetDelete], "delete the loaded one"),
-                Hint::new(
-                    &[Action::FilterSetsPageBack, Action::FilterSetsPageForward],
-                    "page the list",
-                ),
-                Hint::literal("loaded", "edits write through"),
-            ],
-        ),
+        named_sets_group(),
         HelpGroup::new(
             "Label values",
             vec![

@@ -170,7 +170,11 @@ impl Session {
         };
         // The assigned-to-me row sorts first, and the fake has no tasks
         // assigned; `j` moves onto Inbox, which is the project with fixtures.
+        // `space` selects it: the table is drawn from the selection and
+        // nothing else, so a project under the cursor is not in play until it
+        // has been picked.
         session.press(KeyCode::Char('j'), KeyModifiers::NONE);
+        session.press(KeyCode::Char(' '), KeyModifiers::NONE);
         session.press(KeyCode::Char('t'), KeyModifiers::NONE);
         session.wait_for_tasks();
         session
@@ -731,6 +735,7 @@ fn a_failed_write_is_rolled_back_and_the_notice_says_so() {
         client,
     };
     session.press(KeyCode::Char('j'), KeyModifiers::NONE);
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
     session.press(KeyCode::Char('t'), KeyModifiers::NONE);
     session.wait_for_tasks();
     session.show_open_and_done();

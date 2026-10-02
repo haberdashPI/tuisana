@@ -178,6 +178,34 @@ pub struct App<C> {
     /// [`App::load_projects`]. `refresh` goes through that same call and must
     /// not overwrite what the user has selected since.
     view_restored: bool,
+    /// The entry and project selection the projects half of the write-through
+    /// last agreed on.
+    ///
+    /// The name is `None` for the scratch entry, which is where an unnamed
+    /// panel's selection goes — so moving between a named set and no set at
+    /// all counts as the binding changing, and re-baselines like any other
+    /// load.
+    ///
+    /// The fields half has a dirty flag the filter editor sets; the project
+    /// list has none and should not grow one. This is the baseline instead:
+    /// the selection as it stood when the binding was established, so a
+    /// *change* to it is what writes, rather than any disagreement with the
+    /// file. That difference is what keeps §2.2's rule — a gid the workspace
+    /// no longer returns is dropped from the live selection on load, and
+    /// staying silent about it is what leaves it on disk until the selection
+    /// is deliberately edited.
+    ///
+    /// `None` when the panel is unbound, and reset whenever the name changes,
+    /// which is how a load, a save under a new name, and the startup restore
+    /// all re-baseline without each having to remember to.
+    bound_projects: Option<(Option<String>, Vec<String>)>,
+    /// The mode the sidebar prompt interrupted, so answering it goes back
+    /// there.
+    ///
+    /// The sets keys work in the project view as well as the filter view, and
+    /// a `y` at a confirmation must not swap the project list away under the
+    /// key that was pressed in it.
+    prompt_return_mode: Mode,
     /// The version-1 config this session has yet to be allowed to rewrite.
     ///
     /// `App` state rather than config state: it is a question on screen, and
@@ -252,6 +280,12 @@ fn bulk_edit_summary(writes: &[PendingEdit], column: Option<&str>) -> String {
 /// A version-1 config waiting for permission to be rewritten.
 #[derive(Clone, Debug)]
 struct PendingMigration {
+    /// The version the file on disk was written in.
+    ///
+    /// Two versions can need migrating now, and they do not need the same
+    /// changes — so the window has to say which ones are about to happen
+    /// rather than describe a fixed pair.
+    from_version: f64,
     /// The file `y` would copy the config to.
     ///
     /// Resolved up front so the window can name the file it will actually
@@ -460,6 +494,8 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             current_user_gid: None,
             people: None,
             view_restored: false,
+            bound_projects: None,
+            prompt_return_mode: Mode::Filter,
             pending_migration: None,
             pending_bulk_edit: None,
             write_pool: None,
@@ -470,6 +506,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         // user says what to do with it.
         if app.config.needs_migration() {
             app.pending_migration = Some(PendingMigration {
+                from_version: app.config.migrated_from_version(),
                 backup_path: backup_path_for(app.config.source_path()),
             });
         }
@@ -484,6 +521,13 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         self.pending_migration
             .as_ref()
             .map(|pending| pending.backup_path.as_path())
+    }
+
+    /// The version the config on disk is in, while the prompt is up.
+    pub fn pending_migration_from_version(&self) -> Option<f64> {
+        self.pending_migration
+            .as_ref()
+            .map(|pending| pending.from_version)
     }
 
     /// The migration prompt's three keys.
@@ -608,7 +652,21 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         // never keep.
         if !self.view_restored {
             self.view_restored = true;
-            self.projects.restore_selection(&self.config.view.projects);
+            self.projects.restore_selection(&self.restored_selection());
+            // The baseline is whatever the restore landed on: that is what
+            // the file already says, so nothing is written until the user
+            // moves it. Set here rather than left for the first settled burst
+            // because the first key of a session is often a selection change,
+            // and a baseline that was still unset would swallow it.
+            self.bound_projects = Some((
+                self.tasks.filter_set_loaded_name().map(str::to_string),
+                self.projects.selection_for_filter_set(),
+            ));
+            // After `view_restored`, so the gate can be judged at all: the
+            // panes were restored before Asana was spoken to, and a
+            // `filters = true` that turns out to have nothing selected has to
+            // give way now rather than opening onto an empty panel.
+            self.enforce_project_gate();
             // A restored selection with the task pane open is a request for
             // those tasks; nothing else would have asked for them until the
             // user pressed a key.
@@ -686,7 +744,50 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         self.mode = Mode::ProjectSearch;
     }
 
+    /// Whether the filter view is closed off because nothing is selected.
+    ///
+    /// A filter panel with no projects is a question with no subject: its
+    /// rows are built from the loaded projects' custom fields, so there is
+    /// not even a full set of fields to fill in. Since version 3 the
+    /// selection is part of the set, so the answer is to pick projects first
+    /// — which is what the project view is for.
+    ///
+    /// Gated on the selection having been resolved at all: before the first
+    /// [`Self::load_projects`] nothing is selected because nothing has been
+    /// loaded yet, and refusing then would stop `[view].filters` from ever
+    /// being restored.
+    fn project_gate_closed(&self) -> bool {
+        self.view_restored && self.projects.selected_count() == 0
+    }
+
+    /// Puts the keys back in the project view when the filter view has become
+    /// unreachable under them.
+    ///
+    /// `n` clears the selection and is pressed *in* the filter view, and a
+    /// load can bring an entry that names no projects, so the gate has to be
+    /// enforced after the fact as well as refused up front.
+    fn enforce_project_gate(&mut self) {
+        if !self.project_gate_closed() {
+            return;
+        }
+        if self.tasks.filter_panel_visible() {
+            self.tasks.toggle_filter_panel();
+        }
+        if matches!(
+            self.mode,
+            Mode::Filter | Mode::FilterEdit | Mode::Calendar | Mode::FilterSetName
+        ) {
+            self.mode = Mode::Project;
+        }
+    }
+
     fn set_filter_mode(&mut self) {
+        if self.project_gate_closed() {
+            self.tasks
+                .set_edit_notice("No projects selected.\nSelect projects, then press f.");
+            self.set_project_mode();
+            return;
+        }
         self.prepare_mode_switch();
         self.mode = Mode::Filter;
         self.tasks.set_visible(true);
@@ -1322,7 +1423,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         let Some(prompt) = self.tasks.filter_set_prompt().cloned() else {
             // The mode outlived its prompt, which nothing should do; leaving
             // it would swallow every key from here on.
-            self.set_filter_mode();
+            self.leave_sidebar_prompt();
             return Ok(false);
         };
 
@@ -1338,7 +1439,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 }
                 KeyCode::Esc => {
                     self.tasks.filter_set_prompt_cancel();
-                    self.set_filter_mode();
+                    self.leave_sidebar_prompt();
                     Ok(true)
                 }
                 KeyCode::Backspace => {
@@ -1372,17 +1473,38 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                     }
                     KeyCode::Char('n') | KeyCode::Char('N') if typed => {
                         self.tasks.filter_set_prompt_cancel();
-                        self.set_filter_mode();
+                        self.leave_sidebar_prompt();
                         Ok(true)
                     }
                     KeyCode::Esc => {
                         self.tasks.filter_set_prompt_cancel();
-                        self.set_filter_mode();
+                        self.leave_sidebar_prompt();
                         Ok(true)
                     }
                     _ => Ok(false),
                 }
             }
+        }
+    }
+
+    /// Opens the sidebar prompt, remembering the view it interrupted.
+    ///
+    /// The sets keys are the same keys in the filter view and the project
+    /// view, so where a prompt returns to cannot be a constant: `w` pressed
+    /// over the project list has to leave the project list on screen.
+    fn enter_sidebar_prompt(&mut self) {
+        self.prompt_return_mode = match self.mode {
+            Mode::Project | Mode::ProjectSearch => Mode::Project,
+            _ => Mode::Filter,
+        };
+        self.mode = Mode::FilterSetName;
+    }
+
+    /// Puts the keys back in the view the prompt interrupted.
+    fn leave_sidebar_prompt(&mut self) {
+        match self.prompt_return_mode {
+            Mode::Project => self.set_project_mode(),
+            _ => self.set_filter_mode(),
         }
     }
 
@@ -1443,13 +1565,18 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
 
         let entry = NamedFilterSet {
             name: name.clone(),
+            scratch: false,
+            // Always written, even as `[]`: an entry saved from here on is
+            // unambiguous about the selection, and only a hand-written or
+            // pre-existing one is silent.
+            projects: Some(self.projects.selection_for_filter_set()),
             sets: self.tasks.filter_sets_to_saved(),
         };
         match self
             .config
             .filter_sets
             .iter_mut()
-            .find(|existing| existing.name.eq_ignore_ascii_case(&name))
+            .find(|existing| !existing.scratch && existing.name.eq_ignore_ascii_case(&name))
         {
             Some(existing) => *existing = entry,
             None => self.config.filter_sets.push(entry),
@@ -1457,7 +1584,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
 
         self.tasks.filter_set_prompt_cancel();
         self.tasks.filter_set_bind(name);
-        self.set_filter_mode();
+        self.leave_sidebar_prompt();
         self.write_config_or_report();
     }
 
@@ -1466,13 +1593,13 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         if let Some(name) = self.tasks.filter_set_loaded_name().map(str::to_string) {
             self.config
                 .filter_sets
-                .retain(|entry| !entry.name.eq_ignore_ascii_case(&name));
+                .retain(|entry| entry.scratch || !entry.name.eq_ignore_ascii_case(&name));
         }
 
         self.tasks.filter_set_prompt_cancel();
         self.tasks.filter_set_detach();
         self.clamp_filter_sets_page();
-        self.set_filter_mode();
+        self.leave_sidebar_prompt();
         self.write_config_or_report();
     }
 
@@ -1503,28 +1630,56 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             .config
             .filter_sets
             .iter()
-            .find(|entry| entry.name == name)
+            .find(|entry| !entry.scratch && entry.name == name)
             .cloned()
         else {
             return;
         };
 
         self.tasks.filter_sets_load(&entry.name, &entry.sets);
+        // Always, and with no "leave it alone" case: the selection is part of
+        // what the entry *is*, so an entry that names no projects — a set
+        // migrated from an older file, or one hand-written without the key —
+        // loads to nothing selected and parks you in the project view.
+        self.projects.apply_filter_set_selection(entry.projects());
+    }
+
+    /// The selection the session starts from.
+    ///
+    /// One place, two slots: the entry `[view].filter_set` names, or — when
+    /// it names none — the scratch entry an unnamed panel left behind. There
+    /// is no third answer, because there is nowhere else a selection is
+    /// recorded.
+    ///
+    /// A bound name that matches no entry restores nothing rather than
+    /// falling back to the scratch slot: that selection belongs to a
+    /// different panel, and inheriting it would silently ask a saved
+    /// question of projects the saved question never named.
+    fn restored_selection(&self) -> Vec<String> {
+        match self.config.view.filter_set.as_deref() {
+            Some(name) => self
+                .config
+                .named_filter_set(name)
+                .map(|entry| entry.projects().to_vec())
+                .unwrap_or_default(),
+            None => self.config.scratch_projects().to_vec(),
+        }
     }
 
     /// Commits the `y` at a load confirmation: the unnamed panel goes.
     fn commit_filter_set_load(&mut self, name: &str) {
         self.tasks.filter_set_prompt_cancel();
-        self.set_filter_mode();
+        self.leave_sidebar_prompt();
 
         let task_targets_before = self.task_targets_before();
         self.load_named_filter_set(name);
+        self.enforce_project_gate();
         self.update_task_data_after_action(task_targets_before);
     }
 
     /// Keeps the numbered window pointing at entries that still exist.
     fn clamp_filter_sets_page(&mut self) {
-        let total = self.config.filter_sets.len();
+        let total = self.config.named_filter_set_count();
         self.tasks.filter_sets_page(0, total);
     }
 
@@ -1570,45 +1725,79 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     /// and the view — a digit that loads a set is both — costs one write
     /// rather than two.
     fn stage_named_filter_set(&mut self) -> bool {
-        if !self.tasks.filter_set_dirty() {
-            return false;
-        }
+        let fields_dirty = self.tasks.filter_set_dirty();
         // Cleared whether or not anything is written, so a config that cannot
         // be written reports once rather than once per keystroke.
         self.tasks.clear_filter_set_dirty();
 
-        let Some(name) = self.tasks.filter_set_loaded_name().map(str::to_string) else {
-            return false;
+        let name = self.tasks.filter_set_loaded_name().map(str::to_string);
+
+        // The projects half runs independently of the dirty flag: the project
+        // list has no such flag, and the comparison against the baseline is
+        // cheap — two short sorted `Vec<String>`s — and is already the safety
+        // net that makes the over-eager flag on the fields half safe.
+        let selection = self.projects.selection_for_filter_set();
+        let selection_moved = match &self.bound_projects {
+            Some((bound, baseline)) if bound.as_deref().map(str::to_lowercase)
+                == name.as_deref().map(str::to_lowercase) =>
+            {
+                *baseline != selection
+            }
+            // A binding that has just changed has not been edited through:
+            // whatever the load landed on becomes the baseline, and nothing
+            // is written until the user moves it.
+            _ => false,
         };
+        self.bound_projects = Some((name.clone(), selection.clone()));
+
+        if !fields_dirty && !selection_moved {
+            return false;
+        }
+
+        // An unnamed panel has a selection too, and since version 3 the only
+        // place one can live is a `[[filter_set]]` — so it goes to the
+        // scratch entry. Its fields deliberately do not: the panel is still
+        // unnamed, they still exist nowhere but on screen, and the discard
+        // confirmation still means what it says.
+        let Some(name) = name else {
+            if !selection_moved || self.config.scratch_projects() == selection.as_slice() {
+                return false;
+            }
+            self.config.set_scratch_projects(selection);
+            return true;
+        };
+
         let sets = self.tasks.filter_sets_to_saved();
         let Some(entry) = self
             .config
             .filter_sets
             .iter_mut()
-            .find(|entry| entry.name.eq_ignore_ascii_case(&name))
+            .find(|entry| !entry.scratch && entry.name.eq_ignore_ascii_case(&name))
         else {
             return false;
         };
-        if entry.sets == sets {
-            return false;
+
+        let mut changed = false;
+        if fields_dirty && entry.sets != sets {
+            entry.sets = sets;
+            changed = true;
+        }
+        // An entry migrated from an older file gains the key the first time
+        // the selection moves while it is loaded.
+        if selection_moved && entry.projects.as_deref() != Some(selection.as_slice()) {
+            entry.projects = Some(selection);
+            changed = true;
         }
 
-        entry.sets = sets;
-        true
+        changed
     }
 
-    /// The panes and the selection as they stand, in the shape `[view]` keeps.
+    /// The panes as they stand, in the shape `[view]` keeps.
+    ///
+    /// No selection: since version 3 that lives on a `[[filter_set]]`, and
+    /// `legacy_projects` is read-only wreckage of the version the key was
+    /// written in.
     fn current_view_config(&self) -> ViewConfig {
-        let mut projects = self
-            .projects
-            .selected_projects()
-            .into_iter()
-            .map(|project| project.id)
-            .collect::<Vec<_>>();
-        // A `HashSet` has no order of its own, so without this the same
-        // selection would rewrite the file differently run to run.
-        projects.sort();
-
         ViewConfig {
             filter_set: self.tasks.filter_set_loaded_name().map(str::to_string),
             top_pane: if self.panel_size.is_minimized() {
@@ -1622,7 +1811,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             filters: self.tasks.filter_panel_visible(),
             filter_sidebar: self.tasks.filter_sets_sidebar_visible(),
             recent: self.tasks.recent_pane_enabled(),
-            projects,
+            legacy_projects: Vec::new(),
         }
     }
 
@@ -1821,11 +2010,13 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 return Ok(None);
             }
             Action::FilterSetsPageBack => {
-                self.tasks.filter_sets_page(-1, self.config.filter_sets.len());
+                self.tasks
+                    .filter_sets_page(-1, self.config.named_filter_set_count());
                 return Ok(None);
             }
             Action::FilterSetsPageForward => {
-                self.tasks.filter_sets_page(1, self.config.filter_sets.len());
+                self.tasks
+                    .filter_sets_page(1, self.config.named_filter_set_count());
                 return Ok(None);
             }
             Action::FilterSetLoad(position) => {
@@ -1837,11 +2028,14 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 // else, and the digit did not ask for it to be thrown away.
                 if self.tasks.filter_set_is_unsaved() {
                     self.tasks.filter_set_prompt_confirm_load(&entry.name);
-                    self.mode = Mode::FilterSetName;
+                    self.enter_sidebar_prompt();
                     return Ok(None);
                 }
 
                 self.load_named_filter_set(&entry.name);
+                // An entry that names no projects — one migrated from an
+                // older file — leaves nothing selected.
+                self.enforce_project_gate();
                 // Deliberately not an early return past the fetch decision:
                 // loading an entry can widen the due window pushed down to
                 // Asana, and `TaskQuery::covers` records a fetched window as
@@ -1852,12 +2046,12 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             }
             Action::FilterSetSave => {
                 self.tasks.filter_set_prompt_save();
-                self.mode = Mode::FilterSetName;
+                self.enter_sidebar_prompt();
                 return Ok(None);
             }
             Action::FilterSetDelete => {
                 if self.tasks.filter_set_prompt_delete() {
-                    self.mode = Mode::FilterSetName;
+                    self.enter_sidebar_prompt();
                 }
                 return Ok(None);
             }
@@ -1870,6 +2064,16 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 // write-through does not run until after this key.
                 self.sync_named_filter_set();
                 self.tasks.filter_set_new();
+                // The projects are part of what there is to start from now,
+                // so leaving them behind would make `n` a half-measure. The
+                // cost — an empty table, and a reselection before anything
+                // loads — is what `u` is for: this pushes the selection
+                // history for the same reason a load does.
+                self.projects.clear_selection();
+                // `n` is pressed in the filter view as often as in the
+                // project view, and it has just made the filter view
+                // unreachable.
+                self.enforce_project_gate();
                 // Clearing a due filter widens the window pushed down to
                 // Asana, for the same reason loading an entry can, so this
                 // takes the same route past the fetch decision.
@@ -2738,18 +2942,18 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         Ok(())
     }
 
+    /// The projects the task data is asked of: the selection, and only the
+    /// selection.
+    ///
+    /// The cursor row used to stand in for an empty selection. That was the
+    /// last implicit project list in the app, and it has to go with the
+    /// global one: "nothing selected" now means nothing is in play, which is
+    /// what makes the empty project state a real state and the filter view's
+    /// gate honest. A table drawn from whatever the cursor happened to be
+    /// resting on is also the behaviour that made the selection feel
+    /// optional, when it is the first clause of every question tuisana asks.
     fn task_target_projects(&self) -> Vec<crate::domain::Project> {
-        let selected_projects = self.projects.selected_projects();
-
-        if !selected_projects.is_empty() {
-            return selected_projects;
-        }
-
-        self.projects
-            .selected_project()
-            .cloned()
-            .into_iter()
-            .collect()
+        self.projects.selected_projects()
     }
 
     fn task_target_project_ids(&self) -> Vec<String> {
@@ -3220,16 +3424,28 @@ mod tests {
         config_on_disk_with("")
     }
 
-    /// A config file holding the header and whatever the test adds to it.
-    fn config_on_disk_with(body: &str) -> (Config, std::path::PathBuf) {
-        let unique = std::time::SystemTime::now()
+    /// A path no other test in this process will pick.
+    ///
+    /// The clock alone is not enough: tests run in parallel, and two that ask
+    /// within the same tick would share a config file and fail each other
+    /// intermittently.
+    fn unique_temp_path(prefix: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("tuisana-gantt-{unique}.toml"));
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("tuisana-{prefix}-{nanos}-{seq}.toml"))
+    }
+
+    /// A config file holding the header and whatever the test adds to it.
+    fn config_on_disk_with(body: &str) -> (Config, std::path::PathBuf) {
+        let path = unique_temp_path("config");
         std::fs::write(
             &path,
-            format!("[header]\ntype = \"tuisana\"\nversion = 2.0\n{body}"),
+            format!("[header]\ntype = \"tuisana\"\nversion = 3.0\n{body}"),
         )
         .expect("write config");
         (Config::load_from_path(&path).expect("config loads"), path)
@@ -3250,9 +3466,39 @@ mod tests {
         (app, path)
     }
 
+    /// The entries a user saved, in file order — every entry but the app's
+    /// own scratch slot, which holds an unnamed panel's selection and is not
+    /// one of them.
+    fn named_entries(config: &Config) -> Vec<crate::config::NamedFilterSet> {
+        config
+            .filter_sets
+            .iter()
+            .filter(|entry| !entry.scratch)
+            .cloned()
+            .collect()
+    }
+
     fn reread(path: &std::path::Path) -> Config {
         Config::from_toml_str(&std::fs::read_to_string(path).expect("config exists"))
             .expect("the written config reparses")
+    }
+
+    /// `n`, and then back into a filter panel.
+    ///
+    /// `n` starts from nothing, which since version 3 includes the projects —
+    /// so it leaves the keys in the project view with nothing selected, and
+    /// getting back to a filter panel means picking a project first. That is
+    /// the flow the gate exists to force, so the tests go through it.
+    fn fresh_panel(app: &mut App<FakeAsanaClient>) {
+        press(app, KeyCode::Char('n'));
+        assert_eq!(
+            app.mode(),
+            Mode::Project,
+            "`n` clears the selection, which closes the filter view"
+        );
+        press(app, KeyCode::Char(' '));
+        press(app, KeyCode::Char('f'));
+        assert_eq!(app.mode(), Mode::Filter, "and a selection reopens it");
     }
 
     /// `w`, a name, `enter`, clearing whatever the prompt was pre-filled with.
@@ -3311,10 +3557,11 @@ mod tests {
         assert_eq!(app.mode(), Mode::Filter, "the prompt closed");
         assert_eq!(app.tasks.filter_set_loaded_name(), Some("mine"));
         let written = reread(&path);
-        assert_eq!(written.filter_sets.len(), 1);
-        assert_eq!(written.filter_sets[0].name, "mine");
-        assert_eq!(written.filter_sets[0].sets[0].fields[0].key, "assignee");
-        assert_eq!(written.filter_sets[0].sets[0].fields[0].query, "alex");
+        let saved = named_entries(&written);
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].name, "mine");
+        assert_eq!(saved[0].sets[0].fields[0].key, "assignee");
+        assert_eq!(saved[0].sets[0].fields[0].query, "alex");
 
         let _ = std::fs::remove_file(&path);
     }
@@ -3333,13 +3580,14 @@ mod tests {
         press(&mut app, KeyCode::Enter);
 
         let written = reread(&path);
-        assert_eq!(written.filter_sets.len(), 1, "one entry, not two");
-        assert_eq!(written.filter_sets[0].sets[0].fields.len(), 2);
+        let saved = named_entries(&written);
+        assert_eq!(saved.len(), 1, "one entry, not two");
+        assert_eq!(saved[0].sets[0].fields.len(), 2);
 
         // A name that differs only in case is the same entry, because the
         // sidebar could not tell the two rows apart.
         save_as(&mut app, "MINE");
-        assert_eq!(reread(&path).filter_sets.len(), 1);
+        assert_eq!(named_entries(&reread(&path)).len(), 1);
         assert_eq!(app.tasks.filter_set_loaded_name(), Some("MINE"));
 
         let _ = std::fs::remove_file(&path);
@@ -3355,7 +3603,7 @@ mod tests {
 
         assert_eq!(app.mode(), Mode::FilterSetName, "still typing");
         assert!(app.tasks.filter_set_prompt_text().is_some());
-        assert!(app.config.filter_sets.is_empty());
+        assert!(named_entries(&app.config).is_empty());
         assert!(
             app.tasks
                 .filter_sets_notice()
@@ -3396,7 +3644,7 @@ mod tests {
         app.tasks.set_input_pending(false);
         press(&mut app, KeyCode::Char('x'));
         assert_eq!(
-            reread(&path).filter_sets[0].sets[0].fields[0].query,
+            named_entries(&reread(&path))[0].sets[0].fields[0].query,
             "alexx"
         );
 
@@ -3473,20 +3721,23 @@ mod tests {
         save_as(&mut app, "mine");
         let before = reread(&path);
 
-        press(&mut app, KeyCode::Char('n'));
+        fresh_panel(&mut app);
 
         assert_eq!(app.tasks.filter_set_loaded_name(), None);
         assert_eq!(app.tasks.active_filter_count(), 0, "nothing is set");
         assert_eq!(app.tasks.filter_set_position(), (0, 1), "one empty tab");
+        // The named entries, not every entry: the reselection `fresh_panel`
+        // makes is an unnamed panel's selection, and that now has somewhere
+        // on disk to be.
         assert_eq!(
-            reread(&path).filter_sets,
-            before.filter_sets,
+            named_entries(&reread(&path)),
+            named_entries(&before),
             "the entry keeps what was last written to it"
         );
 
         // And the now-unbound panel writes nothing on a later edit.
         type_into_field(&mut app, "Title", "ship");
-        assert_eq!(reread(&path).filter_sets, before.filter_sets);
+        assert_eq!(named_entries(&reread(&path)), named_entries(&before));
 
         let _ = std::fs::remove_file(&path);
     }
@@ -3511,15 +3762,31 @@ mod tests {
         app.poll_task_data();
         assert!(app.task_data_receiver.is_none());
 
-        press(&mut app, KeyCode::Char('n'));
-
+        // `n` also clears the selection, so there is nothing to fetch until
+        // something is selected again — which is the moment the widened
+        // window has to go to Asana rather than be served from the cache.
+        fresh_panel(&mut app);
         assert_eq!(app.tasks.desired_task_query().due_after, None);
+
+        // Asserted on the rows rather than on the receiver: what matters is
+        // that the task the narrow window never fetched is on screen, and
+        // only a real refetch can put it there.
+        settle(&mut app);
+        app.poll_task_data();
+        app.tasks.settle_table();
+        let titles = app
+            .tasks
+            .table()
+            .rows
+            .iter()
+            .filter(|row| row.kind == crate::domain::TaskRowKind::Task)
+            .map(|row| row.cells[0].clone())
+            .collect::<Vec<_>>();
         assert!(
-            app.task_data_receiver.is_some(),
-            "the dropped filter has to be refetched, not filtered from cache"
+            titles.contains(&"Pack it".to_string()),
+            "the August task the July window hid has to come back: {titles:?}"
         );
 
-        settle(&mut app);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -3533,14 +3800,14 @@ mod tests {
         assert_eq!(app.mode(), Mode::FilterSetName, "it asks first");
         press(&mut app, KeyCode::Char('n'));
         assert_eq!(app.mode(), Mode::Filter);
-        assert_eq!(reread(&path).filter_sets.len(), 1, "`n` keeps it");
+        assert_eq!(named_entries(&reread(&path)).len(), 1, "`n` keeps it");
         assert_eq!(app.tasks.filter_set_loaded_name(), Some("mine"));
 
         press(&mut app, KeyCode::Char('d'));
         press(&mut app, KeyCode::Char('y'));
 
         assert_eq!(app.mode(), Mode::Filter);
-        assert!(reread(&path).filter_sets.is_empty());
+        assert!(named_entries(&reread(&path)).is_empty());
         assert_eq!(app.tasks.filter_set_loaded_name(), None);
         assert_eq!(
             app.tasks.filter_panel_rows()[1].1,
@@ -3562,7 +3829,7 @@ mod tests {
         press(&mut app, KeyCode::Char('d'));
 
         assert_eq!(app.mode(), Mode::Filter, "no prompt opened");
-        assert_eq!(reread(&path).filter_sets.len(), 1);
+        assert_eq!(named_entries(&reread(&path)).len(), 1);
 
         let _ = std::fs::remove_file(&path);
     }
@@ -3574,10 +3841,10 @@ mod tests {
         save_as(&mut app, "bravo");
         // `n` between them, so the second entry starts from nothing rather
         // than inheriting the first one's Assignee.
-        press(&mut app, KeyCode::Char('n'));
+        fresh_panel(&mut app);
         type_into_field(&mut app, "Title", "ship");
         save_as(&mut app, "alpha");
-        press(&mut app, KeyCode::Char('n'));
+        fresh_panel(&mut app);
 
         // Sorted by name, so `1` is alpha and `2` is bravo whatever order
         // they were written in. An empty unnamed panel has nothing to lose,
@@ -3607,7 +3874,7 @@ mod tests {
         save_as(&mut app, "saved");
         // An unnamed panel with a filter in it: work that exists nowhere but
         // on screen, and the digit did not ask for it to be thrown away.
-        press(&mut app, KeyCode::Char('n'));
+        fresh_panel(&mut app);
         type_into_field(&mut app, "Title", "unsaved work");
 
         press(&mut app, KeyCode::Char('1'));
@@ -3651,7 +3918,7 @@ mod tests {
         assert_eq!(app.tasks.filter_set_loaded_name(), Some("saved"));
 
         // Unnamed but empty: nothing worth a keypress to confirm.
-        press(&mut app, KeyCode::Char('n'));
+        fresh_panel(&mut app);
         assert!(!app.tasks.filter_set_is_unsaved());
         press(&mut app, KeyCode::Char('1'));
         assert_eq!(app.mode(), Mode::Filter, "nor for an empty one");
@@ -3679,7 +3946,7 @@ mod tests {
         // already thrown the panel away — so the load has to flush first.
         let (mut app, path) = filter_sets_app();
         save_as(&mut app, "alpha");
-        press(&mut app, KeyCode::Char('n'));
+        fresh_panel(&mut app);
         save_as(&mut app, "bravo");
 
         move_to_field(&mut app, "Assignee");
@@ -3692,7 +3959,12 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.mode(), Mode::Filter);
         assert!(
-            reread(&path).filter_sets[1].sets[0].fields.is_empty(),
+            reread(&path)
+                .named_filter_set("bravo")
+                .expect("bravo is on disk")
+                .sets[0]
+                .fields
+                .is_empty(),
             "still unwritten, mid-burst"
         );
 
@@ -3749,7 +4021,7 @@ mod tests {
         save_as(&mut app, "everything");
         // Unbound first, or the due window below would write straight through
         // into the entry this test needs to stay wide.
-        press(&mut app, KeyCode::Char('n'));
+        fresh_panel(&mut app);
 
         // A narrow due window, picked on the calendar the way a user would.
         move_to_field(&mut app, "Due");
@@ -3830,11 +4102,7 @@ mod tests {
 
     /// An app over a version-1 config file, which is what raises the prompt.
     fn migrating_app(body: &str) -> (App<FakeAsanaClient>, std::path::PathBuf) {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("tuisana-migrate-{unique}.toml"));
+        let path = unique_temp_path("migrate");
         std::fs::write(&path, format!("# a hand-written comment\n[header]\ntype = \"tuisana\"\nversion = 1.0\n{body}"))
             .expect("write config");
         let config = Config::load_from_path(&path).expect("config loads");
@@ -3897,7 +4165,7 @@ mod tests {
             "a copy, not a re-serialization: the comments survive"
         );
         let migrated = std::fs::read_to_string(&path).expect("read back");
-        assert!(migrated.contains("version = 2.0"), "{migrated}");
+        assert!(migrated.contains("version = 3.0"), "{migrated}");
         assert!(app.pending_migration_backup().is_none(), "the prompt is answered");
 
         std::fs::remove_file(&path).ok();
@@ -3917,7 +4185,7 @@ mod tests {
         assert!(!backup.exists(), "no backup was asked for");
         assert!(std::fs::read_to_string(&path)
             .expect("read back")
-            .contains("version = 2.0"));
+            .contains("version = 3.0"));
 
         std::fs::remove_file(&path).ok();
     }
@@ -3977,6 +4245,23 @@ mod tests {
         (app, path)
     }
 
+    /// The `[[filter_set]]` an unnamed panel's selection lives in from
+    /// version 3 on, as config text a fixture can append.
+    fn scratch_body(projects: &[&str]) -> String {
+        let list = projects
+            .iter()
+            .map(|gid| format!("\"{gid}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("\n[[filter_set]]\nname = \"unnamed\"\nscratch = true\nprojects = [{list}]\n")
+    }
+
+    /// An app whose scratch entry holds `projects`, which is what an unnamed
+    /// panel's selection looks like on disk from version 3 on.
+    fn scratch_app(projects: &[&str]) -> (App<FakeAsanaClient>, std::path::PathBuf) {
+        view_app(&scratch_body(projects))
+    }
+
     /// The gids the app would restore, in the order it writes them.
     fn selected_gids(app: &App<FakeAsanaClient>) -> Vec<String> {
         let mut gids = app
@@ -4002,6 +4287,9 @@ mod tests {
         press(&mut app, KeyCode::Char('t'));
         assert!(reread(&path).view.tasks, "the task pane is open");
 
+        // The filter view needs a selection to be asked of.
+        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Char(' '));
         press(&mut app, KeyCode::Char('f'));
         let view = reread(&path).view;
         assert!(view.filters, "and the filter panel is up top");
@@ -4012,7 +4300,12 @@ mod tests {
 
     #[test]
     fn a_saved_view_reopens_the_same_panes() {
-        let (app, path) = view_app("\n[view]\ntasks = true\nfilters = true\n");
+        // With a selection: the filter view is unreachable without one, so a
+        // restored `filters = true` has to have something to be asked of.
+        let (app, path) = view_app(&format!(
+            "\n[view]\ntasks = true\nfilters = true\n{}",
+            scratch_body(&["1"])
+        ));
 
         assert_eq!(app.mode(), Mode::Filter);
         assert!(app.tasks.visible());
@@ -4070,9 +4363,11 @@ mod tests {
         press(&mut app, KeyCode::Char(' ')); // select Inbox, cursor moves on
         press(&mut app, KeyCode::Char(' ')); // select Website
         assert_eq!(selected_gids(&app), ["1", "2"]);
-        assert_eq!(reread(&path).view.projects, ["1", "2"]);
+        // Into the scratch entry, because the panel is unnamed: since
+        // version 3 a selection has nowhere else to go.
+        assert_eq!(reread(&path).scratch_projects(), ["1", "2"]);
 
-        let (restored, other) = view_app("\n[view]\nprojects = [\"2\", \"1\"]\n");
+        let (restored, other) = scratch_app(&["2", "1"]);
         assert_eq!(selected_gids(&restored), ["1", "2"]);
 
         let _ = std::fs::remove_file(&path);
@@ -4083,7 +4378,7 @@ mod tests {
     fn a_project_the_workspace_no_longer_returns_is_dropped_from_the_selection() {
         // Same rule a reload already applies to the live selection: a project
         // someone left must not keep asking to be loaded.
-        let (app, path) = view_app("\n[view]\nprojects = [\"1\", \"gone\"]\n");
+        let (app, path) = scratch_app(&["1", "gone"]);
 
         assert_eq!(selected_gids(&app), ["1"]);
 
@@ -4092,7 +4387,7 @@ mod tests {
 
     #[test]
     fn a_refresh_keeps_the_live_selection_rather_than_restoring_the_saved_one() {
-        let (mut app, path) = view_app("\n[view]\nprojects = [\"1\"]\n");
+        let (mut app, path) = scratch_app(&["1"]);
         assert_eq!(selected_gids(&app), ["1"]);
 
         app.projects.clear_selection();
@@ -4134,8 +4429,8 @@ mod tests {
         // its own, and the filter — parked while there were no rows to put it
         // on — lands when the data does.
         let (config, path) = config_on_disk_with(
-            "\n[view]\ntasks = true\nprojects = [\"1\"]\nfilter_set = \"shipping\"\n\n\
-             [[filter_set]]\nname = \"shipping\"\n\n\
+            "\n[view]\ntasks = true\nfilter_set = \"shipping\"\n\n\
+             [[filter_set]]\nname = \"shipping\"\nprojects = [\"1\"]\n\n\
              [[filter_set.set]]\n\n\
              [[filter_set.set.field]]\nkey = \"title\"\nquery = \"ship\"\n",
         );
@@ -4198,6 +4493,535 @@ mod tests {
         let restored = App::new(written, FakeAsanaClient::new(Vec::new()));
         assert!(restored.tasks.filter_sets_sidebar_visible());
         assert!(!restored.tasks.recent_pane_enabled());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ---- A filter set carries its projects ---------------------------------
+
+    /// The config body a `[[filter_set]]` test starts from: one entry, with
+    /// whatever `projects` the test is about.
+    fn projects_entry(projects: &str) -> String {
+        format!("\n[[filter_set]]\nname = \"web\"\n{projects}\n")
+    }
+
+    #[test]
+    fn a_digit_in_the_project_view_replaces_the_selection_and_stays_there() {
+        let (mut app, path) = view_app(&projects_entry("projects = [\"2\"]"));
+        assert_eq!(app.mode(), Mode::Project);
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(selected_gids(&app), vec!["1".to_string()]);
+
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('1'));
+
+        assert_eq!(
+            app.mode(),
+            Mode::Project,
+            "the key was pressed in the project view and the keys stay there"
+        );
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("web"));
+        assert_eq!(selected_gids(&app), vec!["2".to_string()]);
+
+        // A digit is a keypress in the session, so the selection half of the
+        // load is recoverable even though the filter half is not.
+        press(&mut app, KeyCode::Char('u'));
+        assert_eq!(selected_gids(&app), vec!["1".to_string()]);
+        press_with(&mut app, KeyCode::Char('y'), KeyModifiers::CONTROL);
+        assert_eq!(selected_gids(&app), vec!["2".to_string()]);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// An entry with no `projects` key is one migrated from an older file.
+    /// There is no global selection left for it to inherit, so it loads to
+    /// nothing selected — which is the state that forces a choice.
+    #[test]
+    fn an_entry_with_no_projects_key_loads_to_nothing_selected() {
+        let (mut app, path) = view_app(&projects_entry(""));
+        press(&mut app, KeyCode::Char(' '));
+
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('1'));
+
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("web"));
+        assert!(selected_gids(&app).is_empty());
+        assert_eq!(app.mode(), Mode::Project, "and the keys are where the fix is");
+
+        // Recoverable, like every other selection change a keypress makes.
+        press(&mut app, KeyCode::Char('u'));
+        assert_eq!(selected_gids(&app), vec!["1".to_string()]);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The gate, from the other side: `f` says why rather than opening a
+    /// panel with no projects behind it.
+    #[test]
+    fn f_is_refused_while_nothing_is_selected_and_says_why() {
+        let (mut app, path) = view_app("");
+
+        press(&mut app, KeyCode::Char('f'));
+
+        assert_eq!(app.mode(), Mode::Project);
+        assert!(!app.tasks.filter_panel_visible());
+        let notice = app.tasks.edit_notice().expect("it says why");
+        assert!(notice.contains("No projects selected"), "{notice}");
+
+        // And a selection is all it was waiting for.
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Char('f'));
+        assert_eq!(app.mode(), Mode::Filter);
+        assert!(app.tasks.filter_panel_visible());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_empty_projects_list_loads_to_nothing_selected() {
+        // Absent is "no opinion"; `[]` is an opinion that selects nothing.
+        let (mut app, path) = view_app(&projects_entry("projects = []"));
+        press(&mut app, KeyCode::Char(' '));
+
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('1'));
+
+        assert!(selected_gids(&app).is_empty());
+        assert!(app.projects.can_undo_selection());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_selection_change_while_bound_rewrites_the_entry() {
+        let (mut app, path) = view_app(&projects_entry("projects = [\"2\"]"));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('1'));
+        assert_eq!(
+            reread(&path).filter_sets[0].projects.as_deref(),
+            Some(["2".to_string()].as_slice()),
+            "loading alone writes nothing"
+        );
+
+        // `space` on a project while `web` is loaded edits `web`, the same
+        // way typing into a filter field does.
+        press(&mut app, KeyCode::Char(' '));
+
+        assert_eq!(
+            reread(&path).filter_sets[0].projects.as_deref(),
+            Some(["1".to_string(), "2".to_string()].as_slice()),
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The intended upgrade path: the key appears when you first express an
+    /// opinion through it.
+    #[test]
+    fn an_entry_with_no_projects_key_gains_one_when_the_selection_moves() {
+        let (mut app, path) = view_app(&projects_entry(""));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('1'));
+        assert_eq!(reread(&path).filter_sets[0].projects, None);
+
+        press(&mut app, KeyCode::Char(' '));
+
+        assert_eq!(
+            reread(&path).filter_sets[0].projects.as_deref(),
+            Some(["1".to_string()].as_slice()),
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Applying a set is not consent to rewrite it: a project you lost access
+    /// to for a week should not cost you the entry.
+    #[test]
+    fn a_gid_the_workspace_no_longer_returns_stays_on_disk_until_the_selection_moves() {
+        let (mut app, path) = view_app(&format!(
+            "\n[view]\nfilter_set = \"web\"\n{}",
+            projects_entry("projects = [\"2\", \"9999\"]")
+        ));
+        assert_eq!(selected_gids(&app), vec!["2".to_string()], "9999 is skipped");
+
+        // Any number of keys that are not selection changes: the entry is
+        // bound, and staying silent is what leaves the gid alone.
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(
+            reread(&path).filter_sets[0].projects.as_deref(),
+            Some(["2".to_string(), "9999".to_string()].as_slice()),
+        );
+
+        // A deliberate edit of the selection is what removes it.
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(
+            reread(&path).filter_sets[0].projects.as_deref(),
+            Some(["1".to_string(), "2".to_string()].as_slice()),
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_burst_of_selection_keys_costs_one_write_that_also_moves_the_view() {
+        let (mut app, path) = view_app(&projects_entry("projects = []"));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('1'));
+
+        // A marker the app would erase if it rewrote the file mid-burst.
+        let marked = format!(
+            "# untouched\n{}",
+            std::fs::read_to_string(&path).expect("config exists")
+        );
+        std::fs::write(&path, &marked).expect("mark the config");
+
+        app.tasks.set_input_pending(true);
+        press(&mut app, KeyCode::Char('a')); // select every visible project
+        press(&mut app, KeyCode::Char('i')); // invert it
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("config exists"),
+            marked,
+            "nothing written mid-burst"
+        );
+
+        // The key that empties the queue writes once, and that one write
+        // moves both `[[filter_set]]` and `[view]`.
+        app.tasks.set_input_pending(false);
+        press(&mut app, KeyCode::Char('a'));
+
+        let written = reread(&path);
+        assert_eq!(
+            written.filter_sets[0].projects.as_deref(),
+            Some(["1".to_string(), "2".to_string()].as_slice()),
+        );
+        assert_eq!(
+            written.view.filter_set.as_deref(),
+            Some("web"),
+            "and the same write recorded the binding"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn n_clears_the_selection_and_u_puts_it_back() {
+        let (mut app, path) = view_app(&projects_entry("projects = [\"1\", \"2\"]"));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('1'));
+        assert_eq!(selected_gids(&app), vec!["1".to_string(), "2".to_string()]);
+
+        press(&mut app, KeyCode::Char('n'));
+
+        assert!(selected_gids(&app).is_empty(), "`n` starts from nothing");
+        assert_eq!(app.tasks.filter_set_loaded_name(), None);
+        assert_eq!(
+            reread(&path).filter_sets[0].projects.as_deref(),
+            Some(["1".to_string(), "2".to_string()].as_slice()),
+            "the entry keeps whatever was last written to it"
+        );
+
+        press(&mut app, KeyCode::Char('u'));
+        assert_eq!(selected_gids(&app), vec!["1".to_string(), "2".to_string()]);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn w_writes_the_live_selection_into_the_entry_it_saves() {
+        let (mut app, path) = view_app("");
+        press(&mut app, KeyCode::Char(' '));
+        save_as(&mut app, "mine");
+
+        assert_eq!(app.mode(), Mode::Project, "the prompt gives the keys back");
+        assert_eq!(
+            reread(&path).filter_sets[0].projects.as_deref(),
+            Some(["1".to_string()].as_slice()),
+            "`w` always writes the key, so a saved entry is unambiguous",
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_entry_saved_with_nothing_selected_records_an_empty_list() {
+        let (mut app, path) = view_app("");
+        save_as(&mut app, "mine");
+
+        assert_eq!(reread(&path).filter_sets[0].projects, Some(Vec::new()));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A bound entry's `projects` wins over `[view].projects`, because the
+    /// filter *fields* already come back from the entry rather than from
+    /// `[view]`.
+    #[test]
+    fn at_startup_a_bound_entrys_projects_beat_the_view() {
+        let (app, path) = view_app(&format!(
+            "\n[view]\nprojects = [\"1\"]\nfilter_set = \"web\"\n{}",
+            projects_entry("projects = [\"2\"]")
+        ));
+
+        assert_eq!(selected_gids(&app), vec!["2".to_string()]);
+        assert!(
+            !app.projects.can_undo_selection(),
+            "restoring the view is not an edit you made this session"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A bound entry that names no projects has nothing to fall back to, so
+    /// the session opens in the state that asks for a selection.
+    #[test]
+    fn at_startup_an_entry_with_no_projects_key_restores_nothing() {
+        let (app, path) = view_app(&format!(
+            "\n[view]\nfilters = true\nfilter_set = \"web\"\n{}",
+            projects_entry("")
+        ));
+
+        assert!(selected_gids(&app).is_empty());
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("web"));
+        assert_eq!(
+            app.mode(),
+            Mode::Project,
+            "a restored filter view gives way when it turns out to have no projects"
+        );
+        assert!(!app.tasks.filter_panel_visible());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The scratch entry is where an unnamed panel's selection lives, so it
+    /// is what an unnamed panel comes back to.
+    #[test]
+    fn an_unnamed_panel_restores_from_the_scratch_entry() {
+        let (app, path) = scratch_app(&["2"]);
+
+        assert_eq!(selected_gids(&app), vec!["2".to_string()]);
+        assert_eq!(app.tasks.filter_set_loaded_name(), None);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A bound name wins over the scratch slot, and a bound name whose entry
+    /// has been deleted restores nothing rather than inheriting a selection
+    /// that belonged to a different panel.
+    #[test]
+    fn a_bound_entry_beats_the_scratch_slot_and_a_missing_one_takes_neither() {
+        let (app, path) = view_app(&format!(
+            "\n[view]\nfilter_set = \"web\"\n{}{}",
+            projects_entry("projects = [\"1\"]"),
+            scratch_body(&["2"])
+        ));
+        assert_eq!(selected_gids(&app), vec!["1".to_string()]);
+        let _ = std::fs::remove_file(&path);
+
+        let (app, path) = view_app(&format!(
+            "\n[view]\nfilter_set = \"deleted by hand\"\n{}",
+            scratch_body(&["2"])
+        ));
+        assert!(selected_gids(&app).is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The round trip the scratch slot exists for: select with nothing bound,
+    /// quit, come back to the same projects.
+    #[test]
+    fn an_unnamed_selection_survives_a_restart() {
+        let (mut app, path) = view_app("");
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(selected_gids(&app), vec!["1".to_string()]);
+
+        let written = reread(&path);
+        assert_eq!(written.scratch_projects(), ["1"]);
+        assert!(
+            written.sorted_filter_sets().is_empty(),
+            "and the sidebar still lists nothing"
+        );
+
+        let mut restored = App::new(written, FakeAsanaClient::new(vec![
+            Project::new("1", "Inbox", true),
+            Project::new("2", "Website", true),
+        ]));
+        restored.load_projects().expect("projects load");
+        assert_eq!(selected_gids(&restored), vec!["1".to_string()]);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_sidebar_opened_in_the_project_view_is_still_open_after_f_and_p() {
+        let (mut app, path) = view_app("");
+
+        press(&mut app, KeyCode::Char('b'));
+        assert!(app.tasks.filter_sets_sidebar_visible());
+
+        press(&mut app, KeyCode::Char('f'));
+        assert!(
+            app.tasks.filter_sets_sidebar_visible(),
+            "switching views does not open or close it"
+        );
+        press(&mut app, KeyCode::Char('p'));
+        assert!(app.tasks.filter_sets_sidebar_visible());
+        assert_eq!(app.mode(), Mode::Project);
+
+        // And `b` in the project view closes it again.
+        press(&mut app, KeyCode::Char('b'));
+        assert!(!app.tasks.filter_sets_sidebar_visible());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_load_with_the_task_pane_closed_marks_the_table_out_of_date() {
+        let (mut app, path) = view_app(&projects_entry("projects = [\"2\"]"));
+        press(&mut app, KeyCode::Char(' '));
+        // The table has to have held something for staleness to be worth
+        // reporting — an idle one has nothing to be out of date — but the
+        // pane itself stays closed, which is the case under test.
+        let inbox = [Project::new("1", "Inbox", true)];
+        let table =
+            crate::app::task::TaskState::build_table_for_projects(&app.client, &inbox)
+                .expect("table builds");
+        app.tasks.begin_loading(&inbox);
+        app.tasks.finish_loading(table);
+        assert!(!app.tasks.visible());
+
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('1'));
+
+        assert_eq!(selected_gids(&app), vec!["2".to_string()]);
+        assert!(
+            matches!(
+                app.tasks.status(),
+                crate::app::task::TaskStatus::OutOfDate(_)
+            ),
+            "a closed table is marked stale rather than fetched behind its back: {:?}",
+            app.tasks.status(),
+        );
+        assert!(app.task_data_receiver.is_none());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn y_and_d_act_from_the_project_view_and_give_the_keys_back() {
+        let (mut app, path) = view_app(&projects_entry("projects = [\"2\"]"));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('1'));
+
+        // `y` keeps what is on screen, selection included, and unbinds.
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(app.tasks.filter_set_loaded_name(), None);
+        assert_eq!(selected_gids(&app), vec!["2".to_string()]);
+
+        // `d` is refused with nothing loaded, then deletes once there is.
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(app.mode(), Mode::Project, "nothing to delete, nothing asked");
+
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(app.mode(), Mode::FilterSetName, "it asks first");
+        press(&mut app, KeyCode::Char('y'));
+
+        assert_eq!(app.mode(), Mode::Project, "and the keys come back here");
+        assert!(named_entries(&reread(&path)).is_empty());
+        assert_eq!(app.tasks.filter_set_loaded_name(), None);
+        assert_eq!(
+            selected_gids(&app),
+            vec!["2".to_string()],
+            "the panel keeps what it is showing, selection included"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_page_keys_move_the_window_the_digits_address_from_the_project_view() {
+        let mut body = String::new();
+        for index in 0..12 {
+            body.push_str(&format!("\n[[filter_set]]\nname = \"set {index:02}\"\n"));
+        }
+        let (mut app, path) = view_app(&body);
+        press(&mut app, KeyCode::Char('b'));
+        app.tasks.set_filter_sets_window(9);
+
+        press(&mut app, KeyCode::Char('>'));
+        assert_eq!(app.tasks.filter_sets_page_start(), 9);
+        press(&mut app, KeyCode::Char('1'));
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("set 09"));
+
+        press(&mut app, KeyCode::Char('<'));
+        assert_eq!(app.tasks.filter_sets_page_start(), 0);
+        press(&mut app, KeyCode::Char('1'));
+        assert_eq!(app.tasks.filter_set_loaded_name(), Some("set 00"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A star is a fact about a project; a selection is a fact about a
+    /// question. The four keys that are about the list write nothing to the
+    /// entry the selection belongs to.
+    #[test]
+    fn visibility_and_list_view_keys_write_nothing_to_the_bound_entry() {
+        let (mut app, path) = view_app(&projects_entry("projects = [\"2\"]"));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('1'));
+
+        // Both projects start starred and hidden, so each toggle flips one
+        // flag off and the written record is the flip.
+        press(&mut app, KeyCode::Char('*')); // star the selection
+        press(&mut app, KeyCode::Char('v')); // show the hidden group
+        press(&mut app, KeyCode::Char('o')); // selected only
+        press(&mut app, KeyCode::Char('h')); // hide the selection
+
+        let written = reread(&path);
+        assert_eq!(
+            written.filter_sets[0].projects.as_deref(),
+            Some(["2".to_string()].as_slice()),
+            "the entry is untouched"
+        );
+        let flags = |gid: &str| {
+            written
+                .project_visibility
+                .iter()
+                .find(|project| project.gid == gid)
+                .map(|project| (project.starred, project.hidden))
+        };
+        assert_eq!(
+            flags("2"),
+            Some((false, false)),
+            "the facts about the project went to `[[project]]`: {:?}",
+            written.project_visibility
+        );
+        assert_eq!(flags("1"), Some((true, true)), "and only the selected one moved");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_project_mode_keys_keep_every_meaning_they_had() {
+        // Seven new keys in a view that already had plenty: `a`, `i`, `c`,
+        // `u`, `h`, `v`, and `o` are the ones a slip here would break.
+        let (mut app, path) = view_app("");
+
+        press(&mut app, KeyCode::Char('a'));
+        assert_eq!(selected_gids(&app), vec!["1".to_string(), "2".to_string()]);
+        press(&mut app, KeyCode::Char('i'));
+        assert!(selected_gids(&app).is_empty());
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Char('c'));
+        assert!(selected_gids(&app).is_empty());
+        press(&mut app, KeyCode::Char('u'));
+        assert_eq!(selected_gids(&app), vec!["1".to_string()]);
+        press(&mut app, KeyCode::Char('o'));
+        assert!(app.projects.show_selected_only());
+        press(&mut app, KeyCode::Char('v'));
+        assert!(app.projects.hidden_visible());
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(app.projects.hidden_count(), 1, "`h` still hides");
 
         let _ = std::fs::remove_file(&path);
     }
@@ -4925,6 +5749,10 @@ mod tests {
 
         let mut app = App::new(Config::default(), client);
         app.load_projects().expect("projects load");
+        // Selected, not just loaded: the filter view is closed off with
+        // nothing selected.
+        app.handle_action(&Action::ToggleSelection, 10)
+            .expect("select the project");
         app.tasks
             .load_task_dataset_for_projects(&app.client, &[Project::new("1", "Inbox", true)])
             .expect("tasks load");

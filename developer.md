@@ -91,6 +91,37 @@ a convention.
   every key including the ones read outside the keymap. `TaskFilterSet`'s
   `unresolved` is what keeps a filter naming a not-yet-loaded custom field
   from being erased by that write-through.
+- A named entry carries **the project selection** as well as the filters, so
+  the `Sets` sidebar and its seven keys belong to the project view too. The
+  two halves of the write-through are not symmetrical: the fields have a dirty
+  flag the filter editor sets, and the projects have `App::bound_projects` —
+  the selection as it stood when the binding was established. A *change* from
+  that baseline is what writes, which is what leaves a gid the workspace no
+  longer returns on disk until the selection is deliberately edited. The pair
+  carries the entry's name — `None` for the scratch slot — so a load, a save
+  under a new name, and the startup restore all re-baseline in one place
+  rather than at each site. `me` stands for the assigned-to-me row in the
+  file, because that row's `Project.id` is the logged-in user's gid;
+  `src/app/project_list.rs` owns both directions of that translation.
+- Since config **version 3** a project selection lives on a `[[filter_set]]`
+  and nowhere else. An unnamed panel has one too, so it gets the entry with
+  `scratch = true`: hidden from the sidebar, never addressed by a digit,
+  never found by name, and holding a selection and nothing else — its
+  `sets` stay empty so an unnamed panel's *filters* still exist nowhere but
+  on screen, which is what the discard confirmation promises.
+  `Config::sorted_filter_sets` and `ui::filter_sets::sorted_names` both leave
+  it out, and they have to agree or a digit loads a different entry than the
+  row it is drawn beside.
+- **Nothing is in play until it is selected.** `task_target_projects` is the
+  selection and only the selection; the cursor row used to stand in for an
+  empty one, and that was the last implicit project list in the app. With it
+  gone, "nothing selected" is a real state — `App::project_gate_closed` — and
+  `set_filter_mode` refuses in it, because a filter panel's rows are built
+  from the loaded projects' custom fields. The gate is judged only after the
+  first `load_projects`: the panes are restored before Asana is spoken to, so
+  `enforce_project_gate` is what closes a restored `filters = true` that
+  turns out to have nothing behind it. `n` and a load of a project-less entry
+  go through it too.
 - `Action` is the shared input vocabulary.
 - `KeyMap` is built from config bindings and resolves keys to actions. A binding
   with a `mode` shadows the global one, which is how `c`, `t`, and `h`/`l` mean
@@ -180,6 +211,13 @@ a convention.
   filter-set write-through, and both are staged before either is written so a
   key that moves both costs one write.
 - `FakeAsanaClient` is the test backend for deterministic state transitions.
+- `HostEffects` is the seam for everything a session does **outside** the
+  terminal: `o` opening a browser and `y` writing the clipboard. `SystemHost`
+  is the real one and `run_app` is the only thing that builds it;
+  `RecordingHost` writes both down and does nothing. `run_session` takes one
+  as a required argument rather than defaulting, because a test that reached
+  the real browser by forgetting to say otherwise opens a window on the
+  machine running `cargo test` — which is exactly what used to happen.
 
 ## Common Change Paths
 
@@ -214,9 +252,17 @@ a convention.
   cursor handoff in `refresh_table` (`src/app/task.rs`); its geometry is
   `split_recent` in `src/ui/layout.rs` and it renders through
   `task_table::recent_pane_view`, which clones the table's own widths.
-- To change the named-set sidebar, start in `src/ui/filter_sets.rs`. Its split
-  from the filter panel lives there too, in `split_sidebar`, not in `layout`:
-  the sidebar belongs to the panel rather than to the frame.
+- To change the named-set sidebar, start in `src/ui/filter_sets.rs`.
+  `split_sidebar` lives there rather than in `layout` — the sidebar is not a
+  frame region — but it is called from the top-pane dispatch in
+  `src/ui/runtime.rs`, because it belongs to whichever pane that window is
+  holding and the two views give way at different widths.
+- To add a **config format version**, bump `Header::CURRENT_VERSION`, add a
+  version-gated step to `migrate` in `src/config/mod.rs`, and extend
+  `migration_view` in `src/ui/runtime.rs` so the prompt describes the changes
+  that file is actually behind on. A key being migrated *away* has to stay on
+  the struct to be readable — `ViewConfig::legacy_projects` is one, read and
+  never written — or the value is gone before migration can move it.
 - To change the Gantt chart, start in `src/domain/gantt.rs` for anything about
   dates or colour assignment, and `src/ui/gantt.rs` for how it is drawn. The
   split between the table columns and the chart lives in `split_pane` in

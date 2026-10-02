@@ -20,7 +20,7 @@ use tuisana::{
     },
     config::{Config, Mode},
     domain::{GanttColorKey, Project, TimelineView},
-    ui::runtime::{run_session, InputEvent, KeySource},
+    ui::runtime::{run_session, InputEvent, KeySource, RecordingHost},
 };
 
 struct ScriptedSource {
@@ -86,7 +86,13 @@ fn app() -> App<FakeAsanaClient> {
 
 /// Runs one batch of keys, then waits for any task load it triggered.
 fn run(app: &mut App<FakeAsanaClient>, terminal: &mut Terminal<TestBackend>, keys: Vec<KeyEvent>) {
-    run_session(app, &mut ScriptedSource { keys }, terminal).expect("session runs");
+    run_session(
+        app,
+        &mut ScriptedSource { keys },
+        terminal,
+        &mut RecordingHost::default(),
+    )
+    .expect("session runs");
     for _ in 0..100 {
         app.poll_task_data();
         if !matches!(app.tasks.status(), tuisana::app::task::TaskStatus::Loading) {

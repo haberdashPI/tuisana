@@ -155,24 +155,7 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
                 // is a second set for it to be the complement of.
                 hints.push(Hint::new(&[Action::FilterNegateSet], "negate set"));
             }
-            // Always, so the feature is discoverable; the rest only once the
-            // sidebar is open and they have somewhere to act.
-            hints.push(Hint::new(&[Action::FilterSetsToggle], "sets"));
-            if context.filter_sets_sidebar {
-                hints.push(Hint::literal("1-9", "load"));
-                hints.push(Hint::new(&[Action::FilterSetSave], "save"));
-                hints.push(Hint::new(&[Action::FilterSetNew], "new"));
-                if context.filter_set_loaded {
-                    hints.push(Hint::new(&[Action::FilterSetCopyToNew], "copy to new"));
-                    hints.push(Hint::new(&[Action::FilterSetDelete], "delete"));
-                }
-                if context.saved_filter_sets > crate::app::task::MAX_SIDEBAR_ROWS {
-                    hints.push(Hint::new(
-                        &[Action::FilterSetsPageBack, Action::FilterSetsPageForward],
-                        "page",
-                    ));
-                }
-            }
+            hints.extend(named_set_hints(context));
             hints.push(Hint::new(&[Action::ToggleTaskFilters], "close"));
             hints.push(Hint::new(&[Action::ToggleHelpDetails], "help"));
             hints
@@ -295,7 +278,32 @@ fn project_hints(context: HintContext) -> Vec<Hint> {
     } else {
         hints.push(Hint::new(&[Action::ToggleHiddenGroup], "show hidden"));
     }
+    hints.extend(named_set_hints(context));
     hints.push(Hint::new(&[Action::ToggleHelpDetails], "help"));
+    hints
+}
+
+/// The sets keys, offered the same way in both views.
+///
+/// `sets` always, so the feature is discoverable; the rest only once the
+/// sidebar is open and they have somewhere to act.
+fn named_set_hints(context: HintContext) -> Vec<Hint> {
+    let mut hints = vec![Hint::new(&[Action::FilterSetsToggle], "sets")];
+    if context.filter_sets_sidebar {
+        hints.push(Hint::literal("1-9", "load"));
+        hints.push(Hint::new(&[Action::FilterSetSave], "save"));
+        hints.push(Hint::new(&[Action::FilterSetNew], "new"));
+        if context.filter_set_loaded {
+            hints.push(Hint::new(&[Action::FilterSetCopyToNew], "copy to new"));
+            hints.push(Hint::new(&[Action::FilterSetDelete], "delete"));
+        }
+        if context.saved_filter_sets > crate::app::task::MAX_SIDEBAR_ROWS {
+            hints.push(Hint::new(
+                &[Action::FilterSetsPageBack, Action::FilterSetsPageForward],
+                "page",
+            ));
+        }
+    }
     hints
 }
 

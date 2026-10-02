@@ -47,12 +47,15 @@ pub struct Config {
     pub filter_sets: Vec<NamedFilterSet>,
     #[serde(skip)]
     source_path: Option<PathBuf>,
-    /// Set when [`migrate_v1`] rewrote this config on the way in.
+    /// Set when [`migrate`] rewrote this config on the way in.
     ///
     /// The app asks before it writes the migrated file back, so it has to
     /// know that the file on disk is not what it is now holding.
     #[serde(skip)]
     migrated: bool,
+    /// The version the file on disk declared, kept for the prompt's wording.
+    #[serde(skip)]
+    migrated_from: Option<f64>,
 }
 
 impl PartialEq for Config {
@@ -83,6 +86,7 @@ impl Default for Config {
             filter_sets: Vec::new(),
             source_path: None,
             migrated: false,
+            migrated_from: None,
         }
     }
 }
@@ -96,7 +100,17 @@ impl Config {
     /// a file that was valid yesterday would refuse to load at all.
     pub fn from_toml_str(input: &str) -> Result<Self> {
         let config: Self = toml::from_str(input)?;
-        let config = migrate_v1(config);
+        // Before migration, because `[view].projects` only exists until
+        // migration moves it: a bad gid in it has to be reported against the
+        // key the file actually contains, not against the `[[filter_set]]` it
+        // is about to become.
+        config.view.validate()?;
+        let mut config = migrate(config);
+        // Before validation, because collapsing a duplicate is the parse
+        // deciding what the file meant rather than a rule it has to pass.
+        for entry in &mut config.filter_sets {
+            entry.normalize();
+        }
         config.validate()?;
         Ok(config)
     }
@@ -146,6 +160,15 @@ impl Config {
         self.migrated = false;
     }
 
+    /// The version the file on disk was written in, for the prompt to name.
+    ///
+    /// Recorded at parse time because [`migrate`] rewrites `header.version`
+    /// in memory, so by the time the prompt is raised the config no longer
+    /// remembers where it came from.
+    pub fn migrated_from_version(&self) -> f64 {
+        self.migrated_from.unwrap_or(Header::CURRENT_VERSION)
+    }
+
     /// Merge the built-in default bindings with any user-defined overrides.
     pub fn effective_bindings(&self) -> Vec<Bind> {
         let mut bindings = default_bindings();
@@ -159,9 +182,45 @@ impl Config {
     /// numbers the rows it shows and the digits address those numbers, so the
     /// order has to be one the user can predict from the names alone.
     pub fn sorted_filter_sets(&self) -> Vec<&NamedFilterSet> {
-        let mut entries = self.filter_sets.iter().collect::<Vec<_>>();
+        let mut entries = self
+            .filter_sets
+            .iter()
+            .filter(|entry| !entry.scratch)
+            .collect::<Vec<_>>();
         entries.sort_by_key(|entry| entry.name.to_lowercase());
         entries
+    }
+
+    /// How many entries the sidebar numbers, which is what decides whether
+    /// there is a second page.
+    pub fn named_filter_set_count(&self) -> usize {
+        self.filter_sets.iter().filter(|entry| !entry.scratch).count()
+    }
+
+    /// A saved entry by name. Never the scratch entry: that one is the app's
+    /// own slot and its name is cosmetic.
+    pub fn named_filter_set(&self, name: &str) -> Option<&NamedFilterSet> {
+        self.filter_sets
+            .iter()
+            .find(|entry| !entry.scratch && entry.name.eq_ignore_ascii_case(name))
+    }
+
+    /// The selection an unnamed panel left behind, if a session ever did.
+    pub fn scratch_projects(&self) -> &[String] {
+        self.filter_sets
+            .iter()
+            .find(|entry| entry.scratch)
+            .map(NamedFilterSet::projects)
+            .unwrap_or(&[])
+    }
+
+    /// Records the selection of an unnamed panel, creating the slot if this
+    /// is the first session to need one.
+    pub fn set_scratch_projects(&mut self, projects: Vec<String>) {
+        match self.filter_sets.iter_mut().find(|entry| entry.scratch) {
+            Some(entry) => entry.projects = Some(projects),
+            None => self.filter_sets.push(NamedFilterSet::scratch(projects)),
+        }
     }
 
     fn validate(&self) -> Result<()> {
@@ -203,8 +262,22 @@ impl Config {
         }
 
         let mut seen_names = HashSet::new();
+        let mut scratch_entries = 0;
         for entry in &self.filter_sets {
             entry.validate()?;
+            if entry.scratch {
+                // Nothing lists it and nothing looks it up by name, so its
+                // name is not held to the uniqueness rule — but two slots for
+                // one unnamed panel would leave the app guessing which it
+                // just wrote to.
+                scratch_entries += 1;
+                if scratch_entries > 1 {
+                    return Err(Error::ConfigValidation(
+                        "only one filter_set may set scratch = true".to_string(),
+                    ));
+                }
+                continue;
+            }
             // The sidebar lists entries by number and two rows reading the
             // same is a trap: there would be no way to tell which one a digit
             // loads, or which one `w` overwrites.
@@ -240,12 +313,62 @@ const SAVED_MATCH_MODES: [&str; 4] = ["fuzzy", "contains", "regex", "list"];
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct NamedFilterSet {
     pub name: String,
+    /// Whether this is the app's own slot for an **unnamed** panel's project
+    /// selection, rather than an entry the user saved.
+    ///
+    /// Since version 3 a project selection is only ever recorded on a
+    /// `[[filter_set]]`; there is no second home for it. An unnamed panel
+    /// still has one, so it gets a reserved entry — hidden from the sidebar,
+    /// unaddressable by a digit, and never found by name. It holds the
+    /// selection and nothing else: the panel is genuinely unnamed, its
+    /// filters still exist nowhere but on screen, and the discard
+    /// confirmation still means what it says.
+    ///
+    /// At most one entry may carry it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub scratch: bool,
+    /// The projects the set is asked of, by gid, with `me` standing for the
+    /// assigned-to-me row.
+    ///
+    /// One list per entry rather than one per tab: tabs OR, and a fetch scope
+    /// cannot — there is one set of projects being read, whatever the tabs
+    /// then ask of it.
+    ///
+    /// Read through [`Self::projects`], which reads a missing key as the
+    /// empty selection. The `Option` survives only so that **migration** can
+    /// tell a version-2 entry that never had the key from one that was
+    /// saved selecting nothing: the first adopts `[view].projects`, the
+    /// second is already right. At runtime the two are the same thing, and
+    /// loading either leaves nothing selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projects: Option<Vec<String>>,
     /// The ORed sets, in tab order.
     #[serde(default, rename = "set", skip_serializing_if = "Vec::is_empty")]
     pub sets: Vec<SavedFilterSet>,
 }
 
 impl NamedFilterSet {
+    /// The name the app writes on its scratch entry.
+    ///
+    /// Cosmetic: the entry is found by its `scratch` flag and never by name,
+    /// so a user's own entry called `unnamed` does not collide with it.
+    pub const SCRATCH_NAME: &'static str = "unnamed";
+
+    /// The projects this set is asked of, with a missing key read as none.
+    pub fn projects(&self) -> &[String] {
+        self.projects.as_deref().unwrap_or(&[])
+    }
+
+    /// The app's scratch entry, holding a selection and nothing else.
+    pub fn scratch(projects: Vec<String>) -> Self {
+        Self {
+            name: Self::SCRATCH_NAME.to_string(),
+            scratch: true,
+            projects: Some(projects),
+            sets: Vec::new(),
+        }
+    }
+
     fn validate(&self) -> Result<()> {
         if self.name.trim().is_empty() {
             return Err(Error::ConfigValidation(
@@ -253,11 +376,33 @@ impl NamedFilterSet {
             ));
         }
 
+        for project in self.projects.iter().flatten() {
+            if project.trim().is_empty() {
+                return Err(Error::ConfigValidation(
+                    "filter_set.projects entries must not be empty".to_string(),
+                ));
+            }
+        }
+
         for set in &self.sets {
             set.validate()?;
         }
 
         Ok(())
+    }
+
+    /// Collapses a hand-written `projects` list that names the same project
+    /// twice.
+    ///
+    /// Collapsed rather than refused: a file that names a project twice meant
+    /// it once, and nothing about the selection is ambiguous. Nothing checks
+    /// that a gid *exists* — at parse time the workspace has not been asked
+    /// yet.
+    fn normalize(&mut self) {
+        if let Some(projects) = self.projects.as_mut() {
+            let mut seen = HashSet::new();
+            projects.retain(|project| seen.insert(project.clone()));
+        }
     }
 }
 
@@ -622,16 +767,22 @@ pub struct ViewConfig {
     /// session edited, so at startup it is always empty and always hidden.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub recent: bool,
-    /// The selected projects, by gid.
+    /// A version-1 or -2 file's selected projects, on their way out.
     ///
-    /// Sorted on write so a selection made in a different order does not
-    /// churn the file. A gid the workspace no longer returns is dropped at
-    /// startup, exactly as a reload drops it from the live selection.
+    /// Read, never written: since version 3 a project selection lives on a
+    /// `[[filter_set]]` and nowhere else, so this exists only for
+    /// [`migrate`] to move an old file's selection onto the entry that was
+    /// bound — or onto the scratch entry, when nothing was. It is empty from
+    /// the moment migration has run.
+    ///
+    /// Keeping the field rather than ignoring the key is what makes that move
+    /// possible: a selection someone has been using every day should survive
+    /// the upgrade, not be silently dropped.
     ///
     /// Last, because `toml` cannot emit a value after a table and this is the
     /// only field here that is not a scalar.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub projects: Vec<String>,
+    #[serde(default, rename = "projects", skip_serializing)]
+    pub legacy_projects: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -651,7 +802,7 @@ impl Default for ViewConfig {
             filters: false,
             filter_sidebar: false,
             recent: true,
-            projects: Vec::new(),
+            legacy_projects: Vec::new(),
         }
     }
 }
@@ -674,7 +825,7 @@ impl ViewConfig {
             }
         }
 
-        if self.projects.iter().any(|gid| gid.trim().is_empty()) {
+        if self.legacy_projects.iter().any(|gid| gid.trim().is_empty()) {
             return Err(Error::ConfigValidation(
                 "view.projects entries must not be empty".to_string(),
             ));
@@ -837,9 +988,14 @@ pub struct Header {
 
 impl Header {
     /// The version the app writes, and the only one it will write.
-    pub const CURRENT_VERSION: f64 = 2.0;
+    pub const CURRENT_VERSION: f64 = 3.0;
     /// The oldest version still readable.
+    ///
+    /// Every version in between is still *readable* and migrated in memory,
+    /// which is why validation takes a range rather than one number.
     pub const OLDEST_VERSION: f64 = 1.0;
+    /// The version that moved the project selection onto the filter sets.
+    pub const PROJECTS_ON_SETS_VERSION: f64 = 3.0;
 
     /// The version this header declares, treating "absent" as the oldest.
     pub fn version(&self) -> f64 {
@@ -902,9 +1058,13 @@ const V1_COMMAND_RENAMES: [(&str, &str); 6] = [
     ("task_edit_clear", "column_edit_clear"),
 ];
 
-/// Brings a version-1 config up to version 2, in memory.
+/// Brings an older config up to [`Header::CURRENT_VERSION`], in memory.
 ///
-/// Three changes, and deliberately no more:
+/// Each step is gated on the version that needed it, so a version-1 file gets
+/// both and a version-2 file gets only the second. The whole thing is a no-op
+/// on a file already at the current version.
+///
+/// **Version 1 → 2.** Two changes, and deliberately no more:
 ///
 /// - every `[[bind]]` whose command appears in [`V1_COMMAND_RENAMES`] is
 ///   renamed. The mode rename is handled by serde, which accepts both
@@ -913,25 +1073,73 @@ const V1_COMMAND_RENAMES: [(&str, &str); 6] = [
 ///   lowercased it on the way in, so `key = "G"` meant `g`; milestone 15
 ///   makes that a different key, and a migration that left it alone would
 ///   silently rebind it.
-/// - `header.version` becomes [`Header::CURRENT_VERSION`].
 ///
 /// Unknown commands are left exactly as they are and still fail validation:
 /// this renames what was renamed, and is not a licence to accept typos.
-fn migrate_v1(mut config: Config) -> Config {
-    if config.header.version() >= Header::CURRENT_VERSION {
+///
+/// **Version 2 → 3.** `[view].projects` moves onto a `[[filter_set]]`, which
+/// is the only place a project selection lives from here on:
+///
+/// - onto the entry `[view].filter_set` named, if it named one that has no
+///   list of its own. That entry *was* the panel on screen, and the
+///   selection beside it was the selection it was being asked of.
+/// - onto the scratch entry otherwise, because an unnamed panel has a
+///   selection too and this is where it now lives.
+///
+/// An entry that already carries a list keeps it: a file written by a
+/// version-2 build that had already learned about `projects` is right
+/// already, and the empty list it may hold is a real answer rather than a
+/// gap.
+fn migrate(mut config: Config) -> Config {
+    let version = config.header.version();
+    if version >= Header::CURRENT_VERSION {
         return config;
     }
+    config.migrated_from = Some(version);
 
-    for bind in &mut config.bind {
-        if let Some((_, renamed)) = V1_COMMAND_RENAMES
-            .iter()
-            .find(|(old, _)| bind.command.trim().eq_ignore_ascii_case(old))
-        {
-            bind.command = (*renamed).to_string();
+    if version < 2.0 {
+        for bind in &mut config.bind {
+            if let Some((_, renamed)) = V1_COMMAND_RENAMES
+                .iter()
+                .find(|(old, _)| bind.command.trim().eq_ignore_ascii_case(old))
+            {
+                bind.command = (*renamed).to_string();
+            }
+            let key = bind.key.trim();
+            if key.chars().count() == 1 {
+                bind.key = key.to_lowercase();
+            }
         }
-        let key = bind.key.trim();
-        if key.chars().count() == 1 {
-            bind.key = key.to_lowercase();
+    }
+
+    if version < Header::PROJECTS_ON_SETS_VERSION {
+        let projects = std::mem::take(&mut config.view.legacy_projects);
+        let bound = config.view.filter_set.clone().and_then(|name| {
+            config
+                .filter_sets
+                .iter_mut()
+                .find(|entry| !entry.scratch && entry.name.eq_ignore_ascii_case(&name))
+        });
+        match bound {
+            // The entry that was bound was the panel on screen, so the
+            // selection beside it was the selection it was being asked of —
+            // unless it already states one, in which case the file is right
+            // already and the old key is simply dropped.
+            Some(entry) => {
+                if entry.projects.is_none() {
+                    entry.projects = Some(projects);
+                }
+            }
+            // Nothing bound — or a name whose entry someone has since deleted
+            // — makes it an unnamed panel's selection, which is what the
+            // scratch slot is for. Created only when there is something to
+            // put in it: a migrated file that had nothing selected should not
+            // grow a `[[filter_set]]` saying so.
+            None => {
+                if !projects.is_empty() {
+                    config.set_scratch_projects(projects);
+                }
+            }
         }
     }
 
@@ -996,6 +1204,28 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("*", Mode::Project, "toggle_starred_selected"),
         Bind::with_mode("h", Mode::Project, "toggle_hidden_selected"),
         Bind::with_mode("v", Mode::Project, "toggle_hidden_group"),
+        // The sets keys, a second time, for the project view: a named set
+        // carries its project list, so the same key does the same thing in
+        // both halves of the question. All of these were unbound in project
+        // mode, so nothing is displaced — and the per-tab keys deliberately
+        // do not come across, because there are no fields and no tab strip
+        // here and four of those letters already mean something.
+        Bind::with_mode("b", Mode::Project, "filter_sets_toggle"),
+        Bind::with_mode("w", Mode::Project, "filter_set_save"),
+        Bind::with_mode("y", Mode::Project, "filter_set_copy_to_new"),
+        Bind::with_mode("n", Mode::Project, "filter_set_new"),
+        Bind::with_mode("d", Mode::Project, "filter_set_delete"),
+        Bind::with_mode("<", Mode::Project, "filter_sets_page_back"),
+        Bind::with_mode(">", Mode::Project, "filter_sets_page_forward"),
+        Bind::with_mode("1", Mode::Project, "filter_set_load_1"),
+        Bind::with_mode("2", Mode::Project, "filter_set_load_2"),
+        Bind::with_mode("3", Mode::Project, "filter_set_load_3"),
+        Bind::with_mode("4", Mode::Project, "filter_set_load_4"),
+        Bind::with_mode("5", Mode::Project, "filter_set_load_5"),
+        Bind::with_mode("6", Mode::Project, "filter_set_load_6"),
+        Bind::with_mode("7", Mode::Project, "filter_set_load_7"),
+        Bind::with_mode("8", Mode::Project, "filter_set_load_8"),
+        Bind::with_mode("9", Mode::Project, "filter_set_load_9"),
         Bind::with_mode("enter", Mode::Filter, "begin_filter_edit"),
         Bind::with_mode("esc", Mode::Filter, "set_task_mode"),
         Bind::with_mode("f", Mode::Filter, "toggle_task_filters"),
@@ -1427,12 +1657,12 @@ mod tests {
             r#"
                 [header]
                 type = "tuisana"
-                version = 3.0
+                version = 4.0
             "#,
         )
         .expect_err("version should be rejected");
 
-        assert!(format!("{err}").contains("expected header.version = 2"));
+        assert!(format!("{err}").contains("expected header.version = 3"), "{err}");
     }
 
     #[test]
@@ -1638,6 +1868,8 @@ name = "Sprint triage"
         let filter_sets = vec![
             NamedFilterSet {
                 name: "Blocked".to_string(),
+                scratch: false,
+                projects: None,
                 sets: vec![SavedFilterSet {
                     negated: false,
                     fields: vec![SavedFilterField {
@@ -1649,6 +1881,8 @@ name = "Sprint triage"
             },
             NamedFilterSet {
                 name: "Overdue mine".to_string(),
+                scratch: false,
+                projects: None,
                 sets: vec![
                     SavedFilterSet {
                         negated: false,
@@ -1702,6 +1936,8 @@ name = "Sprint triage"
         let config = Config {
             filter_sets: vec![NamedFilterSet {
                 name: "Mine".to_string(),
+                scratch: false,
+                projects: None,
                 sets: vec![SavedFilterSet {
                     negated: false,
                     fields: vec![SavedFilterField {
@@ -1836,13 +2072,314 @@ name = "Mine"
     }
 
     #[test]
+    fn a_named_filter_set_round_trips_its_project_selection() {
+        let config = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 2.0
+
+[[filter_set]]
+name = "Sprint triage"
+projects = ["me", "1201", "1202"]
+"#,
+        )
+        .expect("the projects key parses");
+
+        assert_eq!(
+            config.filter_sets[0].projects.as_deref(),
+            Some(["me".to_string(), "1201".to_string(), "1202".to_string()].as_slice()),
+            "gids in file order, with `me` for the assigned-to-me row"
+        );
+
+        let text = toml::to_string_pretty(&config).expect("serializes");
+        assert_eq!(
+            Config::from_toml_str(&text)
+                .expect("reparses")
+                .filter_sets[0]
+                .projects,
+            config.filter_sets[0].projects,
+        );
+    }
+
+    /// Absent is "no opinion" and `[]` is "select nothing", so the two cannot
+    /// collapse into each other anywhere along the round trip.
+    #[test]
+    fn a_missing_projects_key_and_an_empty_one_are_different_values() {
+        let config = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 2.0
+
+[[filter_set]]
+name = "Silent"
+
+[[filter_set]]
+name = "Nothing"
+projects = []
+"#,
+        )
+        .expect("both parse");
+
+        assert_eq!(config.filter_sets[0].projects, None, "no opinion");
+        assert_eq!(
+            config.filter_sets[1].projects,
+            Some(Vec::new()),
+            "an opinion that selects nothing"
+        );
+
+        let text = toml::to_string_pretty(&config).expect("serializes");
+        assert!(
+            text.contains("projects = []"),
+            "an empty opinion is still written: {text}"
+        );
+        let reparsed = Config::from_toml_str(&text).expect("reparses");
+        assert_eq!(reparsed.filter_sets[0].projects, None);
+        assert_eq!(reparsed.filter_sets[1].projects, Some(Vec::new()));
+    }
+
+    /// A version-2 file's selection was being used with the panel that was
+    /// bound, so that is the entry it belongs to.
+    #[test]
+    fn a_version_two_selection_moves_onto_the_entry_that_was_bound() {
+        let text = r#"
+[header]
+type = "tuisana"
+version = 2.0
+
+[view]
+projects = ["1201"]
+filter_set = "Mine"
+
+[[filter_set]]
+name = "Mine"
+
+  [[filter_set.set]]
+
+    [[filter_set.set.field]]
+    key = "assignee"
+    query = "alex"
+"#;
+        let config = Config::from_toml_str(text).expect("the old shape loads");
+
+        assert_eq!(config.header.version(), Header::CURRENT_VERSION);
+        assert_eq!(config.migrated_from_version(), 2.0);
+        assert_eq!(config.filter_sets[0].projects(), ["1201".to_string()]);
+        assert!(
+            config.scratch_projects().is_empty(),
+            "the bound entry took it, so no scratch slot was needed"
+        );
+        assert!(
+            config.view.legacy_projects.is_empty(),
+            "and `[view]` no longer carries it"
+        );
+    }
+
+    /// With nothing bound there is no entry to adopt the selection, so it
+    /// goes to the slot an unnamed panel uses from here on.
+    #[test]
+    fn an_unbound_version_two_selection_moves_onto_the_scratch_entry() {
+        let config = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 2.0
+
+[view]
+projects = ["1201", "1202"]
+"#,
+        )
+        .expect("the old shape loads");
+
+        assert_eq!(
+            config.scratch_projects(),
+            ["1201".to_string(), "1202".to_string()]
+        );
+        let scratch = config
+            .filter_sets
+            .iter()
+            .find(|entry| entry.scratch)
+            .expect("the slot was created");
+        assert!(scratch.sets.is_empty(), "it holds a selection and nothing else");
+        assert!(
+            config.sorted_filter_sets().is_empty(),
+            "and the sidebar does not list it"
+        );
+        assert_eq!(config.named_filter_set_count(), 0);
+        assert_eq!(config.named_filter_set("unnamed"), None, "nor is it found by name");
+    }
+
+    /// An entry that already states its projects is right already, and the
+    /// empty list it may hold is a real answer rather than a gap.
+    #[test]
+    fn migration_does_not_overwrite_a_selection_an_entry_already_states() {
+        let config = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 2.0
+
+[view]
+projects = ["1201"]
+filter_set = "Mine"
+
+[[filter_set]]
+name = "Mine"
+projects = []
+"#,
+        )
+        .expect("loads");
+
+        assert_eq!(config.filter_sets[0].projects(), [] as [String; 0]);
+        assert!(
+            config.scratch_projects().is_empty(),
+            "and the old list is dropped rather than parked somewhere else"
+        );
+        assert_eq!(config.filter_sets.len(), 1, "no slot was created for it");
+    }
+
+    /// A version-1 file needs both steps, and the second one does not care
+    /// which version it was reached from.
+    #[test]
+    fn a_version_one_config_gets_the_renames_and_the_selection_move() {
+        let config = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 1.0
+
+[view]
+projects = ["1201"]
+
+[[bind]]
+key = "G"
+command = "begin_task_edit"
+"#,
+        )
+        .expect("loads");
+
+        assert_eq!(config.header.version(), Header::CURRENT_VERSION);
+        assert_eq!(config.migrated_from_version(), 1.0);
+        assert_eq!(config.bind[0].key, "g");
+        assert_eq!(config.bind[0].command, "edit_column");
+        assert_eq!(config.scratch_projects(), ["1201".to_string()]);
+    }
+
+    #[test]
+    fn rejects_a_second_scratch_entry() {
+        let error = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 3.0
+
+[[filter_set]]
+name = "unnamed"
+scratch = true
+
+[[filter_set]]
+name = "also unnamed"
+scratch = true
+"#,
+        )
+        .expect_err("two slots for one unnamed panel is not a thing");
+
+        assert!(
+            error.to_string().contains("only one filter_set may set scratch"),
+            "{error}"
+        );
+    }
+
+    /// Nothing lists a scratch entry and nothing looks it up by name, so its
+    /// name is free to collide with a real one.
+    #[test]
+    fn a_scratch_entry_does_not_collide_with_a_real_name() {
+        let config = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 3.0
+
+[[filter_set]]
+name = "unnamed"
+scratch = true
+projects = ["1201"]
+
+[[filter_set]]
+name = "unnamed"
+projects = ["1202"]
+"#,
+        )
+        .expect("the flag is the identity, not the name");
+
+        assert_eq!(config.scratch_projects(), ["1201".to_string()]);
+        assert_eq!(
+            config.named_filter_set("unnamed").map(NamedFilterSet::projects),
+            Some(["1202".to_string()].as_slice()),
+        );
+    }
+
+    #[test]
+    fn a_projects_list_naming_the_same_project_twice_is_collapsed_not_refused() {
+        // A hand-edited file that names a project twice meant it once.
+        let config = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 2.0
+
+[[filter_set]]
+name = "Mine"
+projects = ["1201", "me", "1201", "me"]
+"#,
+        )
+        .expect("duplicates are collapsed rather than rejected");
+
+        assert_eq!(
+            config.filter_sets[0].projects.as_deref(),
+            Some(["1201".to_string(), "me".to_string()].as_slice()),
+            "first mention wins, so the file's order survives"
+        );
+    }
+
+    #[test]
+    fn rejects_a_blank_project_in_a_named_filter_set() {
+        let error = Config::from_toml_str(
+            r#"
+[header]
+type = "tuisana"
+version = 2.0
+
+[[filter_set]]
+name = "Mine"
+projects = ["1201", "  "]
+"#,
+        )
+        .expect_err("a project that names nothing is refused");
+
+        assert!(
+            error
+                .to_string()
+                .contains("filter_set.projects entries must not be empty"),
+            "{error}"
+        );
+    }
+
+    /// A saved entry with nothing but a name, for the ordering assertions.
+    fn named(name: &str) -> NamedFilterSet {
+        NamedFilterSet {
+            name: name.to_string(),
+            scratch: false,
+            projects: None,
+            sets: Vec::new(),
+        }
+    }
+
+    #[test]
     fn the_sidebar_order_is_by_name_rather_than_by_file_order() {
         let config = Config {
-            filter_sets: vec![
-                NamedFilterSet { name: "zebra".to_string(), sets: Vec::new() },
-                NamedFilterSet { name: "Apple".to_string(), sets: Vec::new() },
-                NamedFilterSet { name: "mango".to_string(), sets: Vec::new() },
-            ],
+            filter_sets: vec![named("zebra"), named("Apple"), named("mango")],
             ..Config::default()
         };
 
@@ -2545,7 +3082,7 @@ version = 1.0
                 filters: true,
                 filter_sidebar: true,
                 recent: false,
-                projects: vec!["1201".to_string(), "1202".to_string()],
+                legacy_projects: Vec::new(),
             },
             ..Config::default()
         };
@@ -2572,7 +3109,12 @@ projects = ["1201"]
         .expect("config parses");
 
         assert!(config.view.tasks);
-        assert_eq!(config.view.projects, ["1201"]);
+        assert_eq!(
+            config.scratch_projects(),
+            ["1201"],
+            "a version-1 selection lands in the slot an unnamed panel uses"
+        );
+        assert!(config.view.legacy_projects.is_empty());
         assert!(!config.view.filters);
         assert_eq!(config.view.top_pane, TopPaneState::Normal);
         assert!(
@@ -2755,3 +3297,4 @@ mod example_tests {
             .expect("every command the example names binds");
     }
 }
+

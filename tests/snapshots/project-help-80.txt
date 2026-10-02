@@ -1,40 +1,40 @@
  TUISANA  ▸ Northwind BTX 4412
 ┏ Projects ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3 shown ┓
-┃▍   ★ Northwind BTX 4412                                                      ┃
-┃    ★ Platform Infrastructure                                                 ┃
-┃    ☆ Backlog                                                                 ┃
-┃                                                                              ┃
-┃    ┏ Help · project mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓    ┃
-┃    ┃Select                              Move                            ┃    ┃
-┃    ┃␣         select, then move down    j/k       down / up             ┃    ┃
-┃    ┃a         select all visible        ^d/^u     page down / up        ┃    ┃
-┃    ┃!         select starred            home/end  top / bottom          ┃    ┃
-┃    ┃@         select non-hidden                                         ┃    ┃
-┃    ┃i         invert                    Modes                           ┃    ┃
-┃    ┃c         clear                     p         projects              ┃    ┃
-┃    ┃u         undo                      f         filters               ┃    ┃
-┃    ┃^y        redo                      t         tasks                 ┃    ┃
-┃    ┃                                    m         toggle tasks          ┃    ┃
-┃    ┃Projects                                                            ┃    ┃
-┃    ┃⏎         open in Asana             Panes                           ┃    ┃
-┃    ┃*         star selected             [/]       shrink / grow         ┃    ┃
-┃    ┃h         hide selected             {         minimize              ┃    ┃
-┃    ┃v         show hidden               }         maximize              ┃    ┃
-┃    ┃o         only selected             0         restore               ┃    ┃
-┃    ┃                                                                    ┃    ┃
-┃    ┃Search                              App                             ┃    ┃
-┃    ┃/         start                     r         refresh               ┃    ┃
-┃    ┃^z        fuzzy                     q ^c      quit                  ┃    ┃
-┃    ┃^s        contains                  ?         close this help       ┃    ┃
-┃    ┃^r        regex                                                     ┃    ┃
-┃    ┃                                                                    ┃    ┃
-┃    ┃                                                          ? to close┃    ┃
-┃    ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛    ┃
-┃                                                                              ┃
-┃                                                                              ┃
-┃                                                                              ┃
-┃                                                                              ┃
-┃                                                                              ┃
+┃▍┏ Help · project mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃
+┃ ┃Select                                 Named sets                         ┃ ┃
+┃ ┃␣         select, then move down       b         show the sidebar         ┃ ┃
+┃ ┃a         select all visible           1-9       load that entry          ┃ ┃
+┃ ┃!         select starred               w         save under a name        ┃ ┃
+┃ ┃@         select non-hidden            y         copy to a new unnamed one┃ ┃
+┃ ┃i         invert                       n         start from nothing       ┃ ┃
+┃ ┃c         clear                        d         delete the loaded one    ┃ ┃
+┃ ┃u         undo                         </>       page the list            ┃ ┃
+┃ ┃^y        redo                         loaded    edits write through      ┃ ┃
+┃ ┃                                                                          ┃ ┃
+┃ ┃Projects                               Move                               ┃ ┃
+┃ ┃⏎         open in Asana                j/k       down / up                ┃ ┃
+┃ ┃*         star selected                ^d/^u     page down / up           ┃ ┃
+┃ ┃h         hide selected                home/end  top / bottom             ┃ ┃
+┃ ┃v         show hidden                                                     ┃ ┃
+┃ ┃o         only selected                Modes                              ┃ ┃
+┃ ┃                                       p         projects                 ┃ ┃
+┃ ┃Search                                 f         filters                  ┃ ┃
+┃ ┃/         start                        t         tasks                    ┃ ┃
+┃ ┃^z        fuzzy                        m         toggle tasks             ┃ ┃
+┃ ┃^s        contains                                                        ┃ ┃
+┃ ┃^r        regex                        Panes                              ┃ ┃
+┃ ┃                                       [/]       shrink / grow            ┃ ┃
+┃ ┃                                       {         minimize                 ┃ ┃
+┃ ┃                                       }         maximize                 ┃ ┃
+┃ ┃                                       0         restore                  ┃ ┃
+┃ ┃                                                                          ┃ ┃
+┃ ┃                                       App                                ┃ ┃
+┃ ┃                                       r         refresh                  ┃ ┃
+┃ ┃                                       q ^c      quit                     ┃ ┃
+┃ ┃                                       ?         close this help          ┃ ┃
+┃ ┃                                                                          ┃ ┃
+┃ ┃                                                                ? to close┃ ┃
+┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 j/k move   ␣ select   t tasks   / search   v show hidden      r refresh   q quit
  PROJECT

@@ -442,10 +442,15 @@ struct TaskFilterFieldSpec {
     can_be_empty: bool,
     /// Whether this row's values come from a directory it can complete over.
     ///
-    /// True only for `Assignee`. `Projects` deliberately stays free text:
-    /// which projects are in view is what the project pane is for, and a
-    /// second control answering the same question would be two controls
-    /// fighting over it.
+    /// True only for `Assignee`. `Projects` deliberately stays free text,
+    /// and the reason is no longer that a second control would fight the
+    /// project pane — the pane is part of the same panel now, and a named set
+    /// carries its selection. It is that the row is the *other* operation on
+    /// the same names: the selection decides which projects are **asked**,
+    /// before the fetch, and this row decides which of the loaded tasks'
+    /// memberships to **keep**, after it. It earns its keep on a task in
+    /// several projects, and it does it per tab, which one shared fetch scope
+    /// cannot.
     completes: bool,
 }
 
@@ -8959,6 +8964,8 @@ mod tests {
         let saved = state.filter_sets_to_saved();
         let text = toml::to_string_pretty(&crate::config::NamedFilterSet {
             name: "Round trip".to_string(),
+            scratch: false,
+            projects: None,
             sets: saved.clone(),
         })
         .expect("serializes");

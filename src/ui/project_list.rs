@@ -65,7 +65,15 @@ pub struct ProjectListView {
 }
 
 /// Renders the project list state into a UI-friendly snapshot.
-pub fn render_project_list(state: &ProjectListState) -> ProjectListView {
+///
+/// `bound_filter_set` is the named entry the panel is bound to, if any: the
+/// selection writes through to it, and `space` must not silently edit a file
+/// the screen does not name. The `Sets` sidebar says the same thing, but the
+/// sidebar is the thing that can be turned off and this cannot.
+pub fn render_project_list(
+    state: &ProjectListState,
+    bound_filter_set: Option<&str>,
+) -> ProjectListView {
     let rows = state
         .items()
         .iter()
@@ -80,7 +88,7 @@ pub fn render_project_list(state: &ProjectListState) -> ProjectListView {
 
     ProjectListView {
         title: "Projects".to_string(),
-        counts: counts(state),
+        counts: counts(state, bound_filter_set),
         message: message(state, rows.is_empty()),
         rows,
         search: search_line(state),
@@ -160,24 +168,30 @@ pub fn search_footer_line(search: &SearchLine, theme: &Theme) -> Line<'static> {
     ])
 }
 
-fn counts(state: &ProjectListState) -> Vec<Chip> {
-    if !matches!(state.status(), ProjectListStatus::Ready) || state.items().is_empty() {
-        return Vec::new();
+fn counts(state: &ProjectListState, bound_filter_set: Option<&str>) -> Vec<Chip> {
+    let mut chips = Vec::new();
+
+    if matches!(state.status(), ProjectListStatus::Ready) && !state.items().is_empty() {
+        chips.push(Chip::new(format!("{} shown", state.items().len())));
+
+        if state.selected_count() > 0 {
+            chips.push(Chip::toned(
+                format!("{} selected", state.selected_count()),
+                Tone::Accent,
+            ));
+        }
+        if state.hidden_count() > 0 {
+            chips.push(Chip::new(format!("{} hidden", state.hidden_count())));
+        }
+        if state.show_selected_only() {
+            chips.push(Chip::toned("selected only", Tone::Warn));
+        }
     }
 
-    let mut chips = vec![Chip::new(format!("{} shown", state.items().len()))];
-
-    if state.selected_count() > 0 {
-        chips.push(Chip::toned(
-            format!("{} selected", state.selected_count()),
-            Tone::Accent,
-        ));
-    }
-    if state.hidden_count() > 0 {
-        chips.push(Chip::new(format!("{} hidden", state.hidden_count())));
-    }
-    if state.show_selected_only() {
-        chips.push(Chip::toned("selected only", Tone::Warn));
+    // Last, and shown whatever the list is doing: which entry the selection
+    // belongs to is true of an empty list and a loading one too.
+    if let Some(name) = bound_filter_set {
+        chips.push(Chip::toned(name.to_string(), Tone::Info));
     }
 
     chips
@@ -254,7 +268,7 @@ mod tests {
             Project::new("2", "Backlog", false),
         ]);
 
-        let view = render_project_list(&state);
+        let view = render_project_list(&state, None);
 
         assert_eq!(view.title, "Projects");
         assert_eq!(view.rows.len(), 2);
@@ -273,7 +287,7 @@ mod tests {
             Project::new("2", "Backlog", false),
         ]);
 
-        let counts = render_project_list(&state)
+        let counts = render_project_list(&state, None)
             .counts
             .iter()
             .map(|chip| chip.text.clone())
@@ -281,12 +295,48 @@ mod tests {
         assert_eq!(counts, vec!["2 shown".to_string()]);
 
         state.toggle_current_selection();
-        let counts = render_project_list(&state)
+        let counts = render_project_list(&state, None)
             .counts
             .iter()
             .map(|chip| chip.text.clone())
             .collect::<Vec<_>>();
         assert_eq!(counts, vec!["2 shown".to_string(), "1 selected".to_string()]);
+    }
+
+    /// `space` in the project view edits a file, so the border has to name
+    /// it: the sidebar says the same thing and the sidebar can be turned off.
+    #[test]
+    fn the_border_names_the_bound_set_and_nothing_when_the_panel_is_unnamed() {
+        let state = ProjectListState::from_projects(vec![Project::new("1", "Inbox", true)]);
+
+        let chips = |bound| {
+            render_project_list(&state, bound)
+                .counts
+                .iter()
+                .map(|chip| chip.text.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(chips(None), vec!["1 shown".to_string()]);
+        assert_eq!(
+            chips(Some("Sprint triage")),
+            vec!["1 shown".to_string(), "Sprint triage".to_string()],
+        );
+    }
+
+    /// The point of the chip is that it cannot be turned off, so it survives
+    /// a list that has nothing to count.
+    #[test]
+    fn the_bound_set_is_named_even_on_a_list_with_no_rows() {
+        let state = ProjectListState::new();
+
+        let chips = render_project_list(&state, Some("Sprint triage"))
+            .counts
+            .iter()
+            .map(|chip| chip.text.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(chips, vec!["Sprint triage".to_string()]);
     }
 
     #[test]
@@ -303,7 +353,7 @@ mod tests {
             }],
         );
 
-        let view = render_project_list(&state);
+        let view = render_project_list(&state, None);
 
         assert_eq!(view.rows.len(), 1);
         assert!(!view.rows[0].hidden);
@@ -321,7 +371,7 @@ mod tests {
         let mut state = ProjectListState::from_projects(vec![Project::new("1", "Inbox", true)]);
         state.set_assigned_to_me(Some(Project::assigned_to_me("user_1")));
 
-        let view = render_project_list(&state);
+        let view = render_project_list(&state, None);
 
         assert!(view.rows[0].pinned);
         assert_eq!(view.rows[0].name, "No Project (Assigned to Me)");
@@ -336,7 +386,7 @@ mod tests {
             "A project name that is far longer than the pane",
             true,
         )]);
-        let view = render_project_list(&state);
+        let view = render_project_list(&state, None);
 
         for width in [MARKER_WIDTH + 1, 20, 40, 100] {
             let line = project_row_line(&view.rows[0], &theme, width);
@@ -355,7 +405,7 @@ mod tests {
         state.push_search_char('z');
         state.push_search_char('z');
 
-        let view = render_project_list(&state);
+        let view = render_project_list(&state, None);
 
         assert!(view.rows.is_empty());
         let message = view.message.expect("a message explains the empty pane");
@@ -368,11 +418,11 @@ mod tests {
         let theme = Theme::default();
         let mut state = ProjectListState::from_projects(vec![Project::new("1", "Inbox", false)]);
 
-        assert!(render_project_list(&state).search.is_none());
+        assert!(render_project_list(&state, None).search.is_none());
 
         state.start_search();
         state.push_search_char('i');
-        let search = render_project_list(&state)
+        let search = render_project_list(&state, None)
             .search
             .expect("search footer is shown while searching");
 

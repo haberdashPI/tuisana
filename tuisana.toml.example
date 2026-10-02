@@ -1,8 +1,10 @@
 [header]
 type = "tuisana"
-# Version 2. A version-1 file is still readable: the first run against one
+# Version 3. Versions 1 and 2 are still readable: the first run against one
 # asks before rewriting it, and offers to back it up byte for byte first.
-version = 2.0
+# Version 3 moved the project selection out of `[view]` and onto the filter
+# sets, which is the only place one lives now.
+version = 3.0
 
 [auth]
 # Create a personal access token in Asana's developer console.
@@ -52,10 +54,9 @@ filter_sidebar = false
 # The recently-edited pane. On unless it was toggled off; it holds what this
 # session edited, so it starts empty either way.
 recent = true
-# The selected projects, by gid — not the same thing as `[[project]]` below,
-# which decides what is listed at all. A gid the workspace no longer returns
-# is dropped at startup.
-projects = []
+# There is deliberately no `projects` key here. The selection is part of a
+# `[[filter_set]]`, including an unnamed panel's — see `scratch` below. A
+# version-1 or -2 file's `projects` list is moved there on migration.
 
 # How much of a bulk edit goes through without being asked about.
 [edit]
@@ -421,6 +422,91 @@ command = "filter_set_load_8"
 [[bind]]
 key = "9"
 mode = "filter"
+command = "filter_set_load_9"
+
+# The same sixteen in the project view, because a named set carries the
+# project selection as well as the filters. The per-tab keys deliberately do
+# not come across: there are no fields and no tab strip there, and `a`, `h`,
+# `x`, and `e` already mean something in the project list.
+
+[[bind]]
+key = "b"
+mode = "project"
+command = "filter_sets_toggle"
+
+[[bind]]
+key = "w"
+mode = "project"
+command = "filter_set_save"
+
+[[bind]]
+key = "y"
+mode = "project"
+command = "filter_set_copy_to_new"
+
+[[bind]]
+key = "n"
+mode = "project"
+command = "filter_set_new"
+
+[[bind]]
+key = "d"
+mode = "project"
+command = "filter_set_delete"
+
+[[bind]]
+key = "<"
+mode = "project"
+command = "filter_sets_page_back"
+
+[[bind]]
+key = ">"
+mode = "project"
+command = "filter_sets_page_forward"
+
+[[bind]]
+key = "1"
+mode = "project"
+command = "filter_set_load_1"
+
+[[bind]]
+key = "2"
+mode = "project"
+command = "filter_set_load_2"
+
+[[bind]]
+key = "3"
+mode = "project"
+command = "filter_set_load_3"
+
+[[bind]]
+key = "4"
+mode = "project"
+command = "filter_set_load_4"
+
+[[bind]]
+key = "5"
+mode = "project"
+command = "filter_set_load_5"
+
+[[bind]]
+key = "6"
+mode = "project"
+command = "filter_set_load_6"
+
+[[bind]]
+key = "7"
+mode = "project"
+command = "filter_set_load_7"
+
+[[bind]]
+key = "8"
+mode = "project"
+command = "filter_set_load_8"
+
+[[bind]]
+key = "9"
+mode = "project"
 command = "filter_set_load_9"
 
 [[bind]]
@@ -826,9 +912,34 @@ hidden = false
 # projects, or custom:<Name>. Custom fields are keyed by name so an entry
 # survives a reload that brings different Asana ids, and a key matching no
 # loaded row is kept rather than dropped.
+#
+# `projects` is the selection the set is asked of, by gid, with `me` for the
+# assigned-to-me row — `me` rather than that row's gid because the gid is
+# whoever is logged in, and a shared file has to mean "my tasks" for each
+# reader. One list per entry, not per tab: tabs OR, and a fetch scope cannot.
+#
+# An entry that names no projects loads to nothing selected, which is the
+# state that asks you to pick some: the filter view cannot be opened until
+# something is. `w` always writes the key, so only a hand-written entry or one
+# migrated from an older file is silent. A gid the workspace no longer returns
+# is skipped on load and left on disk; changing the selection while the entry
+# is loaded is what removes it.
+#
+# `scratch = true` marks the app's own slot for an **unnamed** panel's
+# selection. It is written for you, hidden from the `Sets` sidebar, and never
+# addressed by a digit or found by name — it exists so that a selection made
+# without naming a set still survives a restart, now that `[view]` has nowhere
+# to keep it. It holds a selection and nothing else; an unnamed panel's
+# *filters* still exist nowhere but on screen. At most one entry may set it.
 
 [[filter_set]]
 name = "Overdue mine"
+projects = ["me", "1201"]
+
+[[filter_set]]
+name = "unnamed"
+scratch = true
+projects = ["1201"]
 
   [[filter_set.set]]
 

@@ -11,18 +11,18 @@
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ┌ Tasks ─────────────────────────────────────── 2 tasks · row 1 · columns 0/41 ┐
-│   Task                                     │ Assignee  │    Due │  Start │ St│
-│                                                                              │
-│▌Northwind BTX ┏ Discard filters? ━━━━━━━━━━━━━━━━━━━━━━━━━━━┓────────────────│
+│   Task        ┏ Discard filters? ━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ue │  Start │ St│
 │               ┃                                             ┃                │
-│   Study Kit De┃ This filter panel has no name, so the       ┃················│
-│▍  Ship release┃ 1 filter it is holding exists nowhere else. ┃ay │ Aug 10 │ ○ │
-│               ┃                                             ┃                │
-│   Shipment ···┃ y        discard them and load Blocked      ┃················│
-│   Close out pa┃ n / esc  keep what is on screen             ┃14 │  Oct 1 │ ○ │
+│▌Northwind BTX ┃ This filter panel has no name, so the       ┃────────────────│
+│               ┃ 1 filter it is holding exists nowhere else. ┃                │
+│   Study Kit De┃                                             ┃················│
+│▍  Ship release┃ Blocked selects its own 2 projects.         ┃ay │ Aug 10 │ ○ │
+│               ┃ u in the project view puts yours back.      ┃                │
+│   Shipment ···┃                                             ┃················│
+│   Close out pa┃ y        discard them and load Blocked      ┃14 │  Oct 1 │ ○ │
+│               ┃ n / esc  keep what is on screen             ┃                │
 │               ┃                                             ┃                │
 │               ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                │
-│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │

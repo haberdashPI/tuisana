@@ -1,10 +1,15 @@
 //! Rendering for the named-filter-set sidebar.
 //!
 //! The sidebar is a pane of its own — its own border, its own title — and it
-//! is **never focused**. `j` and `k` keep walking the filter fields, and the
-//! thin, unfocused border is what says so. Its access path is the digits, and
+//! is **never focused**. `j` and `k` keep walking the filter fields in the
+//! filter view and the project rows in the project view, and the thin,
+//! unfocused border is what says so. Its access path is the digits, and
 //! `1`-`9` address the rows as numbered here rather than entries as ordered on
 //! disk, which is why the window arithmetic lives in one place.
+//!
+//! It belongs to whichever pane the top window is holding rather than to the
+//! filter panel alone: a named set carries its project list, and the project
+//! pane is where that list is edited.
 //!
 //! One line per row, as in the filter panel, so the window stays a plain
 //! index.
@@ -34,19 +39,36 @@ pub const SIDEBAR_WIDTH: u16 = 24;
 /// this the sidebar is dropped entirely rather than squeezing them: at 80
 /// columns there is not room for both.
 pub const MIN_FILTER_WIDTH: u16 = 64;
+/// Narrowest project list worth keeping beside it.
+///
+/// A project list is one column of names, so it needs far less room than the
+/// filter panel's three: the marker gutter, a readable name, and the `hidden`
+/// chip. At eighty columns the sidebar therefore stays up in the project view
+/// and gives way in the filter view, which is correct rather than
+/// inconsistent — the two panes need different amounts of room to mean
+/// anything.
+pub const MIN_PROJECT_WIDTH: u16 = 32;
 /// Lines the sidebar spends before the numbered entries: the live panel's
-/// name, its counts, and the rule under them.
-const HEADER_LINES: u16 = 3;
+/// name, its filter counts, its project count, and the rule under them.
+///
+/// Four rather than three, and a fourth line rather than a longer third one:
+/// the sidebar is 24 columns, `2 sets · 3 active` already fills most of it,
+/// and the abbreviations that would fit all three counts on one line stop
+/// being words. It costs one numbered row on a short terminal.
+const HEADER_LINES: u16 = 4;
 
-/// Splits the filter pane's area into the sidebar and what is left.
-pub fn split_sidebar(area: Rect, visible: bool) -> (Option<Rect>, Rect) {
+/// Splits the top pane's area into the sidebar and what is left.
+///
+/// `min_pane_width` is the floor for whichever pane is being drawn beside it,
+/// which is not the same number in the two views.
+pub fn split_sidebar(area: Rect, visible: bool, min_pane_width: u16) -> (Option<Rect>, Rect) {
     if !visible {
         return (None, area);
     }
 
     // A sidebar wider than a third of the pane stops being a sidebar.
     let width = SIDEBAR_WIDTH.min(area.width / 3);
-    if width == 0 || area.width.saturating_sub(width) < MIN_FILTER_WIDTH {
+    if width == 0 || area.width.saturating_sub(width) < min_pane_width {
         return (None, area);
     }
 
@@ -72,6 +94,9 @@ pub struct CurrentSetRow {
     pub name: Option<String>,
     pub sets: usize,
     pub filters: usize,
+    /// How many projects the selection holds, which is the other half of the
+    /// question the panel is asking.
+    pub projects: usize,
 }
 
 /// One saved entry in the visible window.
@@ -116,6 +141,7 @@ pub struct FilterSetsView {
 pub fn render_filter_sets(
     state: &TaskState,
     saved: &[NamedFilterSet],
+    selected_projects: usize,
 ) -> Option<FilterSetsView> {
     if !state.filter_sets_sidebar_visible() {
         return None;
@@ -153,6 +179,7 @@ pub fn render_filter_sets(
             name: loaded.map(str::to_string),
             sets: state.filter_set_position().1,
             filters: state.filter_set_counts().iter().sum(),
+            projects: selected_projects,
         },
         rows,
         counts: page
@@ -166,9 +193,17 @@ pub fn render_filter_sets(
 
 /// The saved names in the order the sidebar lists them, which is also the
 /// order the digits address.
+///
+/// The scratch entry is not one of them: it is the app's own slot for an
+/// unnamed panel's selection, and a row for it would be a row whose digit
+/// loaded something the user never saved. `Config::sorted_filter_sets`, which
+/// is what the digits resolve against, leaves it out for the same reason —
+/// and the two lists have to agree or a digit loads a different entry than
+/// the one it is drawn beside.
 fn sorted_names(saved: &[NamedFilterSet]) -> Vec<String> {
     let mut names = saved
         .iter()
+        .filter(|entry| !entry.scratch)
         .map(|entry| entry.name.clone())
         .collect::<Vec<_>>();
     names.sort_by_key(|name| name.to_lowercase());
@@ -209,21 +244,40 @@ pub fn prompt_line(state: &TaskState) -> Option<PromptLine> {
 }
 
 /// The confirmation the panel is waiting on, if it is waiting on one.
-pub fn confirm_view(state: &TaskState) -> Option<ConfirmView> {
+pub fn confirm_view(state: &TaskState, saved: &[NamedFilterSet]) -> Option<ConfirmView> {
     match state.filter_set_prompt()? {
         SidebarPrompt::Save { .. } => None,
         SidebarPrompt::ConfirmLoad { name } => {
             let filters = state.active_filter_count_across_sets();
+            let mut body = vec![
+                "This filter panel has no name, so the".to_string(),
+                format!(
+                    "{filters} filter{} it is holding {} nowhere else.",
+                    if filters == 1 { "" } else { "s" },
+                    if filters == 1 { "exists" } else { "exist" },
+                ),
+            ];
+            // The filters are what the question is about; the selection is
+            // what else is about to move, and it is recoverable. Said for
+            // every entry, because since version 3 every entry speaks for
+            // the selection — an entry that names none loads to none.
+            if let Some(entry) = saved
+                .iter()
+                .find(|entry| !entry.scratch && entry.name.eq_ignore_ascii_case(name))
+            {
+                body.push(String::new());
+                body.push(match entry.projects().len() {
+                    0 => format!("{name} selects no projects at all."),
+                    count => format!(
+                        "{name} selects its own {count} {}.",
+                        plural("project", count),
+                    ),
+                });
+                body.push("u in the project view puts yours back.".to_string());
+            }
             Some(ConfirmView {
                 title: "Discard filters?".to_string(),
-                body: vec![
-                    "This filter panel has no name, so the".to_string(),
-                    format!(
-                        "{filters} filter{} it is holding {} nowhere else.",
-                        if filters == 1 { "" } else { "s" },
-                        if filters == 1 { "exists" } else { "exist" },
-                    ),
-                ],
+                body,
                 choices: vec![
                     ("y", format!("discard them and load {name}")),
                     ("n / esc", "keep what is on screen".to_string()),
@@ -278,6 +332,16 @@ pub fn filter_sets_lines(
             width,
             glyphs.ellipsis,
         ),
+        theme.muted,
+    )));
+    // `no projects` rather than `0 projects`: that line is then the
+    // explanation for an empty table, and is worth a sentence.
+    let projects = match view.current.projects {
+        0 => "no projects".to_string(),
+        count => format!("{count} {}", plural("project", count)),
+    };
+    lines.push(Line::from(Span::styled(
+        truncate_with_ellipsis(&format!("  {projects}"), width, glyphs.ellipsis),
         theme.muted,
     )));
     lines.push(Line::from(Span::styled(
@@ -370,7 +434,7 @@ fn plural(word: &str, count: usize) -> String {
 mod tests {
     use super::{
         confirm_view, filter_sets_lines, prompt_footer_line, render_filter_sets,
-        split_sidebar, MIN_FILTER_WIDTH, SIDEBAR_WIDTH,
+        split_sidebar, MIN_FILTER_WIDTH, MIN_PROJECT_WIDTH, SIDEBAR_WIDTH,
     };
     use ratatui::layout::Rect;
 
@@ -386,6 +450,8 @@ mod tests {
                 // Zero-padded so name order and creation order agree, which
                 // keeps the assertions about *which* row is which readable.
                 name: format!("set {index:02}"),
+                scratch: false,
+                projects: None,
                 sets: Vec::new(),
             })
             .collect()
@@ -404,7 +470,7 @@ mod tests {
         let saved = entries(14);
         state.filter_sets_page(1, saved.len());
 
-        let view = render_filter_sets(&state, &saved).expect("the sidebar is open");
+        let view = render_filter_sets(&state, &saved, 0).expect("the sidebar is open");
 
         assert_eq!(state.filter_sets_page_start(), 9);
         assert_eq!(view.rows.len(), 5, "only the tail is left");
@@ -419,7 +485,7 @@ mod tests {
         let state = sidebar_state(9);
         let saved = entries(4);
 
-        let view = render_filter_sets(&state, &saved).expect("the sidebar is open");
+        let view = render_filter_sets(&state, &saved, 0).expect("the sidebar is open");
 
         assert_eq!(view.rows.len(), 4);
         assert_eq!(view.page, None);
@@ -434,7 +500,7 @@ mod tests {
         state.filter_sets_page(1, saved.len());
         state.filter_sets_page(1, saved.len());
 
-        let view = render_filter_sets(&state, &saved).expect("the sidebar is open");
+        let view = render_filter_sets(&state, &saved, 0).expect("the sidebar is open");
         assert_eq!(view.page.as_deref(), Some("10-14 of 14"));
     }
 
@@ -447,7 +513,7 @@ mod tests {
 
         state.filter_sets_page(1, saved.len());
 
-        let view = render_filter_sets(&state, &saved).expect("the sidebar is open");
+        let view = render_filter_sets(&state, &saved, 0).expect("the sidebar is open");
         assert_eq!(state.filter_sets_page_start(), 3);
         assert_eq!(view.rows.len(), 3);
         assert_eq!(view.rows[0].name, "set 03");
@@ -460,7 +526,7 @@ mod tests {
         let saved = entries(3);
         state.filter_set_bind("set 01");
 
-        let view = render_filter_sets(&state, &saved).expect("the sidebar is open");
+        let view = render_filter_sets(&state, &saved, 0).expect("the sidebar is open");
 
         assert_eq!(view.current.name.as_deref(), Some("set 01"));
         assert_eq!(
@@ -475,7 +541,7 @@ mod tests {
     fn an_unbound_panel_reads_as_unnamed() {
         let state = sidebar_state(9);
 
-        let view = render_filter_sets(&state, &entries(2)).expect("the sidebar is open");
+        let view = render_filter_sets(&state, &entries(2), 0).expect("the sidebar is open");
         let lines = filter_sets_lines(&view, &Theme::default(), 24);
 
         assert_eq!(view.current.name, None);
@@ -484,21 +550,21 @@ mod tests {
 
     #[test]
     fn a_closed_sidebar_renders_nothing() {
-        assert!(render_filter_sets(&TaskState::new(), &entries(3)).is_none());
+        assert!(render_filter_sets(&TaskState::new(), &entries(3), 0).is_none());
     }
 
     #[test]
     fn every_sidebar_line_is_one_line_and_fits_the_pane() {
         let mut state = sidebar_state(9);
         state.filter_set_bind("set 00");
-        let view = render_filter_sets(&state, &entries(9)).expect("the sidebar is open");
+        let view = render_filter_sets(&state, &entries(9), 0).expect("the sidebar is open");
 
         let width = SIDEBAR_WIDTH as usize - 2;
         let lines = filter_sets_lines(&view, &Theme::default(), width);
 
-        // Three header lines and one line per entry: the window arithmetic
+        // Four header lines and one line per entry: the window arithmetic
         // stays a plain index only while that holds.
-        assert_eq!(lines.len(), 3 + 9);
+        assert_eq!(lines.len(), 4 + 9);
         for line in &lines {
             assert!(
                 visible_width(&line.to_string()) <= width,
@@ -513,15 +579,15 @@ mod tests {
         // is for; below the minimum the sidebar gives way instead.
         let pane = |width| Rect::new(0, 1, width, 11);
 
-        let (sidebar, panel) = split_sidebar(pane(60), true);
+        let (sidebar, panel) = split_sidebar(pane(60), true, MIN_FILTER_WIDTH);
         assert_eq!(sidebar, None, "no room for both at 60");
         assert_eq!(panel.width, 60, "and the panel keeps the whole pane");
 
-        let (sidebar, panel) = split_sidebar(pane(80), true);
+        let (sidebar, panel) = split_sidebar(pane(80), true, MIN_FILTER_WIDTH);
         assert_eq!(sidebar, None, "nor at 80");
         assert_eq!(panel.width, 80);
 
-        let (sidebar, panel) = split_sidebar(pane(120), true);
+        let (sidebar, panel) = split_sidebar(pane(120), true, MIN_FILTER_WIDTH);
         let sidebar = sidebar.expect("room for both at 120");
         assert_eq!(sidebar.width, SIDEBAR_WIDTH);
         assert_eq!(sidebar.x, 0);
@@ -530,11 +596,107 @@ mod tests {
         assert!(panel.width >= MIN_FILTER_WIDTH);
     }
 
+    /// A project list is one column of names, so it gets a lower floor than
+    /// the filter panel's three columns: at eighty columns the sidebar stays
+    /// up in one view and gives way in the other.
+    #[test]
+    fn the_sidebar_gives_way_at_a_narrower_width_in_the_project_view() {
+        let pane = |width| Rect::new(0, 1, width, 11);
+
+        let (filter, _) = split_sidebar(pane(80), true, MIN_FILTER_WIDTH);
+        let (project, rows) = split_sidebar(pane(80), true, MIN_PROJECT_WIDTH);
+
+        assert_eq!(filter, None, "the filter rows keep the whole pane at 80");
+        assert_eq!(
+            project.expect("room for both beside a project list").width,
+            SIDEBAR_WIDTH
+        );
+        assert!(rows.width >= MIN_PROJECT_WIDTH);
+
+        // Narrow enough and even a project list keeps the pane to itself.
+        // The third-of-the-pane rule bites first, so the sidebar is already
+        // shrinking by then rather than dropping at its full width.
+        assert_eq!(
+            split_sidebar(pane(50), true, MIN_PROJECT_WIDTH).0.map(|r| r.width),
+            Some(16)
+        );
+        assert_eq!(split_sidebar(pane(40), true, MIN_PROJECT_WIDTH).0, None);
+    }
+
+    #[test]
+    fn the_pinned_header_counts_the_projects_and_says_so_in_words_at_zero() {
+        let mut state = sidebar_state(9);
+        state.filter_set_bind("set 00");
+
+        let view = render_filter_sets(&state, &entries(2), 4).expect("the sidebar is open");
+        let lines = filter_sets_lines(&view, &Theme::default(), 22);
+        assert_eq!(view.current.projects, 4);
+        assert!(lines[2].to_string().contains("4 projects"), "{:?}", lines[2]);
+
+        let view = render_filter_sets(&state, &entries(2), 1).expect("the sidebar is open");
+        let lines = filter_sets_lines(&view, &Theme::default(), 22);
+        assert!(lines[2].to_string().contains("1 project"), "{:?}", lines[2]);
+
+        // That line is the explanation for an empty table at zero, so it is
+        // worth a sentence rather than a number.
+        let view = render_filter_sets(&state, &entries(2), 0).expect("the sidebar is open");
+        let lines = filter_sets_lines(&view, &Theme::default(), 22);
+        assert!(lines[2].to_string().contains("no projects"), "{:?}", lines[2]);
+    }
+
+    #[test]
+    fn the_load_confirmation_names_the_projects_the_entry_would_select() {
+        let mut state = sidebar_state(9);
+        state.filter_set_prompt_confirm_load("set 00");
+
+        let mut saved = entries(1);
+        saved[0].projects = Some(vec!["1201".to_string(), "me".to_string()]);
+        let text = confirm_view(&state, &saved)
+            .expect("a decision is waiting")
+            .body
+            .join(" ");
+
+        assert!(text.contains("set 00 selects its own 2 projects"), "{text}");
+        assert!(text.contains("u in the project view puts yours back"), "{text}");
+    }
+
+    /// An entry with no `projects` key — one migrated from an older file —
+    /// loads to nothing selected, so the window says that rather than staying
+    /// quiet about it.
+    #[test]
+    fn the_load_confirmation_says_an_entry_with_no_projects_key_selects_none() {
+        let mut state = sidebar_state(9);
+        state.filter_set_prompt_confirm_load("set 00");
+
+        let text = confirm_view(&state, &entries(1))
+            .expect("a decision is waiting")
+            .body
+            .join(" ");
+
+        assert!(text.contains("set 00 selects no projects at all"), "{text}");
+        assert!(text.contains("nowhere else"), "the filters are still named: {text}");
+    }
+
+    #[test]
+    fn an_entry_that_selects_nothing_says_that_rather_than_counting_to_zero() {
+        let mut state = sidebar_state(9);
+        state.filter_set_prompt_confirm_load("set 00");
+
+        let mut saved = entries(1);
+        saved[0].projects = Some(Vec::new());
+        let text = confirm_view(&state, &saved)
+            .expect("a decision is waiting")
+            .body
+            .join(" ");
+
+        assert!(text.contains("set 00 selects no projects at all"), "{text}");
+    }
+
     #[test]
     fn a_hidden_sidebar_leaves_the_pane_alone() {
         let area = Rect::new(0, 1, 200, 11);
 
-        assert_eq!(split_sidebar(area, false), (None, area));
+        assert_eq!(split_sidebar(area, false, MIN_FILTER_WIDTH), (None, area));
     }
 
     #[test]
@@ -544,7 +706,7 @@ mod tests {
         state.filter_set_prompt_save();
         state.filter_set_prompt_move_caret(-2);
 
-        let view = render_filter_sets(&state, &entries(1)).expect("the sidebar is open");
+        let view = render_filter_sets(&state, &entries(1), 0).expect("the sidebar is open");
         let prompt = view.prompt.as_ref().expect("the prompt is open");
         let theme = Theme::default();
         let rendered = prompt_footer_line(prompt, &theme, 60).to_string();
@@ -562,7 +724,7 @@ mod tests {
         state.filter_set_bind("Sprint triage");
         assert!(state.filter_set_prompt_delete());
 
-        let view = confirm_view(&state).expect("a decision is waiting");
+        let view = confirm_view(&state, &entries(1)).expect("a decision is waiting");
         let text = view.body.join(" ");
 
         assert_eq!(view.title, "Delete filter set?");
@@ -583,10 +745,10 @@ mod tests {
         state.filter_set_bind("Sprint triage");
         state.filter_set_prompt_delete();
 
-        let view = render_filter_sets(&state, &entries(1)).expect("the sidebar is open");
+        let view = render_filter_sets(&state, &entries(1), 0).expect("the sidebar is open");
 
         assert_eq!(view.prompt, None, "a confirmation is a modal, not a title");
-        assert!(confirm_view(&state).is_some());
+        assert!(confirm_view(&state, &entries(1)).is_some());
     }
 
     #[test]
@@ -595,8 +757,8 @@ mod tests {
         let mut state = sidebar_state(9);
         state.filter_set_prompt_save();
 
-        assert!(confirm_view(&state).is_none());
-        assert!(render_filter_sets(&state, &entries(1))
+        assert!(confirm_view(&state, &entries(1)).is_none());
+        assert!(render_filter_sets(&state, &entries(1), 0)
             .expect("the sidebar is open")
             .prompt
             .is_some());
@@ -609,7 +771,7 @@ mod tests {
         let mut state = sidebar_state(9);
         state.filter_set_prompt_save();
 
-        assert_eq!(split_sidebar(Rect::new(0, 1, 80, 11), true).0, None);
+        assert_eq!(split_sidebar(Rect::new(0, 1, 80, 11), true, MIN_FILTER_WIDTH).0, None);
         assert!(super::prompt_line(&state).is_some());
     }
 
@@ -618,7 +780,7 @@ mod tests {
         let mut state = sidebar_state(9);
         state.filter_set_prompt_confirm_load("Sprint triage");
 
-        let view = confirm_view(&state).expect("a decision is waiting");
+        let view = confirm_view(&state, &entries(1)).expect("a decision is waiting");
 
         assert_eq!(view.title, "Discard filters?");
         assert!(
@@ -636,7 +798,7 @@ mod tests {
         // any length, so something has to give.
         let mut state = sidebar_state(9);
         state.set_filter_sets_notice("could not save: permission denied (os error 13)");
-        let view = render_filter_sets(&state, &entries(1)).expect("the sidebar is open");
+        let view = render_filter_sets(&state, &entries(1), 0).expect("the sidebar is open");
         let theme = Theme::default();
 
         let width = SIDEBAR_WIDTH as usize - 2;
@@ -653,7 +815,7 @@ mod tests {
         let mut state = sidebar_state(9);
         state.set_filter_sets_notice("could not save: denied");
 
-        let view = render_filter_sets(&state, &entries(1)).expect("the sidebar is open");
+        let view = render_filter_sets(&state, &entries(1), 0).expect("the sidebar is open");
         let prompt = view.prompt.as_ref().expect("the report has somewhere to go");
 
         assert!(prompt.error);

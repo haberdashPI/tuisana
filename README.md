@@ -29,25 +29,37 @@ Start from [`tuisana.toml.example`](./tuisana.toml.example) and copy it to `tuis
 Leave these unchanged:
 
 - `header.type = "tuisana"`
-- `header.version = 2.0`
+- `header.version = 3.0`
 
 These values identify the config format and are validated by the app.
 
-**Version 1 files are still readable, and are migrated once.** Version 2
-renamed six command names and one mode name, and made shift+letter a key
-namespace of its own — so a version-1 binding of `key = "G"`, which used to
-mean `g`, would silently become a different key. Rather than let that happen
-quietly, the first run against a version-1 config asks before touching it:
+**Versions 1 and 2 are still readable, and are migrated once.** There are two
+changes, and a file gets whichever ones it is behind on:
+
+- **Version 2** renamed six command names and one mode name, and made
+  shift+letter a key namespace of its own — so a version-1 binding of
+  `key = "G"`, which used to mean `g`, would silently become a different key.
+- **Version 3** moved the project selection out of `[view]` and onto the
+  filter sets. A bound entry adopts the list that was sitting beside it; with
+  nothing bound it goes to the reserved `scratch` entry, so the projects you
+  were working with come back either way.
+
+Rather than let either happen quietly, the first run against an older config
+asks before touching it:
 
 ```
 ┌ Config format changed ──────────────────────────┐
 │                                                 │
-│ tuisana.toml is in the version 1 format. Six    │
-│ command names and one mode name have been       │
-│ renamed, and uppercase letters are now distinct │
-│ keys.                                           │
+│ tuisana.toml is in the version 1 format.        │
+│ Six command names and one mode name have        │
+│ been renamed, and uppercase letters are now     │
+│ distinct keys.                                  │
 │                                                 │
-│ tuisana will rewrite it in the version 2 format.│
+│ The selected projects move from [view] onto     │
+│ the filter sets, which is where a selection     │
+│ now lives.                                      │
+│                                                 │
+│ tuisana will rewrite it in the version 3 format.│
 │ A backup would go to tuisana.backup.toml.       │
 │                                                 │
 │ y        back it up first, then migrate         │
@@ -56,6 +68,9 @@ quietly, the first run against a version-1 config asks before touching it:
 │                                                 │
 └─────────────────────────────────────────────────┘
 ```
+
+A version-2 file sees only the second paragraph: the window describes the
+changes that are actually going to happen to the file in front of it.
 
 - `y` copies the file byte for byte first, so the backup keeps your comments,
   key order, and formatting — none of which survive being re-serialized. An
@@ -486,6 +501,11 @@ mode is the other way to negate it.
 
 The top window is shared between the project list and the filter view. When the task panel is visible, the screen is split so the top window keeps the project or filter view and the task table gets the remaining space.
 
+A session starts in the project list, and **`space` is what puts a project in
+play**: the task table is drawn from the selection alone, and the filter view
+cannot be opened until something is selected. A project merely under the
+cursor is not loaded.
+
 **Global shortcuts** (active in all modes unless overridden):
 
 - `?` to open or close the help overlay for the current mode
@@ -513,6 +533,11 @@ The top window is shared between the project list and the filter view. When the 
 - `!` to select all starred visible projects
 - `@` to select all visible non-hidden projects
 - `o` to filter to selected projects only
+- `b` to show or hide the named-set sidebar
+- `1`-`9` to load a named set, `<`/`>` to page the list
+- `w` to save the panel under a name, `y` to copy it to a new unnamed one,
+  `d` to delete it
+- `n` to start a completely fresh panel
 - `/` to start search entry
 - `ctrl-z`, `ctrl-s`, `ctrl-r` to switch search mode (fuzzy / substring / regex).
   Fuzzy is on `ctrl-z` rather than `ctrl-f` so that `ctrl-b`/`ctrl-f` can move the
@@ -558,6 +583,20 @@ Several picked people are ORed, the row's negation means "none of these", and
 personal to whoever loads it. Everything else is unchanged: the picked names
 are the row's value, and the saved schema gains only `match = "list"`.
 
+The `Projects` filter row is not the selection and does not become it. They
+answer different questions:
+
+| control | question | when it acts |
+| --- | --- | --- |
+| the project selection | which projects are *asked* | before the fetch |
+| the `Projects` filter row | which of the loaded tasks' memberships to keep | after it |
+
+The row earns its keep on a task in several projects: with four projects
+selected, `Projects: platform` reads "of everything I am looking at, the
+platform work", and it does that *per tab*, so one tab can narrow where
+another does not. The selection cannot — it is one list, and narrowing it
+would unload the tasks the other tab wants.
+
 **Filter sets.** Filling in more than one field *narrows*: a `Due` of
 `..2026-09-01` and an `Assignee` of `alex` shows Alex's tasks due before
 September. What that cannot express is a union, so the panel holds one or more
@@ -586,24 +625,44 @@ digit. A **named filter set** is the whole panel — every tab, each tab's
 negation, and each field's query, match mode, require-empty flag, and negation
 — saved under one name.
 
-It is deliberately *not* the sort, the grouping, the completed filter, subtask
-visibility, or the project selection. Those are the other half of the screen:
-a saved filter is a question about tasks, not about which projects it is asked
-of.
+It also carries **the project selection**: the projects are the first clause
+of the question, and `Assignee: alex` means nothing until something says
+*where*. Saving the second clause and not the first produces a set that is
+only half a set — load `Sprint triage` with yesterday's projects still
+selected and you get a confident, precisely filtered, wrong table.
 
-- `b` opens a `Sets` pane down the left of the filter view. It is **never
-  focused** — `j` and `k` keep walking the filter fields, and its thin border
-  is what says so. On a narrow terminal it gives way rather than squeezing the
-  filter rows.
-- Pinned at the top is the live panel: its name, or `unnamed`, with how many
-  sets and how many active filters it holds. Below the rule are the saved
-  entries in name order, numbered from the top of the visible window.
+It is deliberately *not* the sort, the grouping, the completed filter, or
+subtask visibility. Those are how you are *reading* the answer rather than
+what was asked. Nor is project visibility: `*` and `h` keep writing
+`[[project]]`, which is one record per project for the whole app. A star is a
+fact about a project; a selection is a fact about a question. `o` (selected
+only) and `v` (the hidden group) stay out for the same reason — both are ways
+of looking at the project *list*.
+
+- `b` opens a `Sets` pane down the left of the top window, in the project view
+  as well as the filter view, from the one toggle. Switching between `p` and
+  `f` does not open or close it. It is **never focused** — `j` and `k` keep
+  walking the filter fields or the project rows, and its thin border is what
+  says so. On a narrow terminal it gives way rather than squeezing the pane
+  beside it, and at a narrower width in the project view than in the filter
+  view: a project list is one column of names, where the filter panel has
+  three.
+- Pinned at the top is the live panel: its name, or `unnamed`, then how many
+  sets and how many active filters it holds, then how many projects are
+  selected — `no projects` when the answer is none, since that line is then
+  the explanation for an empty table. Below the rule are the saved entries in
+  name order, numbered from the top of the visible window.
 - `1`-`9` load the entry at that position. `<` and `>` page the window when
   there are more entries than fit.
 - Loading over an **unnamed panel that is filtering** asks first, in a
   centered window that says what goes and what stays: `y` goes through with
   it, `n` or `esc` backs out. A bound panel is already on disk, and an empty
-  one has nothing to lose, so neither is worth a keypress to confirm.
+  one has nothing to lose, so neither is worth a keypress to confirm. The
+  test is the filters alone — a selection is nearly always there, and making
+  the common opening move ask a question every time would spend the prompt's
+  credibility on the case that is never a mistake. The window does name the
+  projects the entry will select, and points at `u`, when the entry carries
+  them.
 - `w` opens a one-line prompt on the sidebar's border, pre-filled with the
   loaded name. `enter` commits, `esc` cancels. An existing name is
   overwritten; a new one is created. A blank name is refused. Naming a thing
@@ -612,9 +671,51 @@ of.
 - `d` deletes the **loaded** entry after the same confirmation, and unbinds
   the panel. It is refused when nothing is loaded.
 - `n` throws the panel away and starts from nothing: one empty set, every row
-  back to the match mode it was built with, and nothing bound. Unlike `a`,
-  which keeps the match modes so a second set inherits them, this is a blank
-  slate. The entry you were on keeps whatever was last written to it.
+  back to the match mode it was built with, nothing bound, and **nothing
+  selected** — the projects are part of what there is to start from. It
+  therefore leaves you in the project view, where the next set's projects get
+  picked. Unlike `a`, which keeps the match modes so a second set inherits
+  them, this is a blank slate. `u` puts the selection straight back. The entry
+  you were on keeps whatever was last written to it.
+
+**All seven keys work in the project view too** — `b`, `1`-`9`, `<`/`>`, `w`,
+`y`, `n`, and `d` — and a digit pressed there leaves the keys there. What does
+not come across is the per-tab half of the panel: `a` and `x` add and remove a
+tab, `h` and `l` move between them, `~` negates one, and `e`, `s`, and `!` act
+on a filter row. Those are about fields, and there are no fields and no tab
+strip in the project view.
+
+**Nothing is in play until you select it.** A project under the cursor is not
+loaded; the task table is drawn from the selection and nothing else. With
+nothing selected the **filter view cannot be opened** — `f` says so and leaves
+you in the project list — because a filter panel with no projects is a
+question with no subject, and its rows are built from the loaded projects'
+custom fields. That is the state a fresh config, a migrated one, and `n` all
+start from, and picking a project is what leaves it.
+
+**Loading a set moves the selection.** A digit replaces the panel, replaces
+the selection, and starts the fetch the new selection implies — or marks the
+table out of date when it is closed, exactly as changing the selection by hand
+does. An entry that names no projects loads to nothing selected and leaves the
+keys in the project view.
+
+The load pushes the selection history, so `u` undoes it and `ctrl-y` redoes
+it, like every other selection change you made this session. `u` undoes the
+selection *alone*: it does not unload the set, and the entry then has the
+undone selection written back to it, because a bound entry is a file you have
+open and `u` is an edit like any other. The two halves have different undo
+stories because only one of them ever had an undo.
+
+**The selection writes through as well** — and it does so whether or not the
+panel has a name. `space` on a project while `Sprint triage` is loaded edits
+`Sprint triage`, on disk, the same way typing into a filter field does; so do
+`a`, `!`, `@`, `i`, `c`, `u`, and `ctrl-y`. With nothing bound, the same
+change goes to the reserved `scratch` entry instead, which is what brings your
+projects back next launch without your having named anything.
+The project pane's border names the bound entry for exactly this reason: the
+sidebar says the same thing, but the sidebar is the thing that can be turned
+off. One write per settled burst, and it moves `[[filter_set]]` and `[view]`
+together.
 
 **Loading binds the panel to the name.** From then on the entry is a live view
 rather than a snapshot: type into a field, add a tab, negate a set, and the
@@ -1142,6 +1243,7 @@ entry stays short.
 ```toml
 [[filter_set]]
 name = "Sprint triage"
+projects = ["me", "1201", "1202"]
 
   [[filter_set.set]]
 
@@ -1165,6 +1267,28 @@ name = "Sprint triage"
 - `name` must be non-empty, and no two entries may have names that differ only
   in case: the sidebar lists them by number, and two rows reading the same is
   a trap.
+- `projects` is the selection the set is asked of, by GID, with `me` for the
+  assigned-to-me row — `me` rather than that row's GID because the GID is
+  whoever is logged in, and a shared file has to mean "my tasks" for each
+  reader. One list per entry rather than one per tab: tabs OR, and a fetch
+  scope cannot.
+- An entry that names no projects — one hand-written without the key, or one
+  migrated from an older file — loads to **nothing selected**, which is the
+  state that asks you to pick some. `w` always writes the key, so only those
+  two cases are silent. A project named twice is collapsed rather than
+  refused.
+- `scratch = true` marks the app's own slot for an **unnamed** panel's
+  selection. It is written for you, kept out of the `Sets` sidebar, and never
+  addressed by a digit or found by name: it exists so a selection made without
+  naming a set survives a restart, now that `[view]` has nowhere to keep one.
+  It holds a selection and nothing else — an unnamed panel's *filters* still
+  exist nowhere but on screen, which is what the discard confirmation is
+  about. At most one entry may set it.
+- A GID the workspace no longer returns is skipped when the set is applied and
+  **kept on disk**: applying a set is not consent to rewrite it, and a project
+  you lost access to for a week should not cost you the entry. It goes when
+  you next change the selection while the entry is loaded, which is a
+  deliberate edit of that entry.
 - Each `[[filter_set.set]]` is one tab. Fields AND within a tab; tabs OR
   between them. `negated` inverts the whole tab, after its fields have ANDed.
 - `key` is the panel's own row key: `title`, `assignee`, `due`, `start`,
@@ -1192,13 +1316,18 @@ tasks = true                   # the task table is open
 filters = true                 # the top pane holds the filter panel
 filter_sidebar = false         # the `Sets` sidebar beside it
 recent = true                  # the recently-edited pane is switched on
-projects = ["123", "456"]      # the selected projects, by GID
 ```
 
-- `projects` is the selection, not the visibility — `[[project]]` below is
-  what decides which projects are listed at all. A GID the workspace no longer
-  returns is dropped at startup, the same way a reload drops it from the live
-  selection. Restoring a selection with `tasks = true` starts the fetch for it.
+- **There is no `projects` key.** The selection lives on a `[[filter_set]]`
+  and nowhere else: the entry `filter_set` names, or — when it names none —
+  the `scratch = true` entry an unnamed panel writes to. A version-1 or -2
+  file's `projects` list is moved onto one of those two on migration, so
+  nothing is lost in the upgrade.
+- A `filter_set` naming an entry that has since been deleted by hand restores
+  **nothing selected** rather than falling back to the scratch slot: that
+  selection belongs to a different panel, and inheriting it would quietly ask
+  a saved question of projects the saved question never named.
+- Restoring a selection with `tasks = true` starts the fetch for it.
 - `filter_set` must name a `[[filter_set]]` entry. The panel comes back
   **bound** to it, so editing a field still writes through. An unnamed panel
   records nothing here, and a name whose entry has been deleted is ignored.

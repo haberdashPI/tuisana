@@ -13,7 +13,7 @@ use tuisana::{
     },
     config::Config,
     domain::Project,
-    ui::runtime::{run_session, InputEvent, KeySource},
+    ui::runtime::{run_session, InputEvent, KeySource, RecordingHost},
 };
 
 struct ScriptedSource {
@@ -83,6 +83,16 @@ fn wait_for_task_data<C: AsanaClient + Clone + Send + 'static>(app: &mut App<C>)
     app.poll_task_data();
 }
 
+
+/// Selects the project the fixtures live in.
+///
+/// The task table is drawn from the selection and nothing else — a project
+/// merely under the cursor is not in play — so a test that wants rows has to
+/// pick one first.
+fn select_fixture_project(app: &mut App<FakeAsanaClient>) {
+    app.projects.restore_selection(&["project-1".to_string()]);
+}
+
 #[test]
 fn pressing_m_displays_the_task_view() {
     let client = FakeAsanaClient::new(vec![Project::new("project-1", "Inbox", true)])
@@ -109,6 +119,7 @@ fn pressing_m_displays_the_task_view() {
 
     let mut app = App::new(Config::default(), client);
     app.load_projects().expect("projects load");
+    select_fixture_project(&mut app);
 
     let mut source = ScriptedSource {
         keys: vec![
@@ -121,7 +132,8 @@ fn pressing_m_displays_the_task_view() {
     let backend = TestBackend::new(80, 20);
     let mut terminal = Terminal::new(backend).expect("terminal");
 
-    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
     wait_for_task_data(&mut app);
 
     assert!(app.tasks.visible());
@@ -187,6 +199,7 @@ fn task_view_scrolls_to_keep_the_selected_row_visible() {
 
     let mut app = App::new(Config::default(), client);
     app.load_projects().expect("projects load");
+    select_fixture_project(&mut app);
 
     let mut source = ScriptedSource {
         keys: vec![
@@ -202,7 +215,8 @@ fn task_view_scrolls_to_keep_the_selected_row_visible() {
     let backend = TestBackend::new(80, 18);
     let mut terminal = Terminal::new(backend).expect("terminal");
 
-    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
 
     assert_eq!(app.tasks.selected_index(), Some(8));
     assert!(app.tasks.vertical_scroll() > 0);
@@ -258,6 +272,7 @@ fn changing_the_completed_filter_updates_the_visible_task_rows() {
 
     let mut app = App::new(Config::default(), client);
     app.load_projects().expect("projects load");
+    select_fixture_project(&mut app);
 
     let mut source = ScriptedSource {
         keys: vec![
@@ -270,7 +285,8 @@ fn changing_the_completed_filter_updates_the_visible_task_rows() {
     let backend = TestBackend::new(80, 20);
     let mut terminal = Terminal::new(backend).expect("terminal");
 
-    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
     wait_for_task_data(&mut app);
 
     assert_eq!(app.tasks.table().task_count(), 1);
@@ -329,7 +345,8 @@ fn picking_a_date_on_the_calendar_filters_the_task_table() {
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).expect("terminal");
 
-    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
     wait_for_task_data(&mut app);
 
     assert_eq!(app.mode(), tuisana::config::Mode::Filter, "committing leaves the picker");
@@ -349,7 +366,8 @@ fn picking_a_date_on_the_calendar_filters_the_task_table() {
         ],
         wait_before_next: false,
     };
-    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
     wait_for_task_data(&mut app);
 
     assert_eq!(app.tasks.table().task_count(), 1);
@@ -414,7 +432,8 @@ fn the_calendar_edits_the_filter_field_directly() {
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).expect("terminal");
 
-    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
     wait_for_task_data(&mut app);
 
     assert!(app.tasks.calendar_open());
@@ -461,7 +480,8 @@ fn the_calendar_edits_the_filter_field_directly() {
         ],
         wait_before_next: false,
     };
-    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
     wait_for_task_data(&mut app);
 
     assert!(!app.tasks.calendar_open(), "esc closes the picker");
@@ -511,7 +531,8 @@ fn flipping_months_in_the_calendar_lands_on_the_month_edges() {
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).expect("terminal");
 
-    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
     wait_for_task_data(&mut app);
 
     // Started empty on June 2026: `j` -> Jul 1, `k` -> Jun 30, `k` -> May 31.
@@ -567,7 +588,8 @@ fn hiding_the_calendar_grid_lets_a_day_name_be_typed() {
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).expect("terminal");
 
-    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
     wait_for_task_data(&mut app);
 
     fn due(app: &App<FakeAsanaClient>) -> String {
@@ -601,7 +623,8 @@ fn hiding_the_calendar_grid_lets_a_day_name_be_typed() {
         ],
         wait_before_next: false,
     };
-    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
     wait_for_task_data(&mut app);
 
     assert!(app.tasks.calendar_grid_visible());
@@ -652,7 +675,8 @@ fn the_calendar_grid_only_takes_the_characters_of_a_written_date() {
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).expect("terminal");
 
-    run_session(&mut app, &mut source, &mut terminal).expect("session runs");
+    run_session(&mut app, &mut source, &mut terminal, &mut RecordingHost::default())
+            .expect("session runs");
     wait_for_task_data(&mut app);
 
     let due = app
@@ -731,7 +755,8 @@ fn press<C: AsanaClient + Clone + Send + 'static>(
         keys,
         wait_before_next: false,
     };
-    run_session(app, &mut source, terminal).expect("session runs");
+    run_session(app, &mut source, terminal, &mut RecordingHost::default())
+        .expect("session runs");
     wait_for_task_data(app);
 }
 
@@ -845,7 +870,7 @@ fn named_sets_app() -> (App<FakeAsanaClient>, Terminal<TestBackend>, std::path::
         .expect("clock")
         .as_nanos();
     let path = std::env::temp_dir().join(format!("tuisana-named-sets-{unique}.toml"));
-    std::fs::write(&path, "[header]\ntype = \"tuisana\"\nversion = 2.0\n")
+    std::fs::write(&path, "[header]\ntype = \"tuisana\"\nversion = 3.0\n")
         .expect("write config");
 
     let mut app = App::new(
@@ -857,10 +882,15 @@ fn named_sets_app() -> (App<FakeAsanaClient>, Terminal<TestBackend>, std::path::
     (app, terminal, path)
 }
 
+/// The entries a user saved: every `[[filter_set]]` but the app's own scratch
+/// slot, which holds an unnamed panel's selection rather than a saved panel.
 fn saved_sets(path: &std::path::Path) -> Vec<tuisana::config::NamedFilterSet> {
     Config::from_toml_str(&std::fs::read_to_string(path).expect("config exists"))
         .expect("it reparses")
         .filter_sets
+        .into_iter()
+        .filter(|entry| !entry.scratch)
+        .collect()
 }
 
 #[test]

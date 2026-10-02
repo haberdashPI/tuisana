@@ -8,16 +8,18 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
-┃                                                                              ┃
-┃                                                                              ┃
 ┃             ┏ Config format changed ━━━━━━━━━━━━━━━━━━━━━━━━━━━┓             ┃
 ┃             ┃                                                  ┃             ┃
-┃             ┃ tuisana.toml is in the version 1 format. Six     ┃             ┃
-┃             ┃ command names and one mode name have been        ┃             ┃
-┃             ┃ renamed, and uppercase letters are now distinct  ┃             ┃
-┃             ┃ keys.                                            ┃             ┃
+┃             ┃ tuisana.toml is in the version 1 format.         ┃             ┃
+┃             ┃ Six command names and one mode name have         ┃             ┃
+┃             ┃ been renamed, and uppercase letters are now      ┃             ┃
+┃             ┃ distinct keys.                                   ┃             ┃
 ┃             ┃                                                  ┃             ┃
-┃             ┃ tuisana will rewrite it in the version 2 format. ┃             ┃
+┃             ┃ The selected projects move from [view] onto      ┃             ┃
+┃             ┃ the filter sets, which is where a selection      ┃             ┃
+┃             ┃ now lives.                                       ┃             ┃
+┃             ┃                                                  ┃             ┃
+┃             ┃ tuisana will rewrite it in the version 3 format. ┃             ┃
 ┃             ┃ A backup would go to tuisana.backup.toml.        ┃             ┃
 ┃             ┃                                                  ┃             ┃
 ┃             ┃ y        back it up first, then migrate          ┃             ┃
@@ -25,8 +27,6 @@
 ┃             ┃ q / esc  quit and change nothing                 ┃             ┃
 ┃             ┃                                                  ┃             ┃
 ┃             ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛             ┃
-┃                                                                              ┃
-┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃

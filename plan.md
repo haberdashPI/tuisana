@@ -130,6 +130,7 @@ along the way.
 | 14 | [Edit task fields](plan/14-edit-tasks.md) | ✓ |
 | 14.5 | [Assign people and projects](plan/14.5-assign-people-and-projects.md) | ✓ |
 | 15 | [Create and delete tasks and sections](plan/15-create-and-delete-tasks-and-sections.md) | ✓ |
+| 15.5 | [A filter set carries its projects](plan/15.5-a-filter-set-carries-its-projects.md) | ✓ |
 | 16 | [Hardening and polish](plan/16-hardening-and-polish.md) |  |
 
 ## Testing Strategy
