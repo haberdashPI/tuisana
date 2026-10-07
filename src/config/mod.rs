@@ -1300,7 +1300,7 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("ctrl-f", Mode::FilterEdit, "filter_caret_right"),
         // The emacs motions, shared with task-edit mode so a text field
         // behaves the same wherever it is. `alt-` needs the terminal to send
-        // Option as a modifier; see the README.
+        // Option as a modifier; see `docs/config/keybindings.md`.
         // The same two keys in the panel, where the `list` match mode runs
         // the same completion editor over the same people.
         Bind::with_mode("tab", Mode::FilterEdit, "complete_next_candidate"),

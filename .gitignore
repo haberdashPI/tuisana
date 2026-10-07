@@ -10,3 +10,8 @@ tuisana.backup.*.toml
 *.swp
 *.swo
 *~
+
+# Docs site (VitePress)
+node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
