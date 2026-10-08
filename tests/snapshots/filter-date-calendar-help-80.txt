@@ -12,9 +12,9 @@
 ┃h/l         day                            exact       YYYY-MM-DD or MM-DD    ┃
 ┃k/j         month                          day         today, tomorrow, yester┃
 ┃t           jump to today                  weekday     mon .. sun             ┃
-┃⏎           pick and close                 week        this / last / next week┃
-┃d           clear the field                month       this / last / next mont┃
-┃esc         close                          year        this / last / next year┃
+┃⏎           pick and close                 week        [this/last/next] week  ┃
+┃d           clear the field                month       [this/last/next] month ┃
+┃esc         close                          year        [this/last/next] year  ┃
 ┃;           show/hide the grid             offset      today-5, next month+2  ┃
 ┃            keys above need the grid       range       start..end             ┃
 ┃            hiding it keys the names       open range  start.. or ..end       ┃

@@ -16,9 +16,9 @@
 │                                                                       ┃                                                      ┃                                                                       │
 │                                                                       ┃today  tomorrow  yesterday  one day                   ┃                                                                       │
 │                                                                       ┃mon  friday                 a day of this week        ┃                                                                       │
-│                                                                       ┃this/last/next week         Sunday to Saturday        ┃                                                                       │
-│                                                                       ┃this/last/next month        the whole month           ┃                                                                       │
-│                                                                       ┃this/last/next year         the whole year            ┃                                                                       │
+│                                                                       ┃[this/last/next] week       Sunday to Saturday        ┃                                                                       │
+│                                                                       ┃[this/last/next] month      the whole month           ┃                                                                       │
+│                                                                       ┃[this/last/next] year       the whole year            ┃                                                                       │
 │                                                                       ┃2026-09-15  09-15           a date, the year optional ┃                                                                       │
 │                                                                       ┃today+5  this month-1       an offset, in its own unit┃                                                                       │
 │                                                                       ┃today..fri  ..2026-12-31    a range, either end open  ┃                                                                       │

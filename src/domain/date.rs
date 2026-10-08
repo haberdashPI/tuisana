@@ -351,7 +351,9 @@ const MAX_OFFSET: i64 = 10_000;
 /// `thismonth` are the same thing.
 ///
 /// The names are: `today`, `tomorrow`, `yesterday`, any weekday of the current
-/// week, and `this`/`last`/`next` followed by `week`, `month`, or `year`.
+/// week, and `week`, `month`, or `year` on their own or behind
+/// `this`/`last`/`next`. A bare unit is the one we are in, so `year` and
+/// `this year` are the same span.
 pub fn parse_span(token: &str, today: CivilDate) -> Option<Option<DateSpan>> {
     let token = token
         .chars()
@@ -396,13 +398,19 @@ fn base_span(token: &str, today: CivilDate) -> Option<DateSpan> {
         "today" => DateSpan::day(today),
         "tomorrow" => DateSpan::day(today.add_days(1)),
         "yesterday" => DateSpan::day(today.add_days(-1)),
-        "thisweek" => DateSpan::week(today),
+        // A unit on its own is the one we are in: `year` is `this year`. It
+        // earns its place at the ends of a range, where each side contributes
+        // its span's outer edge — `today..year` runs to December 31st and
+        // `year..today` from January 1st, which is the pair of questions
+        // "what is left of this year" and "what has it been so far", and
+        // neither has a shorter spelling.
+        "week" | "thisweek" => DateSpan::week(today),
         "lastweek" => DateSpan::week(today.add_days(-7)),
         "nextweek" => DateSpan::week(today.add_days(7)),
-        "thismonth" => DateSpan::month(today),
+        "month" | "thismonth" => DateSpan::month(today),
         "lastmonth" => DateSpan::month(today.add_months(-1)),
         "nextmonth" => DateSpan::month(today.add_months(1)),
-        "thisyear" => DateSpan::year(today),
+        "year" | "thisyear" => DateSpan::year(today),
         "lastyear" => DateSpan::year(today.add_months(-12)),
         "nextyear" => DateSpan::year(today.add_months(12)),
         _ => {
@@ -831,6 +839,40 @@ mod tests {
 
         // The spelling is forgiving: case and the space are both noise.
         assert_eq!(span("ThisMonth"), span("this  month"));
+
+        // A unit on its own is the one we are in.
+        assert_eq!(span("week"), span("this week"));
+        assert_eq!(span("month"), span("this month"));
+        assert_eq!(span("year"), span("this year"));
+        assert_eq!(span("year+1"), span("next year"), "and still takes an offset");
+    }
+
+    #[test]
+    fn a_bare_unit_reaches_to_the_edge_of_the_one_we_are_in() {
+        let today = date(2026, 8, 24);
+
+        // Each end of a range contributes the outer edge of its own span, so
+        // the bare unit answers "what is left of this year" one way round and
+        // "what it has been so far" the other.
+        assert_eq!(
+            DateQuery::parse("today..year", today),
+            Some(DateQuery::Range {
+                start: Some(date(2026, 8, 24)),
+                end: Some(date(2026, 12, 31)),
+            })
+        );
+        assert_eq!(
+            DateQuery::parse("year..today", today),
+            Some(DateQuery::Range {
+                start: Some(date(2026, 1, 1)),
+                end: Some(date(2026, 8, 24)),
+            })
+        );
+        assert_eq!(
+            DateQuery::parse("year", today),
+            DateQuery::parse("this year", today),
+            "and alone it is still the whole year"
+        );
     }
 
     #[test]

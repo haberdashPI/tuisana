@@ -11,12 +11,17 @@ date cells, and by the calendar overlay's text field.
 | a date in the current year | `09-15` |
 | a keyword | `today`, `tomorrow`, `yesterday` |
 | a weekday of the current week (Sunday-first) | `mon`, `friday` |
-| a whole week, Sunday to Saturday | `this week`, `last week`, `next week` |
-| a whole month | `this month`, `last month`, `next month` |
-| a whole year | `this year`, `last year`, `next year` |
+| a whole week, Sunday to Saturday | `week`, `this week`, `last week`, `next week` |
+| a whole month | `month`, `this month`, `last month`, `next month` |
+| a whole year | `year`, `this year`, `last year`, `next year` |
 | an offset, in the name's own unit | `today-5`, `next month+2`, `mon+7` |
 | an inclusive range | `2026-09-01..2026-09-30` |
 | a range open on one side | `today..`, `..2026-12-31` |
+
+A unit on its own is the one you are in: `year` is `this year`. It is worth the
+spelling at the ends of a range, where each side contributes the outer edge of
+its span — `today..year` runs to December 31st and `year..today` from January
+1st, for "what is left of this year" and "what it has been so far".
 
 Case and the space are ignored, so `ThisMonth` works.
 

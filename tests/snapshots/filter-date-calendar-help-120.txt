@@ -12,9 +12,9 @@
 ┗━━━━━━━━━━━━━━━━━┃h/l         day                            exact       YYYY-MM-DD or MM-DD        ┃━━━━━━━━━━━━━━━━━┛
 ┌ Tasks ──────────┃k/j         month                          day         today, tomorrow, yesterday ┃1 · columns 0/10 ┐
 │   Task          ┃t           jump to today                  weekday     mon .. sun                 ┃        │ Parent │
-│                 ┃⏎           pick and close                 week        this / last / next week    ┃                 │
-│▌Northwind BTX 44┃d           clear the field                month       this / last / next month   ┃─────────────────│
-│                 ┃esc         close                          year        this / last / next year    ┃                 │
+│                 ┃⏎           pick and close                 week        [this/last/next] week      ┃                 │
+│▌Northwind BTX 44┃d           clear the field                month       [this/last/next] month     ┃─────────────────│
+│                 ┃esc         close                          year        [this/last/next] year      ┃                 │
 │   Study Kit Desi┃;           show/hide the grid             offset      today-5, next month+2      ┃·················│
 │▍  Draft the assa┃            keys above need the grid       range       start..end                 ┃TX 4412 │ —      │
 │   Review shipmen┃            hiding it keys the names       open range  start.. or ..end           ┃TX 4412 │ —      │

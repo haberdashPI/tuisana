@@ -311,11 +311,31 @@ impl CalendarState {
     ///
     /// A complete date is left exactly as typed, keywords included: rewriting
     /// `today` to an ISO date would throw away the part the user chose.
+    ///
+    /// Two other kinds of text are left alone, because completing them would
+    /// be inventing an answer rather than finishing one:
+    ///
+    /// - **An end left empty next to a `..`** is an open range, not an
+    ///   unfinished one. `today..` means "from today on" and the filter reads
+    ///   it that way; filling the end in from the highlight would collapse it
+    ///   to the single day the highlight sits on, and there would be no way to
+    ///   write an open range at all.
+    /// - **Text the parser cannot read at all.** `today..year` is not half of
+    ///   anything — `year` is not a prefix of a date the way `2026-09` is — so
+    ///   there is no day it is on its way to. Overwriting it with the
+    ///   highlighted day answers a question the user did not ask; leaving it
+    ///   lets the overlay's "not a date" stand and the filter match nothing,
+    ///   which is what an unreadable row does everywhere else.
     pub fn normalize(&mut self) {
-        if date::parse_token(self.active_text(), self.today)
-            .flatten()
-            .is_some()
-        {
+        let text = self.active_text();
+        if date::parse_token(text, self.today).flatten().is_some() {
+            return;
+        }
+        let unreadable = match text.is_empty() {
+            true => self.separator().is_some(),
+            false => date::parse_partial(text, self.today).is_none(),
+        };
+        if unreadable {
             return;
         }
         let date = self.active_date().unwrap_or_else(|| self.fallback_date());
@@ -407,11 +427,19 @@ impl CalendarState {
 
     /// Where a movement starts from when the active end names no date yet.
     ///
-    /// The other end of the range first, so filling in `2026-09-01..` starts
-    /// next to the start date instead of jumping back to today's month. Failing
-    /// that, today when today is on screen, and otherwise the first of whatever
-    /// month the user has navigated to.
+    /// Whatever the active end's own text points at first, even half-typed: a
+    /// `2026-12` names December, and starting from the other end of the range
+    /// would land in a month the user has already typed their way out of — the
+    /// grid is showing December by then too.
+    ///
+    /// Failing that the other end of the range, so filling in `2026-09-01..`
+    /// starts next to the start date instead of jumping back to today's month.
+    /// Failing that, today when today is on screen, and otherwise the first of
+    /// whatever month the user has navigated to.
     fn fallback_date(&self) -> CivilDate {
+        if let Some(partial) = date::parse_partial(self.active_text(), self.today) {
+            return partial.day.unwrap_or(partial.month);
+        }
         if let Some(other) = self.other_end_date() {
             return other;
         }
@@ -966,15 +994,54 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_end_of_a_range_commits_open() {
+        use crate::domain::DateQuery;
+
+        let mut after = open("2026-09-01..");
+        after.normalize();
+        assert_eq!(after.query(), "2026-09-01..", "from the first of September on");
+
+        let mut before = open("..2026-09-01");
+        before.jump_to_start();
+        before.normalize();
+        assert_eq!(before.query(), "..2026-09-01", "and up to it, from the start end");
+
+        assert_eq!(
+            after.resolution(),
+            Some(DateQuery::Range {
+                start: Some(date(2026, 9, 1)),
+                end: None,
+            }),
+            "which is what the filter reads it as"
+        );
+    }
+
+    #[test]
     fn normalizing_only_touches_the_active_end_of_a_range() {
-        let mut state = open("2026-09-01..");
+        let mut state = open("2026-09-01..2026-12");
         state.normalize();
 
         assert_eq!(
             state.query(),
-            "2026-09-01..2026-09-01",
-            "the empty end fills in from the start, and the start is untouched"
+            "2026-09-01..2026-12-01",
+            "the half-typed end fills in within its own month, start untouched"
         );
+    }
+
+    #[test]
+    fn text_that_is_not_a_date_at_all_commits_as_typed() {
+        // `someday` is not half of anything: there is no day it is on its way
+        // to, so there is nothing to complete it into. Filling it in from the
+        // highlight would silently filter on a day the user never picked.
+        let mut state = open("today..someday");
+        state.normalize();
+
+        assert_eq!(state.query(), "today..someday");
+        assert!(!state.parses(), "and the overlay says so");
+
+        let mut whole = open("zz");
+        whole.normalize();
+        assert_eq!(whole.query(), "zz");
     }
 
     #[test]

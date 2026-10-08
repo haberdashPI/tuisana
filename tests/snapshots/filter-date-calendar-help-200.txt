@@ -12,9 +12,9 @@
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃h/l         day                            exact       YYYY-MM-DD or MM-DD        ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ┌ Tasks ──────────────────────────────────────────────────┃k/j         month                          day         today, tomorrow, yesterday ┃─────────────────────────────────────── 11 tasks · row 1 ┐
 │   Task                                                  ┃t           jump to today                  weekday     mon .. sun                 ┃ue │  Start │ St │ Projects           │ Parent │ Priority│
-│                                                         ┃⏎           pick and close                 week        this / last / next week    ┃                                                         │
-│▌Northwind BTX 4412 ─────────────────────────────────────┃d           clear the field                month       this / last / next month   ┃─────────────────────────────────────────────────────────│
-│                                                         ┃esc         close                          year        this / last / next year    ┃                                                         │
+│                                                         ┃⏎           pick and close                 week        [this/last/next] week      ┃                                                         │
+│▌Northwind BTX 4412 ─────────────────────────────────────┃d           clear the field                month       [this/last/next] month     ┃─────────────────────────────────────────────────────────│
+│                                                         ┃esc         close                          year        [this/last/next] year      ┃                                                         │
 │   Study Kit Design ·····································┃;           show/hide the grid             offset      today-5, next month+2      ┃·························································│
 │▍  Draft the assay validation protocol                   ┃            keys above need the grid       range       start..end                 ┃10 │ Jun 15 │ ○  │ Northwind BTX 4412 │ —      │ High    │
 │   Review shipment requirements doc                      ┃            hiding it keys the names       open range  start.. or ..end           ┃19 │  Aug 3 │ ○  │ Northwind BTX 4412 │ —      │ High    │

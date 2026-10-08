@@ -51,9 +51,9 @@ const GRID_WIDTH: usize = CELL_WIDTH * 7;
 const KEYWORD_KEY: [(&str, &str); 8] = [
     ("today  tomorrow  yesterday", "one day"),
     ("mon  friday", "a day of this week"),
-    ("this/last/next week", "Sunday to Saturday"),
-    ("this/last/next month", "the whole month"),
-    ("this/last/next year", "the whole year"),
+    ("[this/last/next] week", "Sunday to Saturday"),
+    ("[this/last/next] month", "the whole month"),
+    ("[this/last/next] year", "the whole year"),
     ("2026-09-15  09-15", "a date, the year optional"),
     ("today+5  this month-1", "an offset, in its own unit"),
     ("today..fri  ..2026-12-31", "a range, either end open"),
@@ -586,8 +586,9 @@ mod tests {
 
         let collapsed = text(false);
         for keyword in [
-            "today", "tomorrow", "yesterday", "this/last/next week", "this/last/next month",
-            "this/last/next year", "2026-09-15", "today+5", "today..fri",
+            "today", "tomorrow", "yesterday", "[this/last/next] week",
+            "[this/last/next] month", "[this/last/next] year", "2026-09-15", "today+5",
+            "today..fri",
         ] {
             assert!(collapsed.contains(keyword), "the key is missing {keyword}");
         }

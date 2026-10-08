@@ -8373,6 +8373,34 @@ mod tests {
     }
 
     #[test]
+    fn committing_the_picker_on_an_open_range_leaves_it_open() {
+        // Dated either side of any plausible "today": the picker resolves
+        // `today` against the real clock here, and pinning `TUISANA_TODAY`
+        // would reach into every other test sharing the process.
+        let mut state = loaded_state_with_tasks(vec![
+            task_with("past", Some("2000-01-01"), None, None),
+            task_with("ahead", Some("2999-01-01"), None, None),
+        ]);
+        state.toggle_filter_panel();
+        set_field(&mut state, "due", "today..");
+        select_field(&mut state, "due");
+
+        assert!(state.filter_calendar_begin());
+        state.filter_calendar_commit();
+
+        assert_eq!(
+            state.filter_panel_rows()[2].1,
+            "today..",
+            "the picker did not put an end on a range the user left open"
+        );
+        assert_eq!(
+            visible_gids(&state),
+            vec!["ahead"],
+            "and the filter reaches forward with no end"
+        );
+    }
+
+    #[test]
     fn one_set_can_ask_for_soon_while_another_asks_for_undated() {
         // The review this milestone exists for: imminent work, plus work nobody
         // has scheduled.
