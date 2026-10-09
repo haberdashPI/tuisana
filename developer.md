@@ -102,7 +102,14 @@ a convention.
   under a new name, and the startup restore all re-baseline in one place
   rather than at each site. `me` stands for the assigned-to-me row in the
   file, because that row's `Project.id` is the logged-in user's gid;
-  `src/app/project_list.rs` owns both directions of that translation.
+  `src/app/project_list.rs` owns both directions of that translation. That
+  identity is also a hazard on the write side: the gid is a *user*, and Asana
+  answers `404 Not a recognized ID` for it as a project, so
+  `EditContext::is_assigned_to_me_row` is what keeps it out of one.
+  `cursor_project` returns `None` for a row under that heading, which is why
+  a task created there goes to the workspace — with the user as its assignee,
+  because the group is "tasks assigned to me" and an unassigned one would be
+  gone on the next load.
 - Since config **version 3** a project selection lives on a `[[filter_set]]`
   and nowhere else. An unnamed panel has one too, so it gets the entry with
   `scratch = true`: hidden from the sidebar, never addressed by a digit,

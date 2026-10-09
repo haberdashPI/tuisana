@@ -329,6 +329,7 @@ fn a_new_task_inherits_the_project_and_section_the_view_was_showing() {
             project_gid: Some("p1".to_string()),
             workspace_gid: Some("ws-1".to_string()),
             section_gid: Some("sec-ship".to_string()),
+            assignee_gid: None,
         })),
         "project grouping and section grouping are both on, so both are named"
     );
@@ -846,4 +847,108 @@ fn offered_candidates(state: &TaskState) -> Vec<String> {
         .into_iter()
         .map(|candidate| candidate.to_string())
         .collect()
+}
+
+/// A pane holding the assigned-to-me row and one real project, with a single
+/// task that is assigned to the user and in no project at all — the row that
+/// used to send the user's own gid as a project.
+fn assigned_to_me_state() -> (TaskState, FakeAsanaClient, EditContext) {
+    let projects = vec![
+        Project::assigned_to_me("user-1"),
+        Project::new("p1", "Northwind", false),
+    ];
+    let mut loose = placed_task("a1", "Renew the licence", "", "", 0);
+    loose.memberships = Vec::new();
+    let client = FakeAsanaClient::new(projects.clone())
+        .with_current_user_gid("user-1")
+        .with_users(vec![("user-1", "Ada")])
+        .with_assigned_to_me_tasks(vec![loose]);
+
+    let mut state = TaskState::new();
+    state.set_completed_filter(None);
+    state
+        .load_task_dataset_for_projects(&client, &projects)
+        .expect("tasks load");
+    let context = EditContext {
+        current_user_gid: Some("user-1".to_string()),
+        projects: vec![("p1".to_string(), "Northwind".to_string())],
+        workspace_gid: Some("ws-1".to_string()),
+        ..EditContext::default()
+    };
+    (state, client, context)
+}
+
+#[test]
+fn a_new_task_under_the_assigned_to_me_row_names_the_workspace_and_not_a_project() {
+    let (mut state, _, context) = assigned_to_me_state();
+    select_task(&mut state, "a1");
+
+    state.begin_draft_task(false, &context).expect("a draft opens");
+    type_cell(&mut state, "Renew the other licence");
+
+    assert_eq!(
+        state.draft_commit(),
+        Some(DraftCommit::Task(NewTask {
+            name: "Renew the other licence".to_string(),
+            parent_gid: None,
+            // The row's gid is the logged-in user's, and Asana answers
+            // `404 Not a recognized ID` for it as a project.
+            project_gid: None,
+            workspace_gid: Some("ws-1".to_string()),
+            section_gid: None,
+            assignee_gid: Some("user-1".to_string()),
+        })),
+    );
+}
+
+#[test]
+fn a_subtask_under_the_assigned_to_me_row_is_assigned_too() {
+    let (mut state, _, context) = assigned_to_me_state();
+    select_task(&mut state, "a1");
+
+    state.begin_draft_task(true, &context).expect("a draft opens");
+    type_cell(&mut state, "Find the renewal notice");
+
+    let Some(DraftCommit::Task(task)) = state.draft_commit() else {
+        panic!("a task draft");
+    };
+    assert_eq!(task.parent_gid.as_deref(), Some("a1"));
+    assert_eq!(task.project_gid, None);
+    assert_eq!(
+        task.assignee_gid.as_deref(),
+        Some("user-1"),
+        "nothing else would bring it back: the group is what the user is assigned"
+    );
+}
+
+#[test]
+fn a_task_created_under_the_assigned_to_me_row_stays_in_that_group() {
+    let (mut state, client, context) = assigned_to_me_state();
+    select_task(&mut state, "a1");
+    state.begin_draft_task(false, &context).expect("a draft opens");
+    type_cell(&mut state, "Renew the other licence");
+
+    let Some(DraftCommit::Task(new_task)) = state.draft_commit() else {
+        panic!("a task draft");
+    };
+    let created = client.create_task(&new_task).expect("the create succeeds");
+    let gid = created.gid.clone();
+    state.finish_draft_task(created);
+
+    let row = state
+        .table()
+        .rows
+        .iter()
+        .find(|row| row.gid == gid)
+        .expect("the real row is in the table");
+    assert_eq!(
+        row.project.as_deref(),
+        Some("No Project (Assigned to Me)"),
+        "the new row is drawn under the heading it was typed beneath"
+    );
+    assert_eq!(
+        client.structural_calls(),
+        vec![StructuralCall::CreateTask(new_task)],
+        "no section call: the row had no section to inherit"
+    );
 }

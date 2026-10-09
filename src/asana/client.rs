@@ -795,6 +795,9 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
                 Value::Array(vec![Value::from(project.clone())]),
             );
         }
+        if let Some(assignee) = &task.assignee_gid {
+            data.insert("assignee".to_string(), Value::from(assignee.clone()));
+        }
         // Asana wants exactly one of these. A task with a parent or a project
         // already has its workspace decided, and naming it again is refused.
         if task.parent_gid.is_none() && task.project_gid.is_none() {

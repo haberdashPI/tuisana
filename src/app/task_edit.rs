@@ -57,6 +57,19 @@ impl EditContext {
             .collect()
     }
 
+    /// Whether this project gid is the synthetic "No Project (Assigned to
+    /// Me)" row rather than a project Asana knows about.
+    ///
+    /// The row is built from the logged-in user's gid, so the test is against
+    /// the user rather than against [`Self::projects`]: the row is left out
+    /// of that list deliberately, but so is a project this session never
+    /// loaded, and those are real. Asana answers `404 Not a recognized ID`
+    /// for a user gid sent as a project, so anything that writes a project
+    /// has to ask this first.
+    pub(crate) fn is_assigned_to_me_row(&self, gid: &str) -> bool {
+        self.current_user_gid.as_deref() == Some(gid)
+    }
+
     /// The name this project goes by, or the gid when it is one the session
     /// never loaded.
     ///

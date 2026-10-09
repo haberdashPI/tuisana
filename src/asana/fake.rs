@@ -412,7 +412,19 @@ impl AsanaClient for FakeAsanaClient {
             modified_at: Some(FAKE_EDIT_MODIFIED_AT.to_string()),
             due_on: None,
             start_on: None,
-            assignee: None,
+            // Named from the directory when it knows the gid, the way Asana
+            // answers a create with `assignee.name` asked for.
+            assignee: task.assignee_gid.as_deref().map(|gid| {
+                self.users
+                    .iter()
+                    .find(|user| user.gid == gid)
+                    .cloned()
+                    .unwrap_or_else(|| UserDto {
+                        gid: gid.to_string(),
+                        name: None,
+                        display_name: None,
+                    })
+            }),
             num_subtasks: 0,
             parent: task
                 .parent_gid

@@ -249,6 +249,8 @@ pub(crate) struct DraftTask {
     section_name: Option<String>,
     parent_gid: Option<String>,
     workspace_gid: Option<String>,
+    /// Who the new task goes to, which only the assigned-to-me row sets.
+    assignee_gid: Option<String>,
     /// How deep the row is drawn, so a new sibling lines up with its siblings.
     depth: usize,
 }
@@ -5142,6 +5144,16 @@ impl TaskState {
         };
 
         let grouped_project = self.cursor_project(&record, ctx);
+        // The row is under the "No Project (Assigned to Me)" heading, which
+        // `cursor_project` refuses to call a project. It is still the group
+        // the new row is typed into, so the draft keeps its gid and its name
+        // to be cached and drawn under — it just never sends them as a
+        // project.
+        let assigned_to_me = grouped_project.is_none()
+            && record
+                .project_gids
+                .first()
+                .is_some_and(|gid| ctx.is_assigned_to_me_row(gid));
         // §5.1: the project is inherited when the screen said it — a project
         // heading above the row, or the `Projects` column on screen. With
         // neither, filing the task there would be a guess the user cannot
@@ -5171,6 +5183,15 @@ impl TaskState {
                 .zip(record.sections.first().cloned()),
         };
 
+        // That row is "tasks assigned to me", and the new task joins no
+        // project, so the assignment is the only thing that will bring it
+        // back on the next load: unassigned, it would be gone the moment the
+        // pane reloaded, findable only by search.
+        let assignee = match assigned_to_me {
+            true => ctx.current_user_gid.clone(),
+            false => None,
+        };
+
         let workspace = ctx.workspace_gid.clone();
         if project.is_none() && parent.is_none() && workspace.is_none() {
             return Err(
@@ -5197,11 +5218,18 @@ impl TaskState {
                 kind: DraftKind::Task(DraftTask {
                     target_gid,
                     project_gid: project.as_ref().map(|(gid, _)| gid.clone()),
-                    project_name: project.as_ref().map(|(_, name)| name.clone()),
+                    project_name: project
+                        .as_ref()
+                        .map(|(_, name)| name.clone())
+                        .or_else(|| match assigned_to_me {
+                            true => record.projects.first().cloned(),
+                            false => None,
+                        }),
                     section_gid: section.as_ref().map(|(gid, _)| gid.clone()),
                     section_name: section.as_ref().map(|(_, name)| name.clone()),
                     parent_gid: parent,
                     workspace_gid: workspace,
+                    assignee_gid: assignee,
                     depth,
                 }),
             },
@@ -5314,6 +5342,7 @@ impl TaskState {
                 },
                 workspace_gid: task.workspace_gid.clone(),
                 section_gid: task.section_gid.clone(),
+                assignee_gid: task.assignee_gid.clone(),
             }),
             DraftKind::Section(section) => DraftCommit::Section {
                 project_gid: section.project_gid.clone(),
@@ -5903,8 +5932,13 @@ impl TaskState {
             }
         }
 
+        // The assigned-to-me row is the one target that is not a project:
+        // its gid is the logged-in user's. Every caller here is about to
+        // write it somewhere — a task's `projects`, a new section, a section
+        // move — and Asana refuses it in all three, so a row that sits under
+        // that heading has no project, which is also what it says on screen.
         match record.project_gids.as_slice() {
-            [gid] => Some((gid.clone(), ctx.project_name(gid))),
+            [gid] if !ctx.is_assigned_to_me_row(gid) => Some((gid.clone(), ctx.project_name(gid))),
             _ => None,
         }
     }

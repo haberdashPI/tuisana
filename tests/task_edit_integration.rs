@@ -979,6 +979,7 @@ fn i_then_a_title_then_enter_creates_a_task_where_the_cursor_stood() {
                 project_gid: Some("project-1".to_string()),
                 workspace_gid: None,
                 section_gid: Some("sec-done".to_string()),
+                assignee_gid: None,
             }),
             StructuralCall::AddTaskToSection {
                 section_gid: "sec-done".to_string(),
@@ -1075,6 +1076,7 @@ fn capital_i_opens_a_draft_whose_parent_is_the_cursor_row() {
             project_gid: None,
             workspace_gid: None,
             section_gid: None,
+            assignee_gid: None,
         })]
     );
 }

@@ -202,6 +202,10 @@ pub struct NewTask {
     /// Required by Asana for a task that joins no project and no parent.
     pub workspace_gid: Option<String>,
     pub section_gid: Option<String>,
+    /// Who it goes to, set only when the task is created under the
+    /// assigned-to-me row — the one place where nothing else would bring it
+    /// back into view.
+    pub assignee_gid: Option<String>,
 }
 
 fn insert_sorted(values: &mut Vec<String>, value: &str) {
