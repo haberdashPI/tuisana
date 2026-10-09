@@ -270,6 +270,9 @@ a convention.
 - Snapshots in `tests/snapshots/` are the visual regression guard. Run
   `UPDATE_SNAPSHOTS=1 cargo test --test ui_snapshot` and read the diff before
   committing it.
+- The README's screenshot is drawn from the same fixture, as an SVG of the
+  terminal grid. When a change moves what it shows, regenerate it with
+  `cargo test --test ui_snapshot readme_screenshot -- --ignored`.
 - To change what the app remembers about the view between runs, the section
   is `ViewConfig` in `src/config/mod.rs`, the read is `App::apply_view_config`
   plus the one-shot selection restore in `App::load_projects`, and the write

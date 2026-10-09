@@ -13,7 +13,12 @@
 //! the loading spinner never appears.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::{backend::TestBackend, Terminal};
+use ratatui::{
+    backend::TestBackend,
+    buffer::Buffer,
+    style::{Color, Modifier},
+    Terminal,
+};
 use std::{fs, path::PathBuf, thread, time::Duration};
 use tuisana::{
     app::App,
@@ -359,6 +364,26 @@ fn drain_task_data<C: AsanaClient + Clone + Send + 'static>(app: &mut App<C>) {
 /// makes the result depend on whether the worker thread happened to finish
 /// first, which is exactly the flakiness a snapshot test must not have.
 fn render_with(config: Config, width: u16, batches: Vec<Vec<KeyEvent>>) -> String {
+    let buffer = render_buffer(config, width, batches);
+    buffer
+        .content
+        .chunks(buffer.area.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Draws one screen and hands back the styled buffer behind it.
+///
+/// Split out of `render_with` because the screenshot the README carries needs
+/// the colors, and the text snapshots deliberately throw them away.
+fn render_buffer(config: Config, width: u16, batches: Vec<Vec<KeyEvent>>) -> Buffer {
     let mut app = App::new(config, client());
     app.load_projects().expect("projects load");
 
@@ -376,19 +401,7 @@ fn render_with(config: Config, width: u16, batches: Vec<Vec<KeyEvent>>) -> Strin
     run_session(&mut app, &mut ScriptedSource { keys: Vec::new() }, &mut terminal, &mut RecordingHost::default())
         .expect("session redraws");
 
-    let buffer = terminal.backend_mut().buffer().clone();
-    buffer
-        .content
-        .chunks(buffer.area.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol())
-                .collect::<String>()
-                .trim_end()
-                .to_string()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    terminal.backend_mut().buffer().clone()
 }
 
 fn snapshot_path(name: &str) -> PathBuf {
@@ -1235,4 +1248,230 @@ fn task_pane_with_the_project_pane_minimized() {
     // `{` minimizes the top pane and switches to task mode, so the task table
     // gets the whole body.
     assert_snapshot("task-minimized-top", || vec![vec![key(' '), key('{')]]);
+}
+
+// ---------------------------------------------------------------------------
+// The README's screenshot
+// ---------------------------------------------------------------------------
+//
+// The picture at the top of the README is generated from the same fake client
+// and the same fixture as the snapshots above, so it can never drift from what
+// the app actually draws, and it never shows anyone's real Asana data. It is
+// written as an SVG of the terminal grid rather than captured from a real
+// terminal: every cell is placed at an explicit coordinate, so the image lines
+// up whatever monospace font the reader's browser happens to have.
+//
+// Regenerate with:
+//
+//     cargo test --test ui_snapshot readme_screenshot -- --ignored
+
+/// Width of one terminal cell, in pixels, and the font size that fills it.
+const CELL_W: f32 = 8.4;
+const CELL_H: f32 = 18.0;
+const FONT_SIZE: f32 = 14.0;
+/// Distance from the top of a row to the text baseline.
+const BASELINE: f32 = 13.5;
+const PAD: f32 = 14.0;
+const FONT_STACK: &str =
+    "ui-monospace,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono','Liberation Mono',monospace";
+
+const BACKGROUND: &str = "#15181e";
+const FOREGROUND: &str = "#c6ccd6";
+
+/// The sixteen ANSI colors, in a dark-terminal palette.
+const ANSI: [&str; 16] = [
+    "#1b1f27", "#e06c75", "#98c379", "#e5c07b", "#61afef", "#c678dd", "#56b6c2", "#abb2bf",
+    "#5c6370", "#ff7b86", "#b5e890", "#ffd38a", "#8ccbff", "#e39df5", "#7fd6e0", "#e6e6e6",
+];
+
+/// Resolves one xterm palette index to a hex color.
+fn indexed_hex(index: u8) -> String {
+    match index {
+        0..=15 => ANSI[index as usize].to_string(),
+        16..=231 => {
+            let i = index - 16;
+            let level = |v: u8| match v {
+                0 => 0u32,
+                other => 55 + 40 * other as u32,
+            };
+            format!(
+                "#{:02x}{:02x}{:02x}",
+                level(i / 36),
+                level((i / 6) % 6),
+                level(i % 6)
+            )
+        }
+        _ => {
+            let shade = 8 + 10 * (index as u32 - 232);
+            format!("#{shade:02x}{shade:02x}{shade:02x}")
+        }
+    }
+}
+
+/// Resolves a ratatui color, falling back to the terminal default the cell
+/// would have inherited.
+fn color_hex(color: Color, default: &str) -> String {
+    match color {
+        Color::Reset => default.to_string(),
+        Color::Black => ANSI[0].to_string(),
+        Color::Red => ANSI[1].to_string(),
+        Color::Green => ANSI[2].to_string(),
+        Color::Yellow => ANSI[3].to_string(),
+        Color::Blue => ANSI[4].to_string(),
+        Color::Magenta => ANSI[5].to_string(),
+        Color::Cyan => ANSI[6].to_string(),
+        Color::Gray => ANSI[7].to_string(),
+        Color::DarkGray => ANSI[8].to_string(),
+        Color::LightRed => ANSI[9].to_string(),
+        Color::LightGreen => ANSI[10].to_string(),
+        Color::LightYellow => ANSI[11].to_string(),
+        Color::LightBlue => ANSI[12].to_string(),
+        Color::LightMagenta => ANSI[13].to_string(),
+        Color::LightCyan => ANSI[14].to_string(),
+        Color::White => ANSI[15].to_string(),
+        Color::Indexed(index) => indexed_hex(index),
+        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+    }
+}
+
+fn escape(symbol: &str) -> String {
+    symbol
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// How one cell is painted, once reverse video has been resolved away.
+#[derive(PartialEq)]
+struct CellPaint {
+    fg: String,
+    bg: String,
+    bold: bool,
+    dim: bool,
+    italic: bool,
+    underlined: bool,
+}
+
+fn paint(cell: &ratatui::buffer::Cell) -> CellPaint {
+    let reversed = cell.modifier.contains(Modifier::REVERSED);
+    let (fg_color, bg_color) = match reversed {
+        true => (cell.bg, cell.fg),
+        false => (cell.fg, cell.bg),
+    };
+    let (fg_default, bg_default) = match reversed {
+        true => (BACKGROUND, FOREGROUND),
+        false => (FOREGROUND, BACKGROUND),
+    };
+
+    CellPaint {
+        fg: color_hex(fg_color, fg_default),
+        bg: color_hex(bg_color, bg_default),
+        bold: cell.modifier.contains(Modifier::BOLD),
+        dim: cell.modifier.contains(Modifier::DIM),
+        italic: cell.modifier.contains(Modifier::ITALIC),
+        underlined: cell.modifier.contains(Modifier::UNDERLINED),
+    }
+}
+
+/// Draws the buffer as an SVG: one rect per run of background, one text run per
+/// run of identical styling, with every glyph given its own x coordinate.
+fn buffer_to_svg(buffer: &Buffer) -> String {
+    let width = buffer.area.width as f32 * CELL_W + 2.0 * PAD;
+    let height = buffer.area.height as f32 * CELL_H + 2.0 * PAD;
+
+    let mut svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width:.0}\" height=\"{height:.0}\" \
+         viewBox=\"0 0 {width:.0} {height:.0}\" font-family=\"{FONT_STACK}\" \
+         font-size=\"{FONT_SIZE}\">\n\
+         <rect width=\"{width:.0}\" height=\"{height:.0}\" rx=\"10\" fill=\"{BACKGROUND}\"/>\n"
+    );
+
+    for row in 0..buffer.area.height {
+        let y = PAD + row as f32 * CELL_H;
+        let cells: Vec<_> = (0..buffer.area.width)
+            .map(|column| buffer.cell((column, row)).expect("cell in buffer"))
+            .collect();
+        let paints: Vec<_> = cells.iter().map(|cell| paint(cell)).collect();
+
+        // Backgrounds first, as whole runs, so neighbouring banded cells make
+        // one unbroken band rather than a row of abutting rectangles.
+        let mut start = 0usize;
+        while start < paints.len() {
+            let mut end = start + 1;
+            while end < paints.len() && paints[end].bg == paints[start].bg {
+                end += 1;
+            }
+            if paints[start].bg != BACKGROUND {
+                let x = PAD + start as f32 * CELL_W;
+                let run = (end - start) as f32 * CELL_W;
+                svg.push_str(&format!(
+                    "<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{run:.1}\" height=\"{CELL_H:.1}\" \
+                     fill=\"{}\"/>\n",
+                    paints[start].bg
+                ));
+            }
+            start = end;
+        }
+
+        let mut start = 0usize;
+        while start < paints.len() {
+            let mut end = start + 1;
+            while end < paints.len() && paints[end] == paints[start] {
+                end += 1;
+            }
+
+            let text: String = cells[start..end]
+                .iter()
+                .map(|cell| escape(cell.symbol()))
+                .collect();
+            if !text.trim().is_empty() {
+                let xs: Vec<String> = (start..end)
+                    .filter(|column| !cells[*column].symbol().is_empty())
+                    .map(|column| format!("{:.1}", PAD + column as f32 * CELL_W))
+                    .collect();
+                let style = &paints[start];
+                let mut attributes = format!(
+                    "x=\"{}\" y=\"{:.1}\" fill=\"{}\"",
+                    xs.join(" "),
+                    y + BASELINE,
+                    style.fg
+                );
+                if style.bold {
+                    attributes.push_str(" font-weight=\"bold\"");
+                }
+                if style.italic {
+                    attributes.push_str(" font-style=\"italic\"");
+                }
+                if style.underlined {
+                    attributes.push_str(" text-decoration=\"underline\"");
+                }
+                if style.dim {
+                    attributes.push_str(" opacity=\"0.6\"");
+                }
+                svg.push_str(&format!("<text {attributes}>{text}</text>\n"));
+            }
+
+            start = end;
+        }
+    }
+
+    svg.push_str("</svg>\n");
+    svg
+}
+
+/// Writes the README's screenshot: the Gantt view, which is the one frame that
+/// shows the project list, the task table, and the chart at once.
+#[test]
+#[ignore = "writes docs/public/screenshot.svg rather than asserting anything"]
+fn readme_screenshot() {
+    std::env::set_var("TUISANA_TODAY", TODAY);
+
+    let buffer = render_buffer(
+        config(),
+        120,
+        vec![vec![key(' '), key('t')], vec![key('g')]],
+    );
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/public/screenshot.svg");
+    fs::create_dir_all(path.parent().expect("screenshot dir")).expect("create screenshot dir");
+    fs::write(&path, buffer_to_svg(&buffer)).expect("write screenshot");
 }

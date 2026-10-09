@@ -1,5 +1,7 @@
 # tuisana
 
+![The Gantt view: a project list, a task table, and a timeline](./docs/public/screenshot.svg)
+
 A terminal UI for reviewing and editing Asana projects and tasks the way power
 users like to work: in the terminal with a keyboard shortcut for everything.
 
