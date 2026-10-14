@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                      │
+│▍   ★ Platform Infrastructure                                                 │
+│    ☆ Backlog                                                                 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ Tasks ──────── 11 tasks · row 1 · columns 0/62 ┐┏ Description ━━━━ line 1/71 ┓
+│   Task                        │ Assignee     │ │┃ Hand the packaged release  ┃
+│                                                │┃ candidate over to the      ┃
+│▌Northwind BTX 4412 ────────────────────────────│┃ study team for the 4412    ┃
+│                                                │┃ run. Everything below has  ┃
+│   Study Kit Design ····························│┃ to be true before it       ┃
+│▍  Draft the assay validation… │ Priya Raman  │ │┃ ships:                     ┃
+│   Review shipment requiremen… │ Morgan Ellis │ │┃                            ┃
+│   Ship release candidate to … │ Alex Chen    │ │┃ - labels printed from the  ┃
+│   Confirm carrier pickup win… │ —            │ │┃   current template, not    ┃
+│   Update the sample intake S… │ Kim Alvarez  │ │┃   last quarter's           ┃
+│   Qualify the second reagent… │ Dana Ruiz    │ │┃ - carrier pickup window    ┃
+│                                                │┃   confirmed in writing     ┃
+│   Shipment ····································│┃ - the vendor contract      ┃
+│   Book the courier for the p… │ Sam Okafor   │ │┃   countersigned and filed  ┃
+│   Label the retention samples │ Jo Park      │ │┃                            ┃
+│   Reconcile the freight invo… │ Robin Fox    │ │┃ Ping the study lead once   ┃
+│   Close out packaging vendor… │ Alex Chen    │ │┃ the kit is on the dock. If ┃
+│   Close the quarter's shippi… │ Priya Raman  │ │┃ anything on that list is   ┃
+│                                                │┃ still open on the morning  ┃
+│                                                │┃ of the pickup, hold the    ┃
+│                                                │┃ shipment and say so in the ┃
+│                                                │┃ channel rather than        ┃
+│                                                │┃ shipping partial.          ┃
+│                                                │┃                            ┃
+└────────────────────────────────────────────────┘┗━━━━━━━━━━━━ +47 more lines ┛
+^d/^u scroll   v close   o open in Asana   ? help             r refresh   q quit
+ DESCRIPTION                                                         description

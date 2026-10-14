@@ -315,6 +315,14 @@ pub enum Action {
     GanttOrderCommit,
     /// Restore the order the dialog opened with and close it.
     GanttOrderCancel,
+    /// Draw the description pane and take its controls.
+    SetDescriptionMode,
+    /// Hide the description pane and return to task mode.
+    ToggleDescription,
+    /// Scroll the description down half a pane.
+    DescriptionScrollDown,
+    /// Scroll the description up half a pane.
+    DescriptionScrollUp,
     /// Move the column cursor one column left.
     TaskColumnPrev,
     /// Move the column cursor one column right.
@@ -497,6 +505,10 @@ impl Action {
             "gantt_order_move_bottom" => Ok(Self::GanttOrderMoveBottom),
             "gantt_order_commit" => Ok(Self::GanttOrderCommit),
             "gantt_order_cancel" => Ok(Self::GanttOrderCancel),
+            "set_description_mode" => Ok(Self::SetDescriptionMode),
+            "toggle_description" => Ok(Self::ToggleDescription),
+            "description_scroll_down" => Ok(Self::DescriptionScrollDown),
+            "description_scroll_up" => Ok(Self::DescriptionScrollUp),
             "task_column_prev" => Ok(Self::TaskColumnPrev),
             "task_column_next" => Ok(Self::TaskColumnNext),
             "edit_column" => Ok(Self::EditColumn),
@@ -780,6 +792,10 @@ impl Display for Action {
             Action::GanttOrderMoveBottom => "gantt_order_move_bottom",
             Action::GanttOrderCommit => "gantt_order_commit",
             Action::GanttOrderCancel => "gantt_order_cancel",
+            Action::SetDescriptionMode => "set_description_mode",
+            Action::ToggleDescription => "toggle_description",
+            Action::DescriptionScrollDown => "description_scroll_down",
+            Action::DescriptionScrollUp => "description_scroll_up",
             Action::TaskColumnPrev => "task_column_prev",
             Action::TaskColumnNext => "task_column_next",
             Action::EditColumn => "edit_column",

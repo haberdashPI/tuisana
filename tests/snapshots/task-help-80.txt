@@ -2,29 +2,29 @@
 ┌ Projects ────────────────────────────────────────────── 3 shown · 1 selected ┐
 │  ● ★ Northwind BTX 4412                                                      │
 │▍   ★ Platform Infrastructure                                                 │
-│    ☆ Backlog                                                                 │
-│       ┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓       │
+│    ☆ B┏ Help · task mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓       │
 │       ┃Tasks                            View                         ┃       │
 │       ┃o           open in Asana        g           gantt chart      ┃       │
-│       ┃␣           select               f           filter panel     ┃       │
-│       ┃a           select all           c           open / done / all┃       │
-│       ┃i           invert               z           subtasks         ┃       │
-└───────┃x           clear                left/right  scroll columns   ┃───────┘
-┏ Tasks ┃^x          clear hidden         b           recently edited  ┃s 0/50 ┓
-┃   Task┃y           copy links                                        ┃ue │  S┃
-┃       ┃                                 Move                         ┃       ┃
-┃▌Northw┃Group & sort                     j/k         down / up        ┃───────┃
-┃       ┃[/]         jump section         ^d/^u       page down / up   ┃       ┃
-┃   Stud┃{/}         jump project         home/end    top / bottom     ┃·······┃
-┃▍  Draf┃,           group by project                                  ┃10 │ Ju┃
-┃   Revi┃.           group by section     Modes                        ┃19 │  A┃
-┃   Ship┃s           sort this column     p           projects         ┃ay │ Au┃
-┃   Conf┃                                 f           filters          ┃ed │ Au┃
-┃   Upda┃Edit                             m           toggle tasks     ┃ 4 │ Au┃
-┃   Qual┃t           add & delete rows                                 ┃12 │  J┃
-┃       ┃h/l         column cursor        Panes                        ┃       ┃
-┃   Ship┃⏎           edit the cell        0           restore          ┃·······┃
-┃   Book┃d           open / done                                       ┃15 │  S┃
+│       ┃␣           select               v           description      ┃       │
+│       ┃a           select all           f           filter panel     ┃       │
+│       ┃i           invert               c           open / done / all┃       │
+│       ┃x           clear                z           subtasks         ┃       │
+└───────┃^x          clear hidden         left/right  scroll columns   ┃───────┘
+┏ Tasks ┃y           copy links           b           recently edited  ┃s 0/50 ┓
+┃   Task┃                                                              ┃ue │  S┃
+┃       ┃Group & sort                     Move                         ┃       ┃
+┃▌Northw┃[/]         jump section         j/k         down / up        ┃───────┃
+┃       ┃{/}         jump project         ^d/^u       page down / up   ┃       ┃
+┃   Stud┃,           group by project     home/end    top / bottom     ┃·······┃
+┃▍  Draf┃.           group by section                                  ┃10 │ Ju┃
+┃   Revi┃s           sort this column     Modes                        ┃19 │  A┃
+┃   Ship┃                                 p           projects         ┃ay │ Au┃
+┃   Conf┃Edit                             f           filters          ┃ed │ Au┃
+┃   Upda┃t           add & delete rows    m           toggle tasks     ┃ 4 │ Au┃
+┃   Qual┃h/l         column cursor                                     ┃12 │  J┃
+┃       ┃⏎           edit the cell        Panes                        ┃       ┃
+┃   Ship┃d           open / done          0           restore          ┃·······┃
+┃   Book┃                                                              ┃15 │  S┃
 ┃   Labe┃                                 App                          ┃ 9 │   ┃
 ┃   Reco┃                                 r           refresh          ┃30 │ Se┃
 ┃   Clos┃                                 q ^c        quit             ┃14 │  O┃

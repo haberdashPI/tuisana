@@ -34,6 +34,25 @@ pub struct RelativeDate {
     pub urgency: Urgency,
 }
 
+/// `Jun 1`, or `Jun 1 2027` when the year is not this one.
+///
+/// The plain, absolute reading, for the places a relative one would be
+/// meaningless or misleading: the Gantt chart's scrolled window, which is a
+/// span rather than a deadline, and a comment's timestamp, which is always in
+/// the past and so has no urgency to report.
+pub fn short_date(value: CivilDate) -> String {
+    short_date_from(value, today())
+}
+
+/// [`short_date`] against a given `today`, for callers that already have one
+/// and for tests that cannot depend on the real clock.
+pub fn short_date_from(value: CivilDate, today: CivilDate) -> String {
+    match value.year == today.year {
+        true => format!("{} {}", month_name(value.month), value.day),
+        false => format!("{} {} {}", month_name(value.month), value.day, value.year),
+    }
+}
+
 /// Formats a `YYYY-MM-DD` value relative to `today`.
 ///
 /// Unparseable values are passed through unchanged with [`Urgency::Later`] so a

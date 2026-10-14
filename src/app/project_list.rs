@@ -902,6 +902,17 @@ mod tests {
             Err(Error::Backend("backend unavailable".to_string()))
         }
 
+        fn get_task_description(&self, _task_gid: &str) -> Result<String> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
+        fn list_task_comments(
+            &self,
+            _task_gid: &str,
+        ) -> Result<Vec<crate::asana::TaskComment>> {
+            Err(Error::Backend("backend unavailable".to_string()))
+        }
+
         fn list_subtasks(
             &self,
             _task_gid: &str,

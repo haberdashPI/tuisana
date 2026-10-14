@@ -13,6 +13,7 @@ use crate::{
         autocomplete::{AutocompleteState, Candidate, Unresolved},
         calendar::CalendarState,
         debug_log,
+        description::DescriptionState,
         gantt::{GanttViewState, MoveTo},
         task_edit::{
             CellEditView, CellEditor, CommittedEdits, EditContext, TaskCellEditState,
@@ -186,6 +187,7 @@ struct TaskViewState {
     help_details_visible: bool,
     selected_task_ids: HashSet<String>,
     gantt: GanttViewState,
+    description: DescriptionState,
     /// Set while the runtime knows another input event is already waiting.
     ///
     /// Rebuilding the table is the expensive half of a keystroke and the user
@@ -2199,6 +2201,37 @@ impl TaskState {
     /// The chart's state, for the renderer.
     pub fn gantt(&self) -> &GanttViewState {
         &self.view.gantt
+    }
+
+    pub fn description(&self) -> &DescriptionState {
+        &self.view.description
+    }
+
+    pub fn description_mut(&mut self) -> &mut DescriptionState {
+        &mut self.view.description
+    }
+
+    /// Points the description pane at whatever the cursor is on now.
+    ///
+    /// Called after anything that can move the cursor, including a table
+    /// rebuild that moved a row out from under it.
+    pub fn aim_description(&mut self) {
+        let gid = self.cursor_task_gid();
+        self.view.description.aim_at(gid.as_deref());
+    }
+
+    /// Scrolls the description pane by `pages` half-panes.
+    pub fn scroll_description(&mut self, pages: isize) {
+        self.view.description.scroll_half_pages(pages);
+    }
+
+    /// The `modified_at` of the task the pane is pointed at.
+    ///
+    /// What the description cache is keyed against: see
+    /// [`DescriptionState::needs_fetch`].
+    pub fn description_target_modified_at(&self) -> Option<String> {
+        let gid = self.view.description.target()?;
+        self.record(gid).and_then(|record| record.modified_at.clone())
     }
 
     /// The chart's state, for the actions that change it.

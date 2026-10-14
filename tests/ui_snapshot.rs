@@ -69,6 +69,10 @@ fn ctrl(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
 }
 
+fn esc() -> KeyEvent {
+    KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+}
+
 fn enter() -> KeyEvent {
     KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
 }
@@ -173,6 +177,85 @@ fn client() -> FakeAsanaClient {
                 ],
             },
         }],
+    )
+    // Two of the five carry a description: one long enough to clip at every
+    // width the snapshots run at, and one short enough to prove the pane does
+    // not pad. The other three have none, which is what `(no description)`
+    // has to look like.
+    .with_description(
+        // `t6` sorts first, so this is the row the cursor opens on.
+        "t6",
+        "Hand the packaged release candidate over to the study team for the \
+         4412 run. Everything below has to be true before it ships:\n\n\
+         - labels printed from the current template, not last quarter's\n\
+         - carrier pickup window confirmed in writing\n\
+         - the vendor contract countersigned and filed\n\n\
+         Ping the study lead once the kit is on the dock. If anything on \
+         that list is still open on the morning of the pickup, hold the \
+         shipment and say so in the channel rather than shipping partial.\n\n\
+         Previous run's notes are in the 4411 folder; the packaging changed \
+         between the two, so read them for the process and not the part \
+         numbers.\n\n\
+         On the labels specifically: the template moved to the new lot-code \
+         format last month, and the printer still has the old one cached. \
+         Clear it before the first run of the day or the first sheet comes \
+         out with a code nobody downstream can scan.\n\n\
+         If the carrier reschedules, the window has to be re-confirmed in \
+         writing rather than carried over — a verbal confirmation against \
+         the old slot is what went wrong on 4409, and it cost the study \
+         team a week.",
+    )
+    // A numbered list, so the short snapshot covers the other marker shape
+    // and the two-digit hang that comes with it.
+    .with_description(
+        "t1",
+        "Vendor confirmed verbally. Needs it in writing before the kit \
+         leaves:\n\
+         9. get the slot in email, not on the phone\n\
+         10. attach it to this task so the study lead can see it\n\
+         11. then close this out",
+    )
+    // Comments on the same two tasks, so one snapshot shows a description and
+    // its comments together and the other shows a short pair. `t2` gets
+    // comments and no description, which is the case that must not read as an
+    // empty task.
+    .with_comments(
+        "t6",
+        vec![
+            (
+                "Morgan Ellis",
+                "2026-07-28T09:14:00.000Z",
+                "Protocol draft is in the shared folder. Two things still open:\n\
+                 - the assay range on page 4\n\
+                 - whether we need a second reviewer",
+            ),
+            (
+                "Alex Chen",
+                "2026-08-02T16:40:00.000Z",
+                "Second reviewer confirmed. Range is fine as drafted.",
+            ),
+            (
+                "",
+                "2026-08-03T07:00:00.000Z",
+                "Status changed to In review by the integration.",
+            ),
+        ],
+    )
+    .with_comments(
+        "t1",
+        vec![(
+            "Jo Park",
+            "2025-11-30T11:02:00.000Z",
+            "Chased the vendor again.",
+        )],
+    )
+    .with_comments(
+        "t2",
+        vec![(
+            "Dana Ruiz",
+            "2026-08-09T13:20:00.000Z",
+            "No description on this one, but it still needs doing.",
+        )],
     )
     .with_tasks(
         "project-1",
@@ -357,6 +440,18 @@ fn drain_task_data<C: AsanaClient + Clone + Send + 'static>(app: &mut App<C>) {
     }
 }
 
+/// Waits for an in-flight description fetch, so a snapshot never catches the
+/// pane mid-load.
+fn drain_description<C: AsanaClient + Clone + Send + 'static>(app: &mut App<C>) {
+    for _ in 0..100 {
+        app.poll_description();
+        if !app.tasks.description().is_fetching() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Renders one screen from a sequence of key batches.
 ///
 /// Task loading is asynchronous, so each batch is followed by a drain: keys in
@@ -394,6 +489,7 @@ fn render_buffer(config: Config, width: u16, batches: Vec<Vec<KeyEvent>>) -> Buf
         run_session(&mut app, &mut ScriptedSource { keys }, &mut terminal, &mut RecordingHost::default())
             .expect("session runs");
         drain_task_data(&mut app);
+        drain_description(&mut app);
     }
 
     // A final pass with no input redraws the settled state, so a snapshot never
@@ -575,6 +671,120 @@ fn gantt_with_every_column_at_eighty() {
         vec![
             vec![key(' '), key('t')],
             vec![key('g'), key('>'), key('>'), key('>'), key('>')],
+        ]
+    });
+}
+
+/// The description pane, open on a task whose text clips at every width.
+///
+/// The `+N more lines` border and the `line 1/N` count are the whole reason
+/// this one is on a long description: between them they are how a reader
+/// knows there is more.
+#[test]
+fn description_pane() {
+    assert_snapshot("description", || {
+        vec![vec![key(' '), key('t')], vec![key('v')]]
+    });
+}
+
+/// After one `ctrl-d`: the count moves, and so does the number below.
+#[test]
+fn description_scrolled_half_a_page() {
+    assert_snapshot("description-scrolled", || {
+        vec![vec![key(' '), key('t')], vec![key('v')], vec![ctrl('d')]]
+    });
+}
+
+/// A short description, one row down: the pane does not pad it out.
+#[test]
+fn description_pane_on_a_short_one() {
+    assert_snapshot("description-short", || {
+        vec![vec![key(' '), key('t')], vec![key('v')], vec![key('j')]]
+    });
+}
+
+/// Scrolled to the bottom of the long one, where its three comments are.
+///
+/// Covers what the first screen cannot: several comments in a row, a comment
+/// with a list in it, and one Asana attributes to nobody.
+#[test]
+fn description_scrolled_to_its_comments() {
+    assert_snapshot("description-comments", || {
+        vec![
+            vec![key(' '), key('t')],
+            vec![key('v')],
+            vec![ctrl('d')],
+            vec![ctrl('d')],
+            vec![ctrl('d')],
+        ]
+    });
+}
+
+/// Comments with no description above them, two rows down.
+///
+/// The case that must not read as an empty task: the comments are the only
+/// thing written on it, and the rule is the first line in the pane.
+#[test]
+fn description_pane_on_a_task_with_only_comments() {
+    assert_snapshot("description-comments-only", || {
+        vec![
+            vec![key(' '), key('t')],
+            vec![key('v')],
+            vec![key('j')],
+            vec![key('j')],
+        ]
+    });
+}
+
+/// A task with nothing written on it at all, four rows down.
+///
+/// `line 0/0` rather than an empty title: the count is how the reader tells
+/// "nothing is written on this task" from "the pane has not caught up yet".
+#[test]
+fn description_pane_on_a_task_with_none() {
+    assert_snapshot("description-empty", || {
+        vec![
+            vec![key(' '), key('t')],
+            vec![key('v')],
+            vec![key('j')],
+            vec![key('j')],
+            vec![key('j')],
+            vec![key('j')],
+        ]
+    });
+}
+
+/// Help over description mode: the mode's own keys, and the two the table
+/// keeps.
+#[test]
+fn description_mode_with_help() {
+    assert_snapshot("description-help", || {
+        vec![vec![key(' '), key('t')], vec![key('v')], vec![key('?')]]
+    });
+}
+
+/// The monochrome ASCII fallback. Nothing in the pane is colour-coded, so
+/// this is really a check that the border glyphs degrade with everything else.
+#[test]
+fn description_in_the_monochrome_ascii_theme() {
+    assert_snapshot_with(mono_config(), vec![120], "description-mono", || {
+        vec![vec![key(' '), key('t')], vec![key('v')]]
+    });
+}
+
+/// The chart gives way to the pane.
+///
+/// `esc` between the two because each of these views is entered from task
+/// mode: `v` is not bound in gantt mode any more than `g` is bound in
+/// description mode, so switching goes back through the table.
+#[test]
+fn the_description_takes_the_space_the_chart_was_using() {
+    assert_snapshot_with(config(), vec![120], "description-over-gantt", || {
+        vec![
+            vec![key(' '), key('t')],
+            vec![key('g')],
+            vec![esc()],
+            vec![key('v')],
         ]
     });
 }

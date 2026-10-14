@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                      │
+│▍   ★ Platform Infrastructure                                                 │
+│    ☆ Backlog                                                                 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ Tasks ──────── 11 tasks · row 1 · columns 0/62 ┐┏ Description ━━━ line 37/71 ┓
+│   Task                        │ Assignee     │ │┃ one cached. Clear it       ┃
+│                                                │┃ before the first run of    ┃
+│▌Northwind BTX 4412 ────────────────────────────│┃ the day or the first sheet ┃
+│                                                │┃ comes out with a code      ┃
+│   Study Kit Design ····························│┃ nobody downstream can      ┃
+│▍  Draft the assay validation… │ Priya Raman  │ │┃ scan.                      ┃
+│   Review shipment requiremen… │ Morgan Ellis │ │┃                            ┃
+│   Ship release candidate to … │ Alex Chen    │ │┃ If the carrier             ┃
+│   Confirm carrier pickup win… │ —            │ │┃ reschedules, the window    ┃
+│   Update the sample intake S… │ Kim Alvarez  │ │┃ has to be re-confirmed in  ┃
+│   Qualify the second reagent… │ Dana Ruiz    │ │┃ writing rather than        ┃
+│                                                │┃ carried over — a verbal    ┃
+│   Shipment ····································│┃ confirmation against the   ┃
+│   Book the courier for the p… │ Sam Okafor   │ │┃ old slot is what went      ┃
+│   Label the retention samples │ Jo Park      │ │┃ wrong on 4409, and it cost ┃
+│   Reconcile the freight invo… │ Robin Fox    │ │┃ the study team a week.     ┃
+│   Close out packaging vendor… │ Alex Chen    │ │┃                            ┃
+│   Close the quarter's shippi… │ Priya Raman  │ │┃ ─────── 3 comments ─────── ┃
+│                                                │┃ Morgan Ellis · Jul 28      ┃
+│                                                │┃ Protocol draft is in the   ┃
+│                                                │┃ shared folder. Two things  ┃
+│                                                │┃ still open:                ┃
+│                                                │┃                            ┃
+│                                                │┃ - the assay range on page  ┃
+└────────────────────────────────────────────────┘┗━━━━━━━━━━━━ +11 more lines ┛
+^d/^u scroll   v close   o open in Asana   ? help             r refresh   q quit
+ DESCRIPTION                                                         description

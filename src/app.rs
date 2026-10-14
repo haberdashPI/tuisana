@@ -18,6 +18,7 @@ use std::{
 
 pub mod autocomplete;
 pub mod calendar;
+pub mod description;
 pub mod gantt;
 pub mod project_list;
 pub mod task;
@@ -145,6 +146,15 @@ pub struct App<C> {
     /// The app keeps the receiver here so the main loop can poll for partial
     /// results, completion, or failure without blocking the UI.
     task_data_receiver: Option<Receiver<TaskDataMessage>>,
+    /// Monotonic tag for the current description request.
+    ///
+    /// Its own counter rather than the task-data one: a description fetch is
+    /// started by the cursor landing somewhere and has nothing to do with the
+    /// dataset being reloaded. A reply whose generation has moved on is
+    /// dropped, which is what stops a slow fetch from landing on a row the
+    /// reader has already left.
+    description_generation: u64,
+    description_receiver: Option<Receiver<DescriptionMessage>>,
     /// Results from in-flight task writes.
     ///
     /// A permanent pair rather than one receiver per batch: `d` on twelve
@@ -473,6 +483,19 @@ struct TaskDataMessage {
     done: bool,
 }
 
+/// One task's description and comments, back from the worker that read them.
+struct DescriptionMessage {
+    generation: u64,
+    gid: String,
+    /// Both reads, or the first error between them.
+    ///
+    /// One result rather than two because the pane has one state to be in: a
+    /// half-loaded pane would have to say "here is the description, and the
+    /// comments may or may not exist", which is not a thing a reader can act
+    /// on. Either the pane has the task's text or it says why it does not.
+    result: Result<(String, Vec<crate::asana::TaskComment>)>,
+}
+
 impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     pub fn new(config: Config, client: C) -> Self {
         let mut tasks = TaskState::new();
@@ -486,6 +509,8 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             client,
             task_data_generation: 0,
             task_data_receiver: None,
+            description_generation: 0,
+            description_receiver: None,
             task_edit_events: mpsc::channel(),
             task_edits_sent: 0,
             task_edits_outstanding: 0,
@@ -600,6 +625,10 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
 
         self.tasks.set_recent_pane_enabled(view.recent);
         self.tasks.set_filter_sets_sidebar(view.filter_sidebar);
+        // Only the flag. A config with the chart visible too keeps it: the
+        // description simply wins the space for as long as it is open, and
+        // `split_pane` is the one place that decides which of them gets it.
+        self.tasks.description_mut().set_visible(view.description);
 
         // The top pane's content is decided by the mode, so restoring the
         // filter panel means starting in filter mode. Only the panel, not the
@@ -691,6 +720,9 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     pub fn refresh(&mut self) -> Result<()> {
         self.load_projects()?;
         self.tasks.invalidate_cache();
+        // A description edited in the browser is re-read on the next look,
+        // rather than needing the session restarted.
+        self.tasks.description_mut().clear_cache();
         if self.task_data_receiver.is_some() {
             self.task_data_generation = self.task_data_generation.wrapping_add(1);
         }
@@ -882,6 +914,16 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         self.tasks.gantt_mut().set_visible(true);
         // Same pane, same rows, same rule as `set_task_mode`: the top pane
         // keeps whatever it was holding.
+    }
+
+    /// Enters description mode, opening the pane. Follows `set_gantt_mode`:
+    /// the mode and the thing it drives are turned on together.
+    fn set_description_mode(&mut self) {
+        self.prepare_mode_switch();
+        self.mode = Mode::Description;
+        self.tasks.set_visible(true);
+        self.tasks.description_mut().set_visible(true);
+        self.tasks.aim_description();
     }
 
     /// Enters the mode the open cell editor reads its keys in.
@@ -1811,6 +1853,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             filters: self.tasks.filter_panel_visible(),
             filter_sidebar: self.tasks.filter_sets_sidebar_visible(),
             recent: self.tasks.recent_pane_enabled(),
+            description: self.tasks.description().visible(),
             legacy_projects: Vec::new(),
         }
     }
@@ -2107,6 +2150,28 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 }
                 return Ok(None);
             }
+            Action::SetDescriptionMode => {
+                self.set_description_mode();
+                self.ensure_task_data();
+                return Ok(None);
+            }
+            Action::ToggleDescription => {
+                self.tasks.description_mut().toggle_visible();
+                // Closing the pane leaves nothing for the mode to drive, so
+                // the mode goes with it — `toggle_gantt`'s rule exactly.
+                if !self.tasks.description().visible() {
+                    self.set_task_mode();
+                }
+                return Ok(None);
+            }
+            Action::DescriptionScrollDown => {
+                self.tasks.scroll_description(1);
+                return Ok(None);
+            }
+            Action::DescriptionScrollUp => {
+                self.tasks.scroll_description(-1);
+                return Ok(None);
+            }
             Action::GanttAddColumn => {
                 self.tasks.gantt_add_column();
                 return Ok(None);
@@ -2340,7 +2405,11 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 return Ok(None);
             }
             Action::Open => {
-                let url = if matches!(mode, Mode::Task) {
+                // Description mode asks the same question task mode does:
+                // the cursor is on the same row, and plain `notes` has no
+                // links or formatting, so the browser is the only place to
+                // see the rich version.
+                let url = if matches!(mode, Mode::Task | Mode::Description) {
                     self.tasks.selected_task_url()
                 } else if matches!(mode, Mode::Project | Mode::ProjectSearch) {
                     self.projects.selected_project().and_then(|p| match p.kind {
@@ -2873,6 +2942,100 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         self.task_edits_sent = 0;
         self.task_edit_failures = 0;
         self.task_edit_error = None;
+    }
+
+    /// Asks for the description of the row the cursor is on.
+    ///
+    /// No-op unless the pane is open, the cursor is on a task, and the text is
+    /// not already cached or already on its way.
+    ///
+    /// **Called from `draw`, on a settled queue.** Not from `handle_key_event`
+    /// like the config write-through, even though that is where the settling
+    /// rule lives: a key is not the only thing that moves the cursor off a
+    /// row. `settle_table` can rebuild the table out from under it, and that
+    /// happens in `draw`. Asking there covers both, and the gate is the same
+    /// one — so holding `j` through thirty rows costs one fetch for the row
+    /// you landed on rather than thirty.
+    pub fn request_description(&mut self) {
+        // `visible()` is the task pane, not the description pane: with the
+        // table hidden there is no region to split and nothing to read the
+        // text against, so a saved `[view].description` must not make the
+        // project view fetch.
+        if !self.tasks.description().visible() || !self.tasks.visible() {
+            return;
+        }
+
+        self.tasks.aim_description();
+        let Some(gid) = self.tasks.description().target().map(str::to_string) else {
+            return;
+        };
+        let modified_at = self.tasks.description_target_modified_at();
+        if !self
+            .tasks
+            .description()
+            .needs_fetch(&gid, modified_at.as_deref())
+        {
+            return;
+        }
+
+        self.description_generation = self.description_generation.wrapping_add(1);
+        let generation = self.description_generation;
+        self.tasks.description_mut().begin_fetch(&gid, modified_at);
+
+        let (sender, receiver) = mpsc::channel();
+        let client = self.client.clone();
+        self.description_receiver = Some(receiver);
+
+        // Two requests, one thread: the pane needs both before it can draw
+        // anything, so there is nothing to be gained by racing them and a
+        // second thread per cursor move to be paid for.
+        thread::spawn(move || {
+            let result = client
+                .get_task_description(&gid)
+                .and_then(|notes| Ok((notes, client.list_task_comments(&gid)?)));
+            let _ = sender.send(DescriptionMessage { generation, gid, result });
+        });
+    }
+
+    /// Merges a fetched description, or records why it never arrived.
+    pub fn poll_description(&mut self) {
+        loop {
+            let message = {
+                let Some(receiver) = self.description_receiver.as_ref() else {
+                    return;
+                };
+                receiver.try_recv()
+            };
+
+            match message {
+                Ok(message) => {
+                    // A reply from a superseded request is dropped rather than
+                    // stored: the row it was for is not the row on screen.
+                    if message.generation != self.description_generation {
+                        continue;
+                    }
+                    self.description_receiver = None;
+                    match message.result {
+                        Ok((notes, comments)) => self
+                            .tasks
+                            .description_mut()
+                            .finish_fetch(&message.gid, notes, comments),
+                        Err(err) => {
+                            debug_log(&format!("description error: {err}"));
+                            self.tasks
+                                .description_mut()
+                                .fail_fetch(&message.gid, err.to_string());
+                        }
+                    }
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.description_receiver = None;
+                    break;
+                }
+            }
+        }
     }
 
     pub fn poll_task_data(&mut self) {

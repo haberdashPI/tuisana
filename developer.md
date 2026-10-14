@@ -16,13 +16,16 @@ This file is the quickest way to understand the codebase without reading everyth
 10. `src/app/task.rs` manages task state, filters, sorting, and task-table data.
 11. `src/domain/gantt.rs` maps dates to chart columns and values to colours.
 12. `src/app/gantt.rs` owns the chart's session state and the colour dialog.
-13. `src/domain/task_edit.rs` is the write model: one field of one task, plus
+13. `src/app/description.rs` owns the description pane's state and its cache;
+    `src/ui/description.rs` splits the region and lays out the description and
+    the task's comments.
+14. `src/domain/task_edit.rs` is the write model: one field of one task, plus
     the parsing that turns a typed cell into it.
-14. `src/app/task_edit.rs` owns the open cell edit; `src/app/text_edit.rs` is
+15. `src/app/task_edit.rs` owns the open cell edit; `src/app/text_edit.rs` is
     the one-line text buffer every editable field runs on.
-15. `src/app/autocomplete.rs` is the completion state machine behind
+16. `src/app/autocomplete.rs` is the completion state machine behind
     `Assignee`, `Projects`, and the filter panel's `list` match mode.
-16. `src/asana/throttle.rs` is the write budget: how many actions may be in
+17. `src/asana/throttle.rs` is the write budget: how many actions may be in
     flight and how fast they may go.
 
 The async task-data path is split across two modules:
@@ -43,6 +46,16 @@ If you are trying to understand one user interaction end-to-end, read in this or
    - `src/app/project_list.rs` for project selection and search
    - `src/app/task.rs` for task filtering, sorting, and navigation
 7. The matching UI module in `src/ui/` if you need to understand rendering details.
+
+The description pane is the counter-example that explains that split, and it
+is worth reading the two together. Prose has nothing to say row by row, so it
+takes a region off the right of the task pane — `split_description` in
+`src/ui/description.rs`, called from `src/ui/runtime.rs` *before* the table is
+measured, because the columns have to be resolved against the width they
+actually get. The right of the task pane therefore holds the chart **or** the
+description, never both: `split_pane` is the single place that knows, and it
+answers "no chart" while the pane is open without touching the chart's own
+state, so closing the pane brings it back as it was.
 
 The Gantt chart is the one renderer that does not own a region of the screen.
 `src/ui/gantt.rs` returns spans that `src/ui/task_table.rs` appends to each
@@ -270,6 +283,46 @@ a convention.
   that file is actually behind on. A key being migrated *away* has to stay on
   the struct to be readable — `ViewConfig::legacy_projects` is one, read and
   never written — or the value is gone before migration can move it.
+- To change the description pane, start at `DescriptionState` in
+  `src/app/description.rs`. The cache is keyed by gid and **the comparison is
+  the invalidation**: a lookup checks the stored `modified_at` against the
+  record's current one, so an edit landing on a task makes its text a miss
+  without anything having to remember to clear it. The fetch is
+  `App::request_description` / `App::poll_description`, a second
+  generation-tracked channel beside the task-data pair; it is called from
+  `draw` rather than `handle_key_event`, behind the same `input_pending` gate,
+  because a key is not the only thing that moves the cursor off a row —
+  `settle_table` can rebuild the table out from under it, and that happens in
+  `draw`. Asking there covers both. The text is fetched by its own client
+  method with its own short field list: `notes` is deliberately **not** in
+  `TASK_OPT_FIELDS`, which the list, subtask, create, and update endpoints all
+  share.
+- The pane shows the task's **comments** under its description, as one
+  document: one scroll, one `line N/M` count, no second pane. They come from
+  `/tasks/{gid}/stories` — the whole activity feed — filtered to
+  `resource_subtype == "comment_added"`, and both reads go out on the **one**
+  worker thread and come back as one `Result`. That is deliberate: a pane that
+  showed the description and silently dropped the comments would be telling the
+  reader the task has none. A comment added while the session is open is *not*
+  noticed until `r`, because Asana does not bump `modified_at` for a story.
+- Prose layout is `layout` in `src/ui/description.rs`, not
+  `text::wrap_to_width`. Two rules it adds, both of them about reading a
+  description rather than reading an error message: **a single `\n` is a
+  paragraph break** (Asana's editor makes a block per Enter and `notes` joins
+  them with one newline, so the source's blank lines are dropped and the
+  layout inserts its own — `\n` and `\n\n` therefore read identically), and
+  **a wrapped list item hangs under its own text**, by the width of its own
+  marker, with no blank between items of one list. `classify` decides what is
+  a marker; the trailing space is what makes it one, so `-10 degrees` and a
+  `---` rule stay prose. The invariant worth keeping is that no line it
+  returns is ever wider than the pane — the renderer does not clip, and there
+  is a property test over widths 4 to 60 that says so.
+- The pane's geometry is written back by the renderer. `description_view`
+  stores the wrapped line count and the body height on the state through
+  `set_metrics`, which is the only way a `ctrl-d` knows what half a page is —
+  the same division of labour as `set_visible_columns` and
+  `ensure_selected_visible`. It also clamps the scroll on every frame, so
+  widening the terminal cannot strand the view past the end of the text.
 - To change the Gantt chart, start in `src/domain/gantt.rs` for anything about
   dates or colour assignment, and `src/ui/gantt.rs` for how it is drawn. The
   split between the table columns and the chart lives in `split_pane` in

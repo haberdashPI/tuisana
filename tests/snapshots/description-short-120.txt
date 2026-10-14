@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                                                              │
+│▍   ★ Platform Infrastructure                                                                                         │
+│    ☆ Backlog                                                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Tasks ───────────────────────────────── 11 tasks · row 2 · columns 0/52 ┐┏ Description ━━━━━━━━━━━━━━━━━━━ line 1/12 ┓
+│   Task                                       │ Assignee     │     Due │ │┃ Vendor confirmed verbally. Needs it in    ┃
+│                                                                         │┃ writing before the kit leaves:            ┃
+│▌Northwind BTX 4412 ─────────────────────────────────────────────────────│┃                                           ┃
+│                                                                         │┃ 9. get the slot in email, not on the      ┃
+│   Study Kit Design ·····················································│┃    phone                                  ┃
+│   Draft the assay validation protocol        │ Priya Raman  │ !Jul 10 │ │┃ 10. attach it to this task so the study   ┃
+│▍  Review shipment requirements doc           │ Morgan Ellis │ !Aug 19 │ │┃     lead can see it                       ┃
+│   Ship release candidate to the study team   │ Alex Chen    │   Today │ │┃ 11. then close this out                   ┃
+│   Confirm carrier pickup window with the ve… │ —            │     Wed │ │┃                                           ┃
+│   Update the sample intake SOP               │ Kim Alvarez  │   Sep 4 │ │┃ ─────────────── 1 comment ─────────────── ┃
+│   Qualify the second reagent supplier        │ Dana Ruiz    │  Sep 12 │ │┃ Jo Park · Nov 30 2025                     ┃
+│                                                                         │┃ Chased the vendor again.                  ┃
+│   Shipment ·····························································│┃                                           ┃
+│   Book the courier for the pilot run         │ Sam Okafor   │  Sep 15 │ │┃                                           ┃
+│   Label the retention samples                │ Jo Park      │   Oct 9 │ │┃                                           ┃
+│   Reconcile the freight invoices             │ Robin Fox    │  Oct 30 │ │┃                                           ┃
+│   Close out packaging vendor contract        │ Alex Chen    │  Nov 14 │ │┃                                           ┃
+│   Close the quarter's shipping report        │ Priya Raman  │  Dec 18 │ │┃                                           ┃
+│                                                                         │┃                                           ┃
+│                                                                         │┃                                           ┃
+│                                                                         │┃                                           ┃
+│                                                                         │┃                                           ┃
+│                                                                         │┃                                           ┃
+│                                                                         │┃                                           ┃
+└─────────────────────────────────────────────────────────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+^d/^u scroll   v close   o open in Asana   ? help                                                     r refresh   q quit
+ DESCRIPTION                                                                                                 description

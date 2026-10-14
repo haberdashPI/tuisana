@@ -119,6 +119,22 @@ impl TaskTarget {
     }
 }
 
+/// One comment somebody left on a task.
+///
+/// Built from the subset of Asana's stories that are comments: the activity
+/// feed also carries "changed the due date" and "added to a project", which
+/// are not worth a pane's height and are filtered out before this type exists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskComment {
+    /// Who wrote it, when Asana says. `None` for a comment attributed to no
+    /// one, which is what an integration posting through the API looks like.
+    pub author: Option<String>,
+    /// When it was written, as the API's ISO 8601 timestamp.
+    pub created_at: Option<String>,
+    /// The comment body, plain rather than HTML.
+    pub text: String,
+}
+
 /// Server-side filter parameters, applied by Asana to a task list request.
 ///
 /// Filters Asana cannot express (full-text search, custom field values, regex)
@@ -181,6 +197,30 @@ pub trait AsanaClient {
     /// subtask is grouped under even when the parent itself is filtered out of
     /// the loaded set.
     fn get_task(&self, task_gid: &str) -> Result<TaskDto>;
+    /// Fetches one task's description, as plain text.
+    ///
+    /// Separate from [`AsanaClient::get_task`] because it asks for a
+    /// different, much smaller set of fields. Notes are deliberately absent
+    /// from the shared list: a description is unbounded text, and asking for
+    /// one per task would put every description in every selected project on
+    /// the streaming load path to show the handful anybody opens.
+    ///
+    /// A `String` rather than an `Option<String>`, and its own method rather
+    /// than a `notes` field on [`dto::TaskDto`]. Both for the same reason:
+    /// Asana answers an empty description as `""`, and the shared field list
+    /// does not ask for notes at all — so a nullable field on the DTO would
+    /// read as "not requested" at every call site but one and "this task has
+    /// no description" at that one. Neither of these can be read the wrong
+    /// way.
+    fn get_task_description(&self, task_gid: &str) -> Result<String>;
+    /// Fetches the comments on a task, oldest first.
+    ///
+    /// Its own request, beside [`AsanaClient::get_task_description`] rather
+    /// than folded into it: comments are a different endpoint
+    /// (`/tasks/{gid}/stories`), they paginate, and most of what it answers
+    /// with has to be thrown away. The caller makes both reads on one worker
+    /// thread, so the pane still costs one round of work per task.
+    fn list_task_comments(&self, task_gid: &str) -> Result<Vec<TaskComment>>;
     fn list_sections(&self, project_gid: &str) -> Result<Vec<SectionDto>>;
     fn list_project_custom_field_settings(
         &self,

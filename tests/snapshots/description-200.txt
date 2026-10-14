@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                                                                                                                                              │
+│▍   ★ Platform Infrastructure                                                                                                                                                                         │
+│    ☆ Backlog                                                                                                                                                                                         │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Tasks ───────────────────────────────────────────────────────────────────────────────────────────────────────────────── 11 tasks · row 1 ┐┏ Description ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ line 1/42 ┓
+│   Task                                                    │ Assignee     │     Due │  Start │ St │ Projects           │ Parent │ Priority│┃ Hand the packaged release candidate over to the study    ┃
+│                                                                                                                                          │┃ team for the 4412 run. Everything below has to be true   ┃
+│▌Northwind BTX 4412 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│┃ before it ships:                                         ┃
+│                                                                                                                                          │┃                                                          ┃
+│   Study Kit Design ······················································································································│┃ - labels printed from the current template, not last     ┃
+│▍  Draft the assay validation protocol                     │ Priya Raman  │ !Jul 10 │ Jun 15 │ ○  │ Northwind BTX 4412 │ —      │ High    │┃   quarter's                                              ┃
+│   Review shipment requirements doc                        │ Morgan Ellis │ !Aug 19 │  Aug 3 │ ○  │ Northwind BTX 4412 │ —      │ High    │┃ - carrier pickup window confirmed in writing             ┃
+│   Ship release candidate to the study team                │ Alex Chen    │   Today │ Aug 10 │ ○  │ Northwind BTX 4412 │ —      │ High    │┃ - the vendor contract countersigned and filed            ┃
+│   Confirm carrier pickup window with the vendor           │ —            │     Wed │ Aug 17 │ ○  │ Northwind BTX 4412 │ —      │ —       │┃                                                          ┃
+│   Update the sample intake SOP                            │ Kim Alvarez  │   Sep 4 │ Aug 20 │ ○  │ Northwind BTX 4412 │ —      │ Medium  │┃ Ping the study lead once the kit is on the dock. If      ┃
+│   Qualify the second reagent supplier                     │ Dana Ruiz    │  Sep 12 │  Jul 1 │ ○  │ Northwind BTX 4412 │ —      │ Medium  │┃ anything on that list is still open on the morning of    ┃
+│                                                                                                                                          │┃ the pickup, hold the shipment and say so in the channel  ┃
+│   Shipment ······························································································································│┃ rather than shipping partial.                            ┃
+│   Book the courier for the pilot run                      │ Sam Okafor   │  Sep 15 │  Sep 1 │ ○  │ Northwind BTX 4412 │ —      │ Low     │┃                                                          ┃
+│   Label the retention samples                             │ Jo Park      │   Oct 9 │      — │ ○  │ Northwind BTX 4412 │ —      │ Medium  │┃ Previous run's notes are in the 4411 folder; the         ┃
+│   Reconcile the freight invoices                          │ Robin Fox    │  Oct 30 │ Sep 20 │ ○  │ Northwind BTX 4412 │ —      │ Low     │┃ packaging changed between the two, so read them for the  ┃
+│   Close out packaging vendor contract                     │ Alex Chen    │  Nov 14 │  Oct 1 │ ○  │ Northwind BTX 4412 │ —      │ Low     │┃ process and not the part numbers.                        ┃
+│   Close the quarter's shipping report                     │ Priya Raman  │  Dec 18 │  Nov 2 │ ○  │ Northwind BTX 4412 │ —      │ Low     │┃                                                          ┃
+│                                                                                                                                          │┃ On the labels specifically: the template moved to the    ┃
+│                                                                                                                                          │┃ new lot-code format last month, and the printer still    ┃
+│                                                                                                                                          │┃ has the old one cached. Clear it before the first run of ┃
+│                                                                                                                                          │┃ the day or the first sheet comes out with a code nobody  ┃
+│                                                                                                                                          │┃ downstream can scan.                                     ┃
+│                                                                                                                                          │┃                                                          ┃
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ +18 more lines ┛
+^d/^u scroll   v close   o open in Asana   ? help                                                                                                                                     r refresh   q quit
+ DESCRIPTION                                                                                                                                                                                 description

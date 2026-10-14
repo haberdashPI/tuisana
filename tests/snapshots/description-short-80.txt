@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                      │
+│▍   ★ Platform Infrastructure                                                 │
+│    ☆ Backlog                                                                 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ Tasks ──────── 11 tasks · row 2 · columns 0/62 ┐┏ Description ━━━━ line 1/14 ┓
+│   Task                        │ Assignee     │ │┃ Vendor confirmed verbally. ┃
+│                                                │┃ Needs it in writing before ┃
+│▌Northwind BTX 4412 ────────────────────────────│┃ the kit leaves:            ┃
+│                                                │┃                            ┃
+│   Study Kit Design ····························│┃ 9. get the slot in email,  ┃
+│   Draft the assay validation… │ Priya Raman  │ │┃    not on the phone        ┃
+│▍  Review shipment requiremen… │ Morgan Ellis │ │┃ 10. attach it to this task ┃
+│   Ship release candidate to … │ Alex Chen    │ │┃     so the study lead can  ┃
+│   Confirm carrier pickup win… │ —            │ │┃     see it                 ┃
+│   Update the sample intake S… │ Kim Alvarez  │ │┃ 11. then close this out    ┃
+│   Qualify the second reagent… │ Dana Ruiz    │ │┃                            ┃
+│                                                │┃ ─────── 1 comment ──────── ┃
+│   Shipment ····································│┃ Jo Park · Nov 30 2025      ┃
+│   Book the courier for the p… │ Sam Okafor   │ │┃ Chased the vendor again.   ┃
+│   Label the retention samples │ Jo Park      │ │┃                            ┃
+│   Reconcile the freight invo… │ Robin Fox    │ │┃                            ┃
+│   Close out packaging vendor… │ Alex Chen    │ │┃                            ┃
+│   Close the quarter's shippi… │ Priya Raman  │ │┃                            ┃
+│                                                │┃                            ┃
+│                                                │┃                            ┃
+│                                                │┃                            ┃
+│                                                │┃                            ┃
+│                                                │┃                            ┃
+│                                                │┃                            ┃
+└────────────────────────────────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+^d/^u scroll   v close   o open in Asana   ? help             r refresh   q quit
+ DESCRIPTION                                                         description

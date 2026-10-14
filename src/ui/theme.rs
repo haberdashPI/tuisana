@@ -516,6 +516,9 @@ impl Theme {
             // Yellow, like every other mode where something is being typed.
             Mode::ColumnEdit => Color::Yellow,
             Mode::Gantt => Color::Cyan,
+            // Cyan, like the chart, and for the same reason: another
+            // read-only view over the rows the table is already showing.
+            Mode::Description => Color::Cyan,
             // Yellow, like the other modes where something is being edited.
             Mode::GanttOrder => Color::Yellow,
             // Red, like edit mode, and for the same reason: what is about to

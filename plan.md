@@ -131,6 +131,7 @@ along the way.
 | 14.5 | [Assign people and projects](plan/14.5-assign-people-and-projects.md) | ✓ |
 | 15 | [Create and delete tasks and sections](plan/15-create-and-delete-tasks-and-sections.md) | ✓ |
 | 15.5 | [A filter set carries its projects](plan/15.5-a-filter-set-carries-its-projects.md) | ✓ |
+| 15.75 | [Read a task's description and comments](plan/15.75-read-a-task-description.md) | ✓ |
 | 16 | [Hardening and polish](plan/16-hardening-and-polish.md) |  |
 
 ## Testing Strategy

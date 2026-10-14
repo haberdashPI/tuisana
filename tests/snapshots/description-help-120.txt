@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                                                              │
+│▍   ★ Platform Infrastructure                                                                                         │
+│    ☆ Backlog                                                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                 ┏ Help · description mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                 │
+│                 ┃Description                                Modes                                  ┃                 │
+└─────────────────┃^d        down half a pane                 p         projects                     ┃─────────────────┘
+┌ Tasks ──────────┃^u        up half a pane                   f         filters                      ┃━━━━━━ line 1/52 ┓
+│   Task          ┃v         hide the pane                    t esc     tasks                        ┃ candidate over  ┃
+│                 ┃esc       back to tasks, pane stays        m         toggle tasks                 ┃ 4412 run.       ┃
+│▌Northwind BTX 44┃                                                                                  ┃e true before it ┃
+│                 ┃Still the table's                          Panes                                  ┃                 ┃
+│   Study Kit Desi┃j down    next task, pane follows          [/]       shrink / grow                ┃                 ┃
+│▍  Draft the assa┃k up      previous task, pane follows      {         minimize                     ┃ current         ┃
+│   Review shipmen┃o         open the task in Asana           }         maximize                     ┃ter's            ┃
+│   Ship release c┃r         reload, descriptions included    0         restore                      ┃onfirmed in      ┃
+│   Confirm carrie┃                                                                                  ┃                 ┃
+│   Update the sam┃Move                                       App                                    ┃ntersigned and   ┃
+│   Qualify the se┃j/k       down / up                        r         refresh                      ┃                 ┃
+│                 ┃home/end  top / bottom                     q ^c      quit                         ┃                 ┃
+│   Shipment ·····┃                                           ?         close this help              ┃the kit is on    ┃
+│   Book the couri┃                                                                                  ┃that list is     ┃
+│   Label the rete┃                                                                        ? to close┃ of the pickup,  ┃
+│   Reconcile the ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ so in the       ┃
+│   Close out packaging vendor contract        │ Alex Chen    │  Nov 14 │ │┃ channel rather than shipping partial.     ┃
+│   Close the quarter's shipping report        │ Priya Raman  │  Dec 18 │ │┃                                           ┃
+│                                                                         │┃ Previous run's notes are in the 4411      ┃
+│                                                                         │┃ folder; the packaging changed between the ┃
+│                                                                         │┃ two, so read them for the process and not ┃
+│                                                                         │┃ the part numbers.                         ┃
+│                                                                         │┃                                           ┃
+│                                                                         │┃ On the labels specifically: the template  ┃
+└─────────────────────────────────────────────────────────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━ +28 more lines ┛
+^d/^u scroll   v close   o open in Asana   ? help                                                     r refresh   q quit
+ DESCRIPTION                                                                                                 description

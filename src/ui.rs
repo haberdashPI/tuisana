@@ -11,7 +11,10 @@
 //!   [`help_overlay`], and [`calendar`] render content into a region they are
 //!   handed. The last two are centered modals drawn over the panes.
 //!   [`gantt`] is the exception to "a region": it hands [`task_table`] spans to
-//!   append to each row, so a row and its bar are one line. [`completion`] is
+//!   append to each row, so a row and its bar are one line. [`description`]
+//!   is the counter-example that explains the rule: prose has nothing to say
+//!   row by row, so it takes a region of its own off the right of the task
+//!   pane rather than riding the rows. [`completion`] is
 //!   a third modal, over the field an editor is completing. [`confirm`] is a
 //!   fourth: one window shared by every question that has to be answered
 //!   before anything else happens. [`notice`] is the
@@ -26,6 +29,7 @@ pub mod chrome;
 pub mod completion;
 pub mod confirm;
 pub mod date;
+pub mod description;
 pub mod filter_panel;
 pub mod filter_sets;
 pub mod gantt;

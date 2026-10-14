@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                      │
+│▍   ★ Platform Infrastructure                                                 │
+│    ☆ Backlog                                                                 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+┏ Help · description mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Description                                Modes                              ┃
+┃^d        down half a pane                 p         projects                 ┃
+┃^u        up half a pane                   f         filters                  ┃
+┃v         hide the pane                    t esc     tasks                    ┃
+┃esc       back to tasks, pane stays        m         toggle tasks             ┃
+┃                                                                              ┃
+┃Still the table's                          Panes                              ┃
+┃j down    next task, pane follows          [/]       shrink / grow            ┃
+┃k up      previous task, pane follows      {         minimize                 ┃
+┃o         open the task in Asana           }         maximize                 ┃
+┃r         reload, descriptions included    0         restore                  ┃
+┃                                                                              ┃
+┃Move                                       App                                ┃
+┃j/k       down / up                        r         refresh                  ┃
+┃home/end  top / bottom                     q ^c      quit                     ┃
+┃                                           ?         close this help          ┃
+┃                                                                              ┃
+┃                                                                        ? to c┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+│   Close out packaging vendor… │ Alex Chen    │ │┃ the kit is on the dock. If ┃
+│   Close the quarter's shippi… │ Priya Raman  │ │┃ anything on that list is   ┃
+│                                                │┃ still open on the morning  ┃
+│                                                │┃ of the pickup, hold the    ┃
+│                                                │┃ shipment and say so in the ┃
+│                                                │┃ channel rather than        ┃
+│                                                │┃ shipping partial.          ┃
+│                                                │┃                            ┃
+└────────────────────────────────────────────────┘┗━━━━━━━━━━━━ +47 more lines ┛
+^d/^u scroll   v close   o open in Asana   ? help             r refresh   q quit
+ DESCRIPTION                                                         description

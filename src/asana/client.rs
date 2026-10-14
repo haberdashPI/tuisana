@@ -12,10 +12,11 @@ use crate::{
     asana::{
         dto::{
             CollectionResponse, ProjectCustomFieldSettingDto, ProjectDto, ResourceResponse,
-            SectionDto, TaskDto, UserDto,
+            SectionDto, StoryDto, TaskDescriptionDto, TaskDto, UserDto,
         },
         throttle::WriteThrottle,
-        AsanaClient, TaskLoadScope, TaskQuery, TaskTarget, TaskWrite, MAX_BATCH_ACTIONS,
+        AsanaClient, TaskComment, TaskLoadScope, TaskQuery, TaskTarget, TaskWrite,
+        MAX_BATCH_ACTIONS,
     },
     config::AuthConfig,
     domain::{NewTask, Project, ProjectEdit, ProjectMembership, TaskFieldEdit},
@@ -30,6 +31,25 @@ const ASANA_API_BASE_URL: &str = "https://app.asana.com/api/1.0";
 /// from any of them carries the same information — in particular `parent.gid`,
 /// which is what lets a subtask fetched by assignee be traced back to the
 /// project its parent lives in.
+/// The fields a description request asks for, and all it asks for.
+///
+/// Notes stay out of [`TASK_OPT_FIELDS`] — see
+/// [`AsanaClient::get_task_description`] — so this is the one request that
+/// names them, and names nothing else: the caller keys its cache on the
+/// `modified_at` the *loaded record* already carries, so asking for the
+/// server's copy of it here would be a second answer to a settled question.
+const DESCRIPTION_OPT_FIELDS: &str = "gid,notes";
+
+/// The story fields the comment list asks for.
+///
+/// `resource_subtype` earns its place by being the filter: the activity feed
+/// returns every change ever made to the task, and only `comment_added` is
+/// something a person wrote.
+const STORY_OPT_FIELDS: &str = "gid,resource_subtype,created_at,created_by.name,text";
+
+/// The `resource_subtype` of a story that is a comment.
+const COMMENT_SUBTYPE: &str = "comment_added";
+
 const TASK_OPT_FIELDS: &str = "gid,name,completed,modified_at,due_on,start_on,assignee.gid,assignee.name,num_subtasks,parent.gid,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.enum_value.gid,custom_fields.enum_value.name";
 
 /// Minimal transport abstraction for JSON requests.
@@ -268,6 +288,31 @@ fn batch_result(result: &Value) -> Result<Option<String>> {
 ///
 /// A cleared value is JSON `null`, which is how Asana unsets a field: omitting
 /// the key means "no change", which would make clearing impossible.
+/// Reads one story as a comment, or discards it.
+///
+/// Three reasons to discard: it is not a comment, it is a comment with no
+/// text, or its text is only whitespace. The last two would each cost the pane
+/// a byline and a blank line to say nothing.
+fn comment_from_story(story: StoryDto) -> Option<TaskComment> {
+    if story.resource_subtype.as_deref() != Some(COMMENT_SUBTYPE) {
+        return None;
+    }
+
+    let text = story.text.unwrap_or_default();
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    Some(TaskComment {
+        author: story
+            .created_by
+            .and_then(|user| user.name.or(user.display_name))
+            .filter(|name| !name.trim().is_empty()),
+        created_at: story.created_at,
+        text,
+    })
+}
+
 fn update_body(edit: &TaskFieldEdit) -> Value {
     use crate::domain::CustomFieldValue;
     use serde_json::json;
@@ -548,6 +593,29 @@ impl<T: Transport> HttpAsanaClient<T> {
             .map_err(|err| Error::Backend(format!("failed to decode subtask list: {err}")))
     }
 
+    fn list_stories_page(
+        &self,
+        task_gid: &str,
+        offset: Option<&str>,
+    ) -> Result<CollectionResponse<StoryDto>> {
+        let mut query = vec![
+            ("opt_fields", STORY_OPT_FIELDS.to_string()),
+            ("limit", "100".to_string()),
+        ];
+        if let Some(offset) = offset {
+            query.push(("offset", offset.to_string()));
+        }
+
+        let json = self.transport.get_json(
+            &format!("tasks/{task_gid}/stories"),
+            &query,
+            &self.personal_access_token,
+        )?;
+
+        serde_json::from_value(json)
+            .map_err(|err| Error::Backend(format!("failed to decode story list: {err}")))
+    }
+
     fn list_sections_page(
         &self,
         project_gid: &str,
@@ -691,6 +759,37 @@ impl<T: Transport> AsanaClient for HttpAsanaClient<T> {
         let response: ResourceResponse<TaskDto> = serde_json::from_value(json)
             .map_err(|err| Error::Backend(format!("failed to decode task {task_gid}: {err}")))?;
         Ok(response.data)
+    }
+
+    fn get_task_description(&self, task_gid: &str) -> Result<String> {
+        let json = self.transport.get_json(
+            &format!("tasks/{task_gid}"),
+            &[("opt_fields", DESCRIPTION_OPT_FIELDS.to_string())],
+            &self.personal_access_token,
+        )?;
+
+        let response: ResourceResponse<TaskDescriptionDto> =
+            serde_json::from_value(json).map_err(|err| {
+                Error::Backend(format!("failed to decode description for {task_gid}: {err}"))
+            })?;
+        Ok(response.data.notes.unwrap_or_default())
+    }
+
+    fn list_task_comments(&self, task_gid: &str) -> Result<Vec<TaskComment>> {
+        let mut comments = Vec::new();
+        let mut offset: Option<String> = None;
+
+        loop {
+            let page = self.list_stories_page(task_gid, offset.as_deref())?;
+            comments.extend(page.data.into_iter().filter_map(comment_from_story));
+
+            match page.next_page {
+                Some(next_page) => offset = Some(next_page.offset),
+                None => break,
+            }
+        }
+
+        Ok(comments)
     }
 
     fn list_sections(&self, project_gid: &str) -> Result<Vec<SectionDto>> {
@@ -969,7 +1068,10 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{asana_error_message, retry_after, HttpAsanaClient, Transport, TASK_OPT_FIELDS};
+    use super::{
+        asana_error_message, retry_after, HttpAsanaClient, Transport, STORY_OPT_FIELDS,
+        TASK_OPT_FIELDS,
+    };
     use crate::asana::{AsanaClient, TaskLoadScope, TaskQuery, TaskWrite};
     use crate::domain::{ProjectEdit, TaskFieldEdit};
     use crate::error::{Error, Result};
@@ -1300,6 +1402,65 @@ mod tests {
         let (path, query, _) = &requests[0];
         assert_eq!(path, "tasks/t1");
         assert!(query.contains(&("opt_fields".to_string(), TASK_OPT_FIELDS.to_string())));
+    }
+
+    #[test]
+    fn the_comment_list_keeps_only_what_a_person_wrote() {
+        let transport = MockTransport::new(vec![json!({
+            "data": [
+                {
+                    "gid": "s1",
+                    "resource_subtype": "due_date_changed",
+                    "created_by": { "gid": "u1", "name": "Alex Chen" },
+                    "created_at": "2026-08-01T00:00:00.000Z",
+                    "text": "changed the due date to Aug 19"
+                },
+                {
+                    "gid": "s2",
+                    "resource_subtype": "comment_added",
+                    "created_by": { "gid": "u2", "name": "Morgan Ellis" },
+                    "created_at": "2026-08-02T00:00:00.000Z",
+                    "text": "Protocol draft is in the shared folder."
+                },
+                {
+                    "gid": "s3",
+                    "resource_subtype": "comment_added",
+                    "created_by": null,
+                    "created_at": "2026-08-03T00:00:00.000Z",
+                    "text": "Posted by an integration."
+                },
+                {
+                    "gid": "s4",
+                    "resource_subtype": "comment_added",
+                    "created_by": { "gid": "u2", "name": "Morgan Ellis" },
+                    "created_at": "2026-08-04T00:00:00.000Z",
+                    "text": "   "
+                }
+            ]
+        })]);
+        let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
+
+        let comments = client.list_task_comments("t1").expect("comments resolve");
+
+        // The due-date story is not a comment, and the whitespace-only one
+        // would cost a byline to say nothing.
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].author.as_deref(), Some("Morgan Ellis"));
+        assert_eq!(comments[0].text, "Protocol draft is in the shared folder.");
+        assert_eq!(comments[1].author, None, "an integration has no name");
+
+        let requests = client.transport.requests.borrow();
+        let (path, query, _) = &requests[0];
+        assert_eq!(path, "tasks/t1/stories");
+        assert!(query.contains(&("opt_fields".to_string(), STORY_OPT_FIELDS.to_string())));
+    }
+
+    /// The activity feed is mostly not comments, so the one field that tells
+    /// them apart has to be asked for.
+    #[test]
+    fn comment_requests_ask_for_the_story_subtype() {
+        assert!(STORY_OPT_FIELDS.contains("resource_subtype"));
+        assert!(STORY_OPT_FIELDS.contains("created_by.name"));
     }
 
     /// A subtask can only be traced back to its parent's project when the

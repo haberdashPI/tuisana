@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                                                              │
+│▍   ★ Platform Infrastructure                                                                                         │
+│    ☆ Backlog                                                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Tasks ───────────────────────────────── 11 tasks · row 1 · columns 0/52 ┐┏ Description ━━━━━━━━━━━━━━━━━━ line 13/52 ┓
+│   Task                                       │ Assignee     │     Due │ │┃ Ping the study lead once the kit is on    ┃
+│                                                                         │┃ the dock. If anything on that list is     ┃
+│▌Northwind BTX 4412 ─────────────────────────────────────────────────────│┃ still open on the morning of the pickup,  ┃
+│                                                                         │┃ hold the shipment and say so in the       ┃
+│   Study Kit Design ·····················································│┃ channel rather than shipping partial.     ┃
+│▍  Draft the assay validation protocol        │ Priya Raman  │ !Jul 10 │ │┃                                           ┃
+│   Review shipment requirements doc           │ Morgan Ellis │ !Aug 19 │ │┃ Previous run's notes are in the 4411      ┃
+│   Ship release candidate to the study team   │ Alex Chen    │   Today │ │┃ folder; the packaging changed between the ┃
+│   Confirm carrier pickup window with the ve… │ —            │     Wed │ │┃ two, so read them for the process and not ┃
+│   Update the sample intake SOP               │ Kim Alvarez  │   Sep 4 │ │┃ the part numbers.                         ┃
+│   Qualify the second reagent supplier        │ Dana Ruiz    │  Sep 12 │ │┃                                           ┃
+│                                                                         │┃ On the labels specifically: the template  ┃
+│   Shipment ·····························································│┃ moved to the new lot-code format last     ┃
+│   Book the courier for the pilot run         │ Sam Okafor   │  Sep 15 │ │┃ month, and the printer still has the old  ┃
+│   Label the retention samples                │ Jo Park      │   Oct 9 │ │┃ one cached. Clear it before the first run ┃
+│   Reconcile the freight invoices             │ Robin Fox    │  Oct 30 │ │┃ of the day or the first sheet comes out   ┃
+│   Close out packaging vendor contract        │ Alex Chen    │  Nov 14 │ │┃ with a code nobody downstream can scan.   ┃
+│   Close the quarter's shipping report        │ Priya Raman  │  Dec 18 │ │┃                                           ┃
+│                                                                         │┃ If the carrier reschedules, the window    ┃
+│                                                                         │┃ has to be re-confirmed in writing rather  ┃
+│                                                                         │┃ than carried over — a verbal confirmation ┃
+│                                                                         │┃ against the old slot is what went wrong   ┃
+│                                                                         │┃ on 4409, and it cost the study team a     ┃
+│                                                                         │┃ week.                                     ┃
+└─────────────────────────────────────────────────────────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━ +16 more lines ┛
+^d/^u scroll   v close   o open in Asana   ? help                                                     r refresh   q quit
+ DESCRIPTION                                                                                                 description

@@ -179,6 +179,41 @@ pub struct TaskDto {
     pub custom_fields: Vec<CustomFieldValueDto>,
 }
 
+/// The description payload returned for a single task.
+///
+/// Its own DTO rather than fields on [`TaskDto`]: it is decoded from a
+/// request that asks for `notes` and nothing else worth keeping, and reusing
+/// `TaskDto` would mean every other field arriving absent and defaulted.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TaskDescriptionDto {
+    /// The description text. Absent and `null` both read as empty.
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+/// One entry in a task's activity feed.
+///
+/// Asana calls these *stories*, and most of them are not comments: changing a
+/// due date, completing a task, and adding a follower all leave one. The
+/// `resource_subtype` is what tells them apart.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StoryDto {
+    /// The story id.
+    pub gid: String,
+    /// What kind of story it is. `comment_added` is the one worth reading.
+    #[serde(default)]
+    pub resource_subtype: Option<String>,
+    /// Who left it. Absent for a story Asana attributes to no one.
+    #[serde(default)]
+    pub created_by: Option<UserDto>,
+    /// When, as an ISO 8601 timestamp.
+    #[serde(default)]
+    pub created_at: Option<String>,
+    /// The comment body, for the stories that have one.
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
 /// A custom field definition payload for a project.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CustomFieldDto {

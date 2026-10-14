@@ -20,7 +20,7 @@ use crate::{
         task_edit::CellEditView,
     },
     domain::{
-        month_name, GanttModel, SortDirection, TaskRowKind, TaskSort, TaskTableModel, TimelineView,
+        GanttModel, SortDirection, TaskRowKind, TaskSort, TaskTableModel, TimelineView,
     },
     ui::{
         chrome::{Chip, PaneMessage, Tone},
@@ -260,6 +260,18 @@ impl TaskTableView {
         }
         self
     }
+
+    /// Says the description pane is open but had nowhere to draw.
+    ///
+    /// On the task pane rather than nowhere: a pane that silently fails to
+    /// appear reads as a key that does not work.
+    pub fn with_narrow_description_warning(mut self, too_narrow: bool) -> Self {
+        if too_narrow {
+            self.counts
+                .push(Chip::toned("description too narrow", Tone::Warn));
+        }
+        self
+    }
 }
 
 /// How the pane's interior is divided between columns and chart.
@@ -294,7 +306,12 @@ fn split_pane(
         too_narrow: false,
     };
 
-    if !state.gantt().visible() {
+    // The right of the task pane holds the chart *or* the description, never
+    // both — the rule the top pane already lives by with the project list and
+    // the filter panel. Squeezing columns, a chart, and prose into one pane
+    // leaves all three too narrow to read. The chart's own state is untouched,
+    // so closing the description brings it back exactly as it was.
+    if !state.gantt().visible() || state.description().visible() {
         return all;
     }
 
@@ -1037,6 +1054,10 @@ pub fn settings_chips(state: &TaskState) -> Vec<Chip> {
         ));
     }
 
+    if state.description().visible() {
+        chips.push(Chip::toned("description", Tone::Accent));
+    }
+
     chips.extend(gantt_chips(state));
     chips
 }
@@ -1060,7 +1081,11 @@ fn gantt_chips(state: &TaskState) -> Vec<Chip> {
     if let TimelineView::Window { start, days } = gantt.timeline() {
         let end = start.add_days(*days as i64 - 1);
         chips.push(Chip::toned(
-            format!("window {} – {}", short_date(*start), short_date(end)),
+            format!(
+                "window {} – {}",
+                date::short_date(*start),
+                date::short_date(end)
+            ),
             Tone::Accent,
         ));
     }
@@ -1069,14 +1094,6 @@ fn gantt_chips(state: &TaskState) -> Vec<Chip> {
 }
 
 /// `Jun 1`, or `Jun 1 2027` when the year is not this one.
-fn short_date(value: crate::domain::CivilDate) -> String {
-    let today = date::today();
-    match value.year == today.year {
-        true => format!("{} {}", month_name(value.month), value.day),
-        false => format!("{} {} {}", month_name(value.month), value.day, value.year),
-    }
-}
-
 fn counts(state: &TaskState) -> Vec<Chip> {
     let mut chips = Vec::new();
 

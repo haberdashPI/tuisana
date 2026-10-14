@@ -767,6 +767,9 @@ pub struct ViewConfig {
     /// session edited, so at startup it is always empty and always hidden.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub recent: bool,
+    /// The description pane down the right of the task table.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub description: bool,
     /// A version-1 or -2 file's selected projects, on their way out.
     ///
     /// Read, never written: since version 3 a project selection lives on a
@@ -802,6 +805,7 @@ impl Default for ViewConfig {
             filters: false,
             filter_sidebar: false,
             recent: true,
+            description: false,
             legacy_projects: Vec::new(),
         }
     }
@@ -872,6 +876,12 @@ pub enum Mode {
     ColumnEdit,
     Gantt,
     GanttOrder,
+    /// The description pane has focus.
+    ///
+    /// A sibling of [`Mode::Task`] the way [`Mode::Gantt`] is: the same pane,
+    /// the same rows, the same cursor, but the keys scroll the prose on the
+    /// right instead of moving through the table.
+    Description,
 }
 
 impl Default for Mode {
@@ -914,6 +924,7 @@ impl Mode {
             Self::ColumnEdit => "column",
             Self::Gantt => "gantt",
             Self::GanttOrder => "colors",
+            Self::Description => "description",
         }
     }
 }
@@ -1446,6 +1457,24 @@ fn default_bindings() -> Vec<Bind> {
         // the chart agree.
         Bind::with_mode("t", Mode::Gantt, "gantt_today"),
         Bind::with_mode("enter", Mode::Gantt, "gantt_open_order"),
+        // The description pane. `v` reads as "view", and it is the only free
+        // letter that does: `r` for "read" is `refresh` in `Mode::Any`, and
+        // shadowing it here would leave the one view that most wants to
+        // reload its own rows with no key to do it. `v` is bound in project
+        // mode only, so taking it for these two displaces nothing.
+        Bind::with_mode("v", Mode::Task, "set_description_mode"),
+        Bind::with_mode("esc", Mode::Description, "set_task_mode"),
+        Bind::with_mode("v", Mode::Description, "toggle_description"),
+        // `page_down` / `page_up` globally, shadowed here: while the pane
+        // holds the keys, a half-page scroll of the prose is what someone
+        // reaching for `ctrl-d` means. `esc` is one key from undoing that.
+        Bind::with_mode("ctrl-d", Mode::Description, "description_scroll_down"),
+        Bind::with_mode("ctrl-u", Mode::Description, "description_scroll_up"),
+        // Plain `notes` has no links and no formatting, so the browser is the
+        // only place to see the rich version. Bound here as well as in task
+        // mode because the hint bar advertises it from this mode — a hint
+        // naming a key that does nothing is worse than no hint.
+        Bind::with_mode("o", Mode::Description, "open"),
         // j/k are bound here so they shadow the global cursor movement; the
         // dialog still falls back to the globals for ?, r, and q.
         Bind::with_mode("j", Mode::GanttOrder, "move_down"),
@@ -3082,6 +3111,7 @@ version = 1.0
                 filters: true,
                 filter_sidebar: true,
                 recent: false,
+                description: true,
                 legacy_projects: Vec::new(),
             },
             ..Config::default()

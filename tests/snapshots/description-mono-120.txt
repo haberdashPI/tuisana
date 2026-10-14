@@ -1,0 +1,40 @@
+ TUISANA  > 1 project > 11 tasks
++ Projects -------------------------------------------------------------------------------------- 3 shown | 1 selected +
+|  * * Northwind BTX 4412                                                                                              |
+|>   * Platform Infrastructure                                                                                         |
+|    - Backlog                                                                                                         |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
++----------------------------------------------------------------------------------------------------------------------+
++ Tasks --------------------------------- 11 tasks | row 1 | columns 0/52 ++ Description =================== line 1/52 +
+|   Task                                       | Assignee     |     Due | |# Hand the packaged release candidate over  #
+|                                                                         |# to the study team for the 4412 run.       #
+||Northwind BTX 4412 -----------------------------------------------------|# Everything below has to be true before it #
+|                                                                         |# ships:                                    #
+|   Study Kit Design .....................................................|#                                           #
+|>  Draft the assay validation protocol        | Priya Raman  | !Jul 10 | |# - labels printed from the current         #
+|   Review shipment requirements doc           | Morgan Ellis | !Aug 19 | |#   template, not last quarter's            #
+|   Ship release candidate to the study team   | Alex Chen    |   Today | |# - carrier pickup window confirmed in      #
+|   Confirm carrier pickup window with the ve~ | -            |     Wed | |#   writing                                 #
+|   Update the sample intake SOP               | Kim Alvarez  |   Sep 4 | |# - the vendor contract countersigned and   #
+|   Qualify the second reagent supplier        | Dana Ruiz    |  Sep 12 | |#   filed                                   #
+|                                                                         |#                                           #
+|   Shipment .............................................................|# Ping the study lead once the kit is on    #
+|   Book the courier for the pilot run         | Sam Okafor   |  Sep 15 | |# the dock. If anything on that list is     #
+|   Label the retention samples                | Jo Park      |   Oct 9 | |# still open on the morning of the pickup,  #
+|   Reconcile the freight invoices             | Robin Fox    |  Oct 30 | |# hold the shipment and say so in the       #
+|   Close out packaging vendor contract        | Alex Chen    |  Nov 14 | |# channel rather than shipping partial.     #
+|   Close the quarter's shipping report        | Priya Raman  |  Dec 18 | |#                                           #
+|                                                                         |# Previous run's notes are in the 4411      #
+|                                                                         |# folder; the packaging changed between the #
+|                                                                         |# two, so read them for the process and not #
+|                                                                         |# the part numbers.                         #
+|                                                                         |#                                           #
+|                                                                         |# On the labels specifically: the template  #
++-------------------------------------------------------------------------++=========================== +28 more lines +
+^d/^u scroll   v close   o open in Asana   ? help                                                     r refresh   q quit
+ DESCRIPTION                                                                                                 description

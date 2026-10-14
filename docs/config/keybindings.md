@@ -84,6 +84,7 @@ default binding that uses `alt-` is rebindable if your terminal cannot send it.
 | `confirm` | a bulk edit is waiting on `y` or `n` |
 | `gantt` | the timeline |
 | `gantt_order` | the Gantt colour dialog |
+| `description` | the description pane beside the table |
 
 ### Which modes fall back to `any`
 
@@ -303,6 +304,7 @@ The task table.
 | `ctrl-x` | `clear_hidden_task_selection` |
 | `y` | `copy_tasks_to_clipboard` |
 | `g` | `set_gantt_mode` |
+| `v` | `set_description_mode` |
 | `b` | `toggle_recent_pane` |
 | `h` | `task_column_prev` |
 | `l` | `task_column_next` |
@@ -375,6 +377,22 @@ The timeline beside the table.
 | `t` | `gantt_today` |
 | `enter` | `gantt_open_order` |
 
+### Description mode (`description`)
+
+The task's description and its comments, beside the table. It takes the space
+the chart would use, so only one of the two is drawn at a time.
+
+| key | command |
+| --- | --- |
+| `esc` | `set_task_mode` |
+| `v` | `toggle_description` |
+| `ctrl-d` | `description_scroll_down` |
+| `ctrl-u` | `description_scroll_up` |
+| `o` | `open` |
+
+`j` and `k` are deliberately left to the globals: they move the task cursor
+and the pane follows it, which is the whole point of reading down a list.
+
 ### Gantt order mode (`gantt_order`)
 
 The colour dialog.
@@ -397,6 +415,11 @@ The colour dialog.
 that meaning — except with a completion overlay open, where `ctrl-n` is the
 obvious key for "next candidate" and walks the candidates instead. `!` on the
 row in filter-browse mode is the other way to negate it.
+
+**`v` opens the description, not `r`.** `r` is `refresh` in `any`, and a
+`task`-mode binding would shadow it — leaving the one view that most wants to
+reload its rows with no key to do it. `v` reads as "view" and was unbound
+everywhere except project mode.
 
 **`search_fuzzy` is on `ctrl-z`, not `ctrl-f`**, so that `ctrl-b` and `ctrl-f`
 can move the caret in every mode that edits text.

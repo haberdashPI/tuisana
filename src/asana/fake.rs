@@ -12,7 +12,7 @@ use crate::{
             CustomFieldValueDto, EnumOptionDto, ProjectCustomFieldSettingDto, SectionDto, TaskDto,
             TaskMembershipDto, TaskMembershipProjectDto, UserDto,
         },
-        AsanaClient, TaskLoadScope, TaskQuery, TaskTarget,
+        AsanaClient, TaskComment, TaskLoadScope, TaskQuery, TaskTarget,
     },
     domain::{CustomFieldValue, NewTask, Project, ProjectEdit, ProjectMembership, TaskFieldEdit},
     error::{Error, Result},
@@ -36,6 +36,23 @@ pub struct FakeAsanaClient {
     custom_field_settings_by_project: HashMap<String, Vec<ProjectCustomFieldSettingDto>>,
     standalone_tasks: HashMap<String, TaskDto>,
     get_task_calls: RefCell<Vec<String>>,
+    /// Descriptions, keyed by task gid. A task absent from here has none.
+    descriptions: HashMap<String, String>,
+    /// Every `get_task_description` call, in order.
+    ///
+    /// `Arc<Mutex<_>>` rather than the `RefCell` beside it: descriptions are
+    /// fetched on a worker thread holding a *clone* of the client, so a
+    /// per-clone log would record the calls somewhere the test cannot see.
+    description_calls: Arc<Mutex<Vec<String>>>,
+    /// Task gids whose description fetch fails, for the error-state test.
+    description_failures: HashSet<String>,
+    /// Comments, keyed by task gid, oldest first.
+    comments: HashMap<String, Vec<TaskComment>>,
+    /// Every `list_task_comments` call, in order. Shared across clones for the
+    /// same reason `description_calls` is.
+    comment_calls: Arc<Mutex<Vec<String>>>,
+    /// Task gids whose comment fetch fails.
+    comment_failures: HashSet<String>,
     /// Every `update_task` call, in order.
     ///
     /// Shared across clones rather than owned per clone: the app hands each
@@ -144,6 +161,61 @@ impl FakeAsanaClient {
             self.standalone_tasks.insert(task.gid.clone(), task);
         }
         self
+    }
+
+    /// Gives a task a description, which `get_task_description` answers with.
+    pub fn with_description(
+        mut self,
+        task_gid: impl Into<String>,
+        notes: impl Into<String>,
+    ) -> Self {
+        self.descriptions.insert(task_gid.into(), notes.into());
+        self
+    }
+
+    /// Gives a task comments, which `list_task_comments` answers with.
+    ///
+    /// Each is `(author, created_at, text)`; an empty author stands for a
+    /// comment Asana attributes to no one.
+    pub fn with_comments(
+        mut self,
+        task_gid: impl Into<String>,
+        comments: Vec<(&str, &str, &str)>,
+    ) -> Self {
+        self.comments.insert(
+            task_gid.into(),
+            comments
+                .into_iter()
+                .map(|(author, created_at, text)| TaskComment {
+                    author: (!author.is_empty()).then(|| author.to_string()),
+                    created_at: (!created_at.is_empty()).then(|| created_at.to_string()),
+                    text: text.to_string(),
+                })
+                .collect(),
+        );
+        self
+    }
+
+    /// Makes `list_task_comments` fail for one task.
+    pub fn with_comment_failure(mut self, task_gid: impl Into<String>) -> Self {
+        self.comment_failures.insert(task_gid.into());
+        self
+    }
+
+    /// The gids `list_task_comments` has been called with, in order.
+    pub fn comment_calls(&self) -> Vec<String> {
+        self.comment_calls.lock().expect("comment log").clone()
+    }
+
+    /// Makes `get_task_description` fail for one task.
+    pub fn with_description_failure(mut self, task_gid: impl Into<String>) -> Self {
+        self.description_failures.insert(task_gid.into());
+        self
+    }
+
+    /// The gids `get_task_description` has been called with, in order.
+    pub fn description_calls(&self) -> Vec<String> {
+        self.description_calls.lock().expect("description log").clone()
     }
 
     /// The gids `get_task` has been called with, in order.
@@ -345,6 +417,36 @@ impl AsanaClient for FakeAsanaClient {
             })
             .map(|task| self.with_applied_edits(task))
             .ok_or_else(|| Error::Backend(format!("no fake task {task_gid}")))
+    }
+
+    fn get_task_description(&self, task_gid: &str) -> Result<String> {
+        self.description_calls
+            .lock()
+            .expect("description log is not poisoned")
+            .push(task_gid.to_string());
+
+        if self.description_failures.contains(task_gid) {
+            return Err(Error::Backend(format!(
+                "fake description failure for {task_gid}"
+            )));
+        }
+
+        Ok(self.descriptions.get(task_gid).cloned().unwrap_or_default())
+    }
+
+    fn list_task_comments(&self, task_gid: &str) -> Result<Vec<TaskComment>> {
+        self.comment_calls
+            .lock()
+            .expect("comment log is not poisoned")
+            .push(task_gid.to_string());
+
+        if self.comment_failures.contains(task_gid) {
+            return Err(Error::Backend(format!(
+                "fake comment failure for {task_gid}"
+            )));
+        }
+
+        Ok(self.comments.get(task_gid).cloned().unwrap_or_default())
     }
 
     fn update_task(&self, task_gid: &str, edit: &TaskFieldEdit) -> Result<TaskDto> {

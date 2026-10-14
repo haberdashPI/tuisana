@@ -154,6 +154,7 @@ items already picked alone.
 | `toggle_recent_pane` | show or hide the recently-edited pane |
 | `set_edit_mode` | enter edit mode |
 | `set_gantt_mode` | draw the Gantt chart and enter gantt mode |
+| `set_description_mode` | draw the description and comments pane, and enter description mode |
 
 ## Column edit mode
 
@@ -198,6 +199,13 @@ The keys that change which rows exist.
 | `cycle_gantt_color_key` | colour the bars by the next dimension |
 | `gantt_open_order` | open the colour dialog |
 | `toggle_gantt` | hide the chart |
+
+### Description mode
+
+| command | what it does |
+| --- | --- |
+| `description_scroll_down` / `description_scroll_up` | move the text by half a pane |
+| `toggle_description` | hide the pane |
 
 ## Gantt order mode
 

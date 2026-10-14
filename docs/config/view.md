@@ -8,6 +8,7 @@ tasks = true                   # the task table is open
 filters = true                 # the top pane holds the filter panel
 filter_sidebar = false         # the `Sets` sidebar beside it
 recent = true                  # the recently-edited pane is switched on
+description = false            # the description pane beside the table
 ```
 
 `[view]` is where tuisana leaves the screen as you found it. It is written
@@ -59,6 +60,19 @@ appears in the project view as well as the filter view, from one toggle.
 `true` switches on the recently-edited pane. On unless it was toggled off; it
 holds what *this* session edited, so it starts empty either way.
 
+### `description`
+
+`true` opens the description pane down the right of the task table, which `v`
+toggles from the task view. It shows the task's description and the comments
+left on it. Off by default.
+
+Only the flag. Which task it was showing and how far down the text you had
+scrolled are not saved — the pane comes back open and pointed at whatever the
+cursor lands on.
+
+With `[gantt].visible` set too, the description wins the space: the chart's own
+flag is untouched, so closing the pane brings it back.
+
 ## There is no `projects` key
 
 The selection lives on a [`[[filter_set]]`](/config/filter-sets) and nowhere
@@ -70,6 +84,6 @@ A version-1 or -2 file's `projects` list is moved onto one of those two during
 
 ## What stays out
 
-Scroll offsets, the cursor, the sort, the grouping, the completed filter, and
-which pane had focus. Those are where you were looking, not what you had set
+Scroll offsets — the description pane's included — the cursor, the sort, the
+grouping, the completed filter, and which pane had focus. Those are where you were looking, not what you had set
 up — the same reason the Gantt chart's timeline window is not saved either.

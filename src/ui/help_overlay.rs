@@ -62,6 +62,7 @@ pub fn groups_for(mode: Mode) -> Vec<HelpGroup> {
         }
         Mode::Gantt => gantt_groups(),
         Mode::GanttOrder => gantt_order_groups(),
+        Mode::Description => description_groups(),
         Mode::Filter | Mode::FilterEdit | Mode::FilterSetName => filter_groups(),
         Mode::Calendar => calendar_groups(),
         // Grouped with task mode because that is what the confirmation is
@@ -198,6 +199,7 @@ fn task_groups() -> Vec<HelpGroup> {
             "View",
             vec![
                 Hint::new(&[Action::SetGanttMode], "gantt chart"),
+                Hint::new(&[Action::SetDescriptionMode], "description"),
                 Hint::new(&[Action::SetFilterMode], "filter panel"),
                 Hint::new(&[Action::ToggleCompletedFilter], "open / done / all"),
                 Hint::new(&[Action::ToggleSubtaskVisibility], "subtasks"),
@@ -235,6 +237,31 @@ fn edit_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::DeleteMarkedTasks], "delete what is marked"),
                 Hint::new(&[Action::DeleteSection], "delete an empty section"),
                 Hint::new(&[Action::EditCancel], "clear the marks, then leave"),
+            ],
+        ),
+    ]
+}
+
+fn description_groups() -> Vec<HelpGroup> {
+    vec![
+        HelpGroup::new(
+            "Description",
+            vec![
+                Hint::new(&[Action::DescriptionScrollDown], "down half a pane"),
+                Hint::new(&[Action::DescriptionScrollUp], "up half a pane"),
+                Hint::new(&[Action::ToggleDescription], "hide the pane"),
+                Hint::literal("esc", "back to tasks, pane stays"),
+            ],
+        ),
+        // The two keys that still belong to the table are worth saying out
+        // loud: the pane follows the cursor, and that is the whole flow.
+        HelpGroup::new(
+            "Still the table's",
+            vec![
+                Hint::new(&[Action::MoveDown], "next task, pane follows"),
+                Hint::new(&[Action::MoveUp], "previous task, pane follows"),
+                Hint::new(&[Action::Open], "open the task in Asana"),
+                Hint::new(&[Action::Refresh], "reload, descriptions included"),
             ],
         ),
     ]

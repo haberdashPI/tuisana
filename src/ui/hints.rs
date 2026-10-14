@@ -225,6 +225,15 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
         Mode::Edit => edit_hints(context),
         Mode::ColumnEdit => task_edit_hints(context),
         Mode::Gantt => gantt_hints(context),
+        Mode::Description => vec![
+            Hint::new(
+                &[Action::DescriptionScrollDown, Action::DescriptionScrollUp],
+                "scroll",
+            ),
+            Hint::new(&[Action::ToggleDescription], "close"),
+            Hint::new(&[Action::Open], "open in Asana"),
+            Hint::new(&[Action::ToggleHelpDetails], "help"),
+        ],
         Mode::GanttOrder => vec![
             Hint::new(&[Action::MoveDown, Action::MoveUp], "cursor"),
             Hint::new(
@@ -345,6 +354,7 @@ fn task_hints(context: HintContext) -> Vec<Hint> {
         ));
     }
     hints.push(Hint::new(&[Action::SetGanttMode], "gantt"));
+    hints.push(Hint::new(&[Action::SetDescriptionMode], "description"));
     // Only once there is a pane to toggle: with nothing edited out of view
     // the key is a no-op, and a hint for a no-op is a hint in the way.
     if context.has_recent_edits {

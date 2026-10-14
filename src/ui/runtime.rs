@@ -25,7 +25,8 @@ use crate::{
     ui::{
         calendar, completion, confirm,
         chrome::{self, Chip, Tone},
-        filter_panel, filter_sets, gantt, gantt_order, help_overlay, hints, layout, notice,
+        description, filter_panel, filter_sets, gantt, gantt_order, help_overlay, hints, layout,
+        notice,
         project_list,
         task_table::{self, TaskTableView},
         theme::Theme,
@@ -184,6 +185,7 @@ fn focused_pane(mode: Mode, filter_focused: bool) -> FocusedPane {
         // The rows it is asking about are in the task pane, and `n` hands the
         // keys straight back to them.
         | Mode::Confirm => FocusedPane::Task,
+        Mode::Description => FocusedPane::Description,
         Mode::Calendar if !filter_focused => FocusedPane::Task,
         Mode::Project
         | Mode::ProjectSearch
@@ -199,6 +201,9 @@ fn focused_pane(mode: Mode, filter_focused: bool) -> FocusedPane {
 enum FocusedPane {
     Top,
     Task,
+    /// The description pane, which is the only other pane that can take the
+    /// keys without taking the top pane's region.
+    Description,
 }
 
 fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
@@ -208,10 +213,18 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
 ) -> io::Result<usize> {
     let mut page_size = 1usize;
     app.poll_task_data();
+    app.poll_description();
     // Anything a keystroke put off happens here, so the frame about to be
     // drawn is built from every key the user has actually typed. A no-op while
     // input is still queued, which is what keeps a burst to one rebuild.
     app.tasks.settle_table();
+    // Aim before drawing, unconditionally: a rebuild can move a row out from
+    // under the cursor, and the pane must never draw one task's text under
+    // another task's cursor. Fetching waits for the queue to drain.
+    app.tasks.aim_description();
+    if !app.tasks.input_pending() {
+        app.request_description();
+    }
     let theme = Theme::new(&app.config.theme);
 
     terminal
@@ -287,13 +300,29 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
             // to show there.
             let cursor_column = matches!(mode, Mode::Task | Mode::Edit | Mode::ColumnEdit)
                 .then(|| app.tasks.selected_column());
-            let task_view = regions.task_pane.map(|area| {
+
+            // Split before the table is measured: the columns have to be
+            // resolved against the width they are actually getting, not the
+            // width they would have had with the pane closed.
+            let description_open = app.tasks.description().visible();
+            let (table_area, description_area) = match regions.task_pane {
+                Some(area) => {
+                    let (table, pane) = description::split_description(area, description_open);
+                    (Some(table), pane)
+                }
+                None => (None, None),
+            };
+            let description_cramped =
+                description::too_narrow(regions.task_pane, app.tasks.description());
+
+            let task_view = table_area.map(|area| {
                 task_table::render_task_table(
                     &mut app.tasks,
                     pane_inner(area).width as usize,
                     &theme,
                     cursor_column,
                 )
+                .with_narrow_description_warning(description_cramped)
             });
 
             // The pane above the table, holding what an edit pushed out of it.
@@ -306,9 +335,14 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
                 render_recent_pane(frame, area, app, &theme, mode, view);
             }
 
-            if let (Some(area), Some(view)) = (regions.task_pane, task_view.as_ref()) {
+            if let (Some(area), Some(view)) = (table_area, task_view.as_ref()) {
                 let focused = focus == FocusedPane::Task;
                 page_size = render_task_pane(frame, area, app, &theme, mode, focused, view);
+            }
+
+            if let Some(area) = description_area {
+                let focused = focus == FocusedPane::Description;
+                render_description_pane(frame, area, app, &theme, mode, focused);
             }
 
             render_hint_bar(
@@ -441,6 +475,7 @@ fn help_visible<C: AsanaClient + Clone + Send + 'static>(app: &App<C>, mode: Mod
         | Mode::ColumnEdit
         | Mode::Gantt
         | Mode::GanttOrder
+        | Mode::Description
         | Mode::Filter
         | Mode::FilterEdit
         | Mode::FilterSetName
@@ -733,6 +768,37 @@ fn render_recent_pane<C: AsanaClient + Clone + Send + 'static>(
             inner.width as usize,
         )),
         inner,
+    );
+}
+
+/// Draws the description pane beside the table.
+///
+/// Focused only in description mode: the thick border and the mode-coloured
+/// title are the answer to "where do my keys go", and with the pane merely
+/// *open* they go to the table — which is why this is a third `FocusedPane`
+/// rather than the task pane's own flag.
+fn render_description_pane<C: AsanaClient + Clone + Send + 'static>(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &mut App<C>,
+    theme: &Theme,
+    mode: Mode,
+    focused: bool,
+) {
+    let inner = pane_inner(area);
+    let view = description::description_view(
+        &mut app.tasks,
+        inner.width as usize,
+        inner.height as usize,
+    );
+    description::render(
+        frame,
+        area,
+        theme,
+        mode,
+        focused,
+        &view,
+        app.tasks.description().scroll(),
     );
 }
 
