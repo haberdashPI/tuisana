@@ -5433,13 +5433,9 @@ impl TaskState {
         self.loading.cache.upsert_record(record);
         self.remember_edited(&gid);
         self.rebuild_visible_dataset();
-        self.view.selected = self
-            .view
-            .table
-            .rows
-            .iter()
-            .position(|row| row.gid == gid)
-            .or(self.view.selected);
+        // Resolved here rather than left to the rebuild: the gid the rebuild
+        // restored the cursor by was the draft's, which nothing has any more.
+        self.place_cursor_on_task(&gid);
     }
 
     /// Records a created section, so the next `S` and `J` can see it.
@@ -6196,6 +6192,34 @@ impl TaskState {
         }
         self.view.recent_selected = self.view.recent_table.last_selectable_row_index();
         self.view.recent_selected.is_some()
+    }
+
+    /// Puts the cursor on a task after a rebuild, in whichever list has it.
+    ///
+    /// The same handoff [`Self::refresh_table`] makes, for the callers that
+    /// place the cursor themselves because the gid they are looking for is
+    /// not the one the rebuild restored by. Answers whether the task was
+    /// found; the cursor is left where it was when it was not.
+    fn place_cursor_on_task(&mut self, gid: &str) -> bool {
+        if let Some(index) = self.view.table.rows.iter().position(|row| row.gid == gid) {
+            self.view.selected = Some(index);
+            self.leave_recent_pane();
+            return true;
+        }
+        let Some(index) = self
+            .view
+            .recent_table
+            .rows
+            .iter()
+            .position(|row| row.gid == gid)
+        else {
+            return false;
+        };
+        self.view.recent_selected = Some(index);
+        // Whatever the toggle says: a cursor the user cannot see is not a
+        // cursor.
+        self.view.recent_hidden = false;
+        true
     }
 
     /// Rebuilds the pane's rows from the tasks edited this session.

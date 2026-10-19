@@ -474,6 +474,50 @@ fn a_created_task_replaces_the_draft_and_keeps_the_cursor() {
 }
 
 #[test]
+fn a_created_task_outside_the_filter_takes_the_cursor_into_the_pane() {
+    let (mut state, client, context) = sectioned_state();
+    select_task(&mut state, "t2");
+
+    // A title filter that keeps the row the draft opens beside and excludes
+    // the task it becomes: the draft is exempt from the filters, the task is
+    // not.
+    for ch in "Ship".chars() {
+        state.filter_push_char(ch);
+    }
+    state.settle_table();
+    select_task(&mut state, "t2");
+
+    state.begin_draft_task(false, &context).expect("a draft opens");
+    type_cell(&mut state, "Book the courier");
+    let Some(DraftCommit::Task(new_task)) = state.draft_commit() else {
+        panic!("a task draft");
+    };
+    let created = client.create_task(&new_task).expect("the create succeeds");
+    let gid = created.gid.clone();
+    state.finish_draft_task(created);
+
+    assert!(
+        !state.table().rows.iter().any(|row| row.gid == gid),
+        "the table has no row for it"
+    );
+    assert_eq!(
+        state
+            .recent_table()
+            .rows
+            .iter()
+            .position(|row| row.gid == gid),
+        Some(0),
+        "the recently-edited pane holds it, newest first"
+    );
+    assert!(state.recent_pane_visible());
+    assert_eq!(
+        state.recent_selected_index(),
+        Some(0),
+        "and the cursor followed it there, rather than staying in the table"
+    );
+}
+
+#[test]
 fn moving_a_task_between_sections_appends_it_and_rolls_back_on_failure() {
     let (mut state, _, context) = sectioned_state();
     select_task(&mut state, "t1");
