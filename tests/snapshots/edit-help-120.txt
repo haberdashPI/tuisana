@@ -19,16 +19,16 @@
 ┃▍  Draft the assa┃⏎         delete what is marked             }         maximize                    ┃TX 4412 │ —      ┃
 ┃   Review shipmen┃X         delete an empty section           0         restore                     ┃TX 4412 │ —      ┃
 ┃   Ship release c┃>         hang these off a task you pick                                          ┃TX 4412 │ —      ┃
-┃   Confirm carrie┃esc       clear the marks, then leave       App                                   ┃TX 4412 │ —      ┃
-┃   Update the sam┃                                            r         refresh                     ┃TX 4412 │ —      ┃
-┃   Qualify the se┃Move                                        q ^c      quit                        ┃TX 4412 │ —      ┃
-┃                 ┃j/k       down / up                         ?         close this help             ┃                 ┃
-┃   Shipment ·····┃^d/^u     page down / up                                                          ┃·················┃
-┃   Book the couri┃home/end  top / bottom                                                            ┃TX 4412 │ —      ┃
-┃   Label the rete┃                                                                                  ┃TX 4412 │ —      ┃
-┃   Reconcile the ┃                                                                        ? to close┃TX 4412 │ —      ┃
-┃   Close out pack┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛TX 4412 │ —      ┃
-┃   Close the quarter's shipping report           │ Priya Raman  │  Dec 18 │  Nov 2 │ ○  │ Northwind BTX 4412 │ —      ┃
+┃   Confirm carrie┃<         lift these one level up           App                                   ┃TX 4412 │ —      ┃
+┃   Update the sam┃esc       clear the marks, then leave       r         refresh                     ┃TX 4412 │ —      ┃
+┃   Qualify the se┃                                            q ^c      quit                        ┃TX 4412 │ —      ┃
+┃                 ┃Move                                        ?         close this help             ┃                 ┃
+┃   Shipment ·····┃j/k       down / up                                                               ┃·················┃
+┃   Book the couri┃^d/^u     page down / up                                                          ┃TX 4412 │ —      ┃
+┃   Label the rete┃home/end  top / bottom                                                            ┃TX 4412 │ —      ┃
+┃   Reconcile the ┃                                                                                  ┃TX 4412 │ —      ┃
+┃   Close out pack┃                                                                        ? to close┃TX 4412 │ —      ┃
+┃   Close the quar┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛TX 4412 │ —      ┃
 ┃                                                                                                                      ┃
 ┃                                                                                                                      ┃
 ┃                                                                                                                      ┃

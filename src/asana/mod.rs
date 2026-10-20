@@ -36,6 +36,16 @@ pub enum TaskWrite {
         gid: String,
         parent_gid: Option<String>,
     },
+    /// A task put in a section, which takes it out of its old one.
+    ///
+    /// A fourth endpoint for the same reason as the two above it: a section
+    /// is not a field on the task either. One-way, like the endpoint — there
+    /// is no "no section" to move back to, which is what
+    /// `SectionMove::undo` answers `None` for.
+    Section {
+        gid: String,
+        section_gid: String,
+    },
     Delete { gid: String },
 }
 
@@ -45,6 +55,7 @@ impl TaskWrite {
             Self::Field { gid, .. } => gid,
             Self::Project(edit) => &edit.gid,
             Self::Parent { gid, .. } => gid,
+            Self::Section { gid, .. } => gid,
             Self::Delete { gid } => gid,
         }
     }
@@ -284,6 +295,9 @@ pub trait AsanaClient {
             TaskWrite::Parent { gid, parent_gid } => self
                 .set_task_parent(gid, parent_gid.as_deref())
                 .map(|()| None),
+            TaskWrite::Section { gid, section_gid } => {
+                self.add_task_to_section(section_gid, gid).map(|()| None)
+            }
             TaskWrite::Delete { gid } => self.delete_task(gid).map(|()| None),
         }
     }

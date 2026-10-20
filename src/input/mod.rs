@@ -359,6 +359,9 @@ pub enum Action {
     MakeSubtask,
     /// Take the row under the cursor as the parent of what `>` is holding.
     PickParent,
+    /// Lift the selection one level up the tree: each task to its own
+    /// grandparent, or out to its parent's project and section.
+    PromoteTask,
     /// Mark the cursor row, or the selection, for deletion. Again unmarks.
     MarkForDeletion,
     /// Carry out the marked deletions.
@@ -532,6 +535,7 @@ impl Action {
             "insert_subtask" => Ok(Self::InsertSubtask),
             "make_subtask" => Ok(Self::MakeSubtask),
             "pick_parent" => Ok(Self::PickParent),
+            "promote_task" => Ok(Self::PromoteTask),
             "mark_for_deletion" => Ok(Self::MarkForDeletion),
             "delete_marked_tasks" => Ok(Self::DeleteMarkedTasks),
             "insert_section" => Ok(Self::InsertSection),
@@ -819,6 +823,7 @@ impl Display for Action {
             Action::InsertSubtask => "insert_subtask",
             Action::MakeSubtask => "make_subtask",
             Action::PickParent => "pick_parent",
+            Action::PromoteTask => "promote_task",
             Action::MarkForDeletion => "mark_for_deletion",
             Action::DeleteMarkedTasks => "delete_marked_tasks",
             Action::InsertSection => "insert_section",
@@ -1036,6 +1041,7 @@ mod tests {
             Action::InsertSubtask,
             Action::MakeSubtask,
             Action::PickParent,
+            Action::PromoteTask,
             Action::MarkForDeletion,
             Action::DeleteMarkedTasks,
             Action::InsertSection,

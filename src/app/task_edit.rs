@@ -98,11 +98,21 @@ pub struct CommittedEdits {
     /// Re-parentings, which are a third endpoint again: Asana does not accept
     /// `parent` in a task update.
     pub parents: Vec<ParentEdit>,
+    /// Section placements, the fourth endpoint.
+    ///
+    /// No cell edit produces one — a section is not a column. `<` is what
+    /// does: a task promoted out from under a top-level parent has to land
+    /// in that parent's section, or it arrives in the project at the bottom,
+    /// nowhere near what it came from.
+    pub sections: Vec<super::task::SectionMove>,
 }
 
 impl CommittedEdits {
     pub fn is_empty(&self) -> bool {
-        self.fields.is_empty() && self.projects.is_empty() && self.parents.is_empty()
+        self.fields.is_empty()
+            && self.projects.is_empty()
+            && self.parents.is_empty()
+            && self.sections.is_empty()
     }
 }
 

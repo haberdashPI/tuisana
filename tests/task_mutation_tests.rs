@@ -20,7 +20,7 @@ use tuisana::{
         fake::{FakeAsanaClient, StructuralCall},
         AsanaClient,
     },
-    domain::{CustomFieldValue, NewTask, ParentEdit, Project, Section, TaskFieldEdit},
+    domain::{CustomFieldValue, NewTask, ParentEdit, Project, ProjectEdit, Section, TaskFieldEdit},
     input::Action,
 };
 
@@ -1133,5 +1133,150 @@ fn the_pick_keeps_its_rows_through_a_filter_that_hides_them() {
         pick_pairs(&state),
         vec![("t2".to_string(), Some("Draft the protocol".to_string()))],
         "and it is still what the pick is holding"
+    );
+}
+
+// --- `<`: one level up, each task by its own parent -----------------------
+
+/// A three-deep tree over [`sectioned_client`], so a promotion has both cases
+/// to resolve: a grandparent to move to, and a top-level parent to move out
+/// from under.
+fn nested_state() -> (TaskState, FakeAsanaClient, EditContext) {
+    let (client, projects) = sectioned_client();
+    // `t1a` already hangs off `t1`; this gives it a child of its own, which
+    // the loader walks because `num_subtasks` says to.
+    let client = client.with_subtasks(
+        "t1a",
+        vec![placed_task("t1a1", "Label the tubes", "sec-design", "Design", 0)],
+    );
+    let mut state = TaskState::new();
+    state.set_completed_filter(None);
+    state
+        .load_task_dataset_for_projects(&client, &projects)
+        .expect("tasks load");
+    let context = EditContext {
+        projects: vec![("p1".to_string(), "Northwind".to_string())],
+        workspace_gid: Some("ws-1".to_string()),
+        ..EditContext::default()
+    };
+    (state, client, context)
+}
+
+/// Deepest case: the parent has a parent, so the task moves to it and nothing
+/// about where it sits in a project changes — because it does not sit in one.
+#[test]
+fn a_subtask_two_deep_is_promoted_to_its_grandparent() {
+    let (mut state, _, context) = nested_state();
+    // The fixture has to have loaded the grandchild for this to mean anything.
+    assert!(visible_gids(&state).contains(&"t1a1".to_string()));
+    select_task(&mut state, "t1a1");
+
+    let edits = state.promote_edits(&context).expect("it can move");
+    assert_eq!(
+        edits
+            .parents
+            .iter()
+            .map(|edit| (edit.gid.as_str(), edit.parent_gid.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![("t1a1", Some("t1"))],
+        "up one rung, to its own grandparent"
+    );
+    assert!(
+        edits.projects.is_empty() && edits.sections.is_empty(),
+        "a subtask that is still a subtask has no project row to place"
+    );
+}
+
+/// The case the command exists for: no grandparent, so the task leaves the
+/// tree — and takes its parent's project and section with it, because Asana
+/// gives a promoted subtask neither and it would vanish from the view.
+#[test]
+fn a_subtask_of_a_top_level_task_is_promoted_into_its_parents_project_and_section() {
+    let (mut state, _, context) = nested_state();
+    select_task(&mut state, "t1a");
+
+    let edits = state.promote_edits(&context).expect("it can move");
+    assert_eq!(
+        edits
+            .parents
+            .iter()
+            .map(|edit| (edit.gid.as_str(), edit.parent_gid.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![("t1a", None)],
+        "out of the tree altogether"
+    );
+    assert_eq!(
+        edits.projects,
+        vec![ProjectEdit::add("t1a", "p1", "Northwind")],
+        "into the project the parent was in"
+    );
+    assert_eq!(
+        edits
+            .sections
+            .iter()
+            .map(|moved| (moved.gid.as_str(), moved.section_gid.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("t1a", "sec-design")],
+        "and the section the parent was in, not the bottom of the project"
+    );
+}
+
+/// The project and the section go out even though the loaded record already
+/// lists both: for a subtask those lists are where the *view* puts it, and an
+/// inherited placement is indistinguishable from a real membership here.
+#[test]
+fn the_promotion_names_the_project_even_though_the_record_already_lists_it() {
+    let (mut state, _, context) = nested_state();
+    select_task(&mut state, "t1a");
+
+    let edits = state.promote_edits(&context).expect("it can move");
+    assert_eq!(edits.projects.len(), 1, "sent regardless");
+    assert_eq!(edits.sections.len(), 1, "sent regardless");
+}
+
+/// A mixture resolves per task, which is the whole difference from `>`.
+#[test]
+fn a_promotion_resolves_each_task_against_its_own_parent() {
+    let (mut state, _, context) = nested_state();
+    mark_task(&mut state, "t1a");
+    mark_task(&mut state, "t1a1");
+
+    let edits = state.promote_edits(&context).expect("both can move");
+    assert_eq!(
+        edits
+            .parents
+            .iter()
+            .map(|edit| (edit.gid.as_str(), edit.parent_gid.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![("t1a", None), ("t1a1", Some("t1"))],
+        "one leaves the tree, the other moves up a rung"
+    );
+    assert_eq!(
+        edits
+            .sections
+            .iter()
+            .map(|moved| moved.gid.as_str())
+            .collect::<Vec<_>>(),
+        vec!["t1a"],
+        "only the one that left the tree needs placing"
+    );
+}
+
+/// Nothing to do is said rather than silently done, and the count makes it
+/// clear which rows it is talking about.
+#[test]
+fn promoting_a_top_level_task_says_it_is_already_top_level() {
+    let (mut state, _, context) = nested_state();
+    select_task(&mut state, "t1");
+    assert_eq!(
+        state.promote_edits(&context),
+        Err("already a top-level task".to_string())
+    );
+
+    mark_task(&mut state, "t1");
+    mark_task(&mut state, "t2");
+    assert_eq!(
+        state.promote_edits(&context),
+        Err("all 2 are top-level tasks already".to_string())
     );
 }

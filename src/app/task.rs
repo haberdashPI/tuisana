@@ -319,6 +319,11 @@ impl SectionMove {
         })
     }
 
+    /// One phrase naming the change, for a confirmation.
+    pub fn summary(&self) -> String {
+        format!("move into {}", self.section_name)
+    }
+
     /// Writes this move onto a record.
     ///
     /// The lists are left sorted, as `merge_task_record` leaves them, so a
@@ -5612,9 +5617,22 @@ impl TaskState {
 
     /// Writes a section move onto the record, so the row jumps on the key.
     pub fn apply_section_move_locally(&mut self, moved: &SectionMove) {
-        self.remember_edited(&moved.gid);
-        if let Some(record) = self.loading.cache.records.get_mut(&moved.gid) {
-            moved.apply(record);
+        self.apply_section_moves_locally(std::slice::from_ref(moved));
+    }
+
+    /// The same for a run of them, in one rebuild.
+    ///
+    /// `<` resolves to one of these per task promoted out from under a
+    /// top-level parent, and a rebuild each would be a rebuild per row.
+    pub fn apply_section_moves_locally(&mut self, moves: &[SectionMove]) {
+        if moves.is_empty() {
+            return;
+        }
+        for moved in moves {
+            self.remember_edited(&moved.gid);
+            if let Some(record) = self.loading.cache.records.get_mut(&moved.gid) {
+                moved.apply(record);
+            }
         }
         self.rebuild_visible_dataset();
     }
@@ -5808,6 +5826,118 @@ impl TaskState {
 
         let title = self.task_title(&parent);
         Ok(self.parent_edits(&targets, Some((&parent, &title))))
+    }
+
+    /// `<`: lifts the held tasks one level up the tree.
+    ///
+    /// Each task resolves on its own, because "one level up" is a different
+    /// answer for each: `>` names one parent for the lot, this names each
+    /// task's own grandparent. A task whose parent is itself top level has no
+    /// grandparent to move to, so it becomes a top-level task — and that is
+    /// the case that costs more than a re-parenting, because Asana does not
+    /// give a promoted subtask its parent's project. Without the membership
+    /// it lands in the workspace and leaves the view entirely; without the
+    /// section it lands at the bottom of the project, nowhere near what it
+    /// came from. So the parent's project and the parent's section come with
+    /// it, each skipped when the task is already there.
+    ///
+    /// Tasks that cannot move are skipped rather than refused, the way a
+    /// no-op re-parent is — with one exception. When *every* target is
+    /// already top level the whole gesture meant nothing, and saying so is
+    /// better than a key that appears not to work.
+    pub fn promote_edits(
+        &self,
+        ctx: &EditContext,
+    ) -> std::result::Result<CommittedEdits, String> {
+        let targets = self.edit_targets();
+        if targets.is_empty() {
+            return Err("no task under the cursor".to_string());
+        }
+
+        let mut edits = CommittedEdits::default();
+        let mut already_top = 0;
+        for gid in &targets {
+            let Some(record) = self.record(gid) else {
+                continue;
+            };
+            let Some(parent_gid) = record.parent_gid.clone() else {
+                already_top += 1;
+                continue;
+            };
+            // A parent the session never loaded is a parent whose own parent,
+            // project, and section are all unknown, and this resolution is
+            // every one of those questions. Skipped rather than guessed at.
+            let Some(parent) = self.record(&parent_gid).cloned() else {
+                continue;
+            };
+
+            edits.parents.push(ParentEdit {
+                gid: gid.clone(),
+                parent_gid: parent.parent_gid.clone(),
+                parent_name: parent
+                    .parent_gid
+                    .as_deref()
+                    .map(|grandparent| self.task_title(grandparent)),
+                previous_name: Some(self.task_title(&parent_gid)),
+                previous_gid: Some(parent_gid),
+            });
+
+            if parent.parent_gid.is_some() {
+                // Still a subtask, one rung up: nothing about where it sits
+                // in a project changes, because it does not sit in one.
+                continue;
+            }
+            let Some((project_gid, project_name)) = self.cursor_project(&parent, ctx) else {
+                // Nothing names a project for the parent — the assigned-to-me
+                // row is the live case, where the heading is a user and not a
+                // project. The promotion still stands; it just arrives
+                // wherever a task with no project arrives.
+                continue;
+            };
+            // Sent even when the record already lists that project and that
+            // section, because for a subtask those lists are where the *view*
+            // puts it and not what Asana has: `record_from_dto` pushes the
+            // project every subtask was loaded under and inherits the nearest
+            // ancestor's section, so a genuine membership and an inherited one
+            // are indistinguishable here. Both endpoints are harmless on a
+            // task that is already there — `addProject` re-positions and
+            // `addTask` re-sections — and skipping them on an inherited
+            // membership would promote the task straight out of the project.
+            edits
+                .projects
+                .push(ProjectEdit::add(gid, &project_gid, project_name));
+
+            let sections = self.sections_for(&project_gid);
+            let Some((order, section)) = sections
+                .iter()
+                .enumerate()
+                .find(|(_, section)| parent.section_gids.contains(&section.gid))
+            else {
+                continue;
+            };
+            let previous = sections
+                .iter()
+                .enumerate()
+                .find(|(_, section)| record.section_gids.contains(&section.gid));
+            edits.sections.push(SectionMove {
+                gid: gid.clone(),
+                section_gid: section.gid.clone(),
+                section_name: section.name.clone(),
+                section_order: Some(order),
+                previous_gid: previous.map(|(_, section)| section.gid.clone()),
+                previous_name: previous.map(|(_, section)| section.name.clone()),
+                previous_order: previous.map(|(index, _)| index),
+            });
+        }
+
+        if edits.is_empty() && already_top == targets.len() {
+            return Err(match already_top {
+                1 => "already a top-level task".to_string(),
+                count => format!("all {count} are top-level tasks already"),
+            });
+        }
+
+        Ok(edits)
     }
 
     /// Takes rows out of the cache and the table, answering what it took.

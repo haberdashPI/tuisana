@@ -1534,3 +1534,101 @@ fn a_wide_pick_is_confirmed_before_anything_is_sent() {
         "back where the pick left the keys"
     );
 }
+
+// --- `<`: one level up ----------------------------------------------------
+
+/// The promotion that costs three endpoints, through the key: out of the
+/// tree, into the parent's project, into the parent's section.
+#[test]
+fn angle_bracket_lifts_a_subtask_out_into_its_parents_project_and_section() {
+    let mut session = edit_session();
+    move_to_task(&mut session, "t1a");
+
+    session.press(KeyCode::Char('<'), KeyModifiers::SHIFT);
+
+    assert_eq!(
+        session.client.structural_calls(),
+        vec![
+            StructuralCall::SetParent {
+                gid: "t1a".to_string(),
+                parent_gid: None,
+            },
+            StructuralCall::AddTaskToSection {
+                section_gid: "sec-open".to_string(),
+                task_gid: "t1a".to_string(),
+            },
+        ],
+        "promoted, then placed where its parent was"
+    );
+    assert_eq!(
+        session.project_updates(),
+        vec![ProjectEdit::add("t1a", "project-1", "Inbox")],
+        "and a member of the project in its own right, which Asana does not do for it"
+    );
+    assert_eq!(
+        session.cell("t1a", tuisana::domain::PARENT_COLUMN),
+        "",
+        "the row says so without waiting for a reload — the renderer draws the dash"
+    );
+    assert_eq!(
+        session.app.mode(),
+        tuisana::config::Mode::Edit,
+        "a one-shot key: there is nothing to pick"
+    );
+}
+
+/// `<` on something already at the top says so rather than doing nothing.
+#[test]
+fn angle_bracket_on_a_top_level_task_says_it_is_already_there() {
+    let mut session = edit_session();
+    move_to_task(&mut session, "t2");
+
+    session.press(KeyCode::Char('<'), KeyModifiers::SHIFT);
+
+    assert_eq!(
+        session.app.tasks.edit_notice(),
+        Some("already a top-level task"),
+        "notice: {:?}",
+        session.app.tasks.edit_notice()
+    );
+    assert!(session.client.structural_calls().is_empty());
+    assert!(session.project_updates().is_empty());
+}
+
+/// `>` and `<` are inverses, and pressing them in turn gets back where it
+/// started — the second one resolving against the parent the first one set.
+#[test]
+fn a_subtask_made_by_angle_bracket_is_undone_by_the_other_one() {
+    let mut session = edit_session();
+    move_to_task(&mut session, "t2");
+
+    // `>` holds t2 and `enter` hangs it off t1.
+    session.press(KeyCode::Char('>'), KeyModifiers::SHIFT);
+    move_to_task(&mut session, "t1");
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(session.cell("t2", tuisana::domain::PARENT_COLUMN), "Ship the release");
+
+    // And `<` on it puts it back at the top, in t1's own section.
+    move_to_task(&mut session, "t2");
+    session.press(KeyCode::Char('<'), KeyModifiers::SHIFT);
+
+    assert_eq!(session.cell("t2", tuisana::domain::PARENT_COLUMN), "");
+    assert_eq!(
+        session.client.structural_calls(),
+        vec![
+            StructuralCall::SetParent {
+                gid: "t2".to_string(),
+                parent_gid: Some("t1".to_string()),
+            },
+            StructuralCall::SetParent {
+                gid: "t2".to_string(),
+                parent_gid: None,
+            },
+            StructuralCall::AddTaskToSection {
+                section_gid: "sec-open".to_string(),
+                task_gid: "t2".to_string(),
+            },
+        ],
+        "t2 started in Done and comes back into Open, where its parent was"
+    );
+}

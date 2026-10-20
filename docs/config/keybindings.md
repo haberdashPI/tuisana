@@ -330,6 +330,7 @@ The structural edits: the keys that change which rows exist.
 | `enter` | `delete_marked_tasks` |
 | `esc` | `edit_cancel` |
 | `>` | `make_subtask` |
+| `<` | `promote_task` |
 
 ### Parent pick mode (`parent_pick`)
 

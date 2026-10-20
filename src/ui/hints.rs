@@ -392,6 +392,7 @@ fn edit_hints(context: HintContext) -> Vec<Hint> {
     }
     hints.push(Hint::new(&[Action::ToggleTaskSelection], "select"));
     hints.push(Hint::new(&[Action::MakeSubtask], "make subtask"));
+    hints.push(Hint::new(&[Action::PromoteTask], "one level up"));
     hints.push(Hint::new(&[Action::ToggleHelpDetails], "help"));
     hints
 }

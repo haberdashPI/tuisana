@@ -19,16 +19,16 @@
 ┃⏎         delete what is marked             }         maximize                ┃
 ┃X         delete an empty section           0         restore                 ┃
 ┃>         hang these off a task you pick                                      ┃
-┃esc       clear the marks, then leave       App                               ┃
-┃                                            r         refresh                 ┃
-┃Move                                        q ^c      quit                    ┃
-┃j/k       down / up                         ?         close this help         ┃
+┃<         lift these one level up           App                               ┃
+┃esc       clear the marks, then leave       r         refresh                 ┃
+┃                                            q ^c      quit                    ┃
+┃Move                                        ?         close this help         ┃
+┃j/k       down / up                                                           ┃
 ┃^d/^u     page down / up                                                      ┃
 ┃home/end  top / bottom                                                        ┃
 ┃                                                                              ┃
 ┃                                                                        ? to c┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-┃   Close the quarter's shipping report           │ Priya Raman  │  Dec 18 │  N┃
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃

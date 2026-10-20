@@ -177,6 +177,22 @@ a convention.
   the half shared with the `Parent` cell editor, which names the parent by
   typing it instead; the difference is that a pick *refuses* a cursor on one
   of its own rows, where the editor silently drops it.
+- `<` is the same gesture the other way and needs **no second half**: where
+  "one level up" is cannot be picked, it is read off each task's own parent,
+  so `promote_edits` resolves per task where `>` names one parent for the lot.
+  A task whose parent is a subtask moves to its grandparent and nothing else
+  changes. One whose parent is top level *leaves the tree*, and that is three
+  endpoints for one task — `setParent(null)`, `addProject`, and the section's
+  `addTask` — because Asana gives a promoted subtask neither its parent's
+  project nor its section, so without them it lands in the workspace or at the
+  bottom of the project. Both of those go out **even when the record already
+  lists that project and that section**: `record_from_dto` pushes the project
+  every subtask was loaded under and inherits the nearest ancestor's section,
+  so a real membership and an inherited one cannot be told apart locally, and
+  skipping on an inherited one would promote the task out of the project
+  entirely. `TaskWrite::Section` exists so the third endpoint rides the same
+  batched, throttled channel as the other two rather than blocking on the
+  keystroke the way `J`/`K` still do.
 - An edit is **optimistic**. `apply_and_enqueue` writes it onto the cached
   record and the visible dataset at once, then queues it for the write pool;
   `poll_task_edits` takes the server's `modified_at` on success and puts the
@@ -267,6 +283,10 @@ a convention.
 - To change how a name is completed, start in `src/app/autocomplete.rs`; the
   candidate overlay is `src/ui/completion.rs` and is drawn for whichever of
   the two callers has an editor open (`TaskState::open_completion`).
+- To change what `<` promotes to, the whole resolution is
+  `TaskState::promote_edits` in `src/app/task.rs`; the writes are assembled in
+  `App::promote_tasks` and go out in the order they are chained there, which
+  the local apply in `apply_and_enqueue` follows.
 - To change the parent pick, the state and both its resolutions are
   `begin_parent_pick` / `parent_pick_edits` in `src/app/task.rs`, the keys are
   `App::make_subtask` and `App::pick_parent`, the way back from a detour is the

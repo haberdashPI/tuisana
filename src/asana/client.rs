@@ -451,6 +451,11 @@ impl<T: Transport> HttpAsanaClient<T> {
                 "method": "post",
                 "data": { "parent": parent_gid },
             }),
+            TaskWrite::Section { gid, section_gid } => json!({
+                "relative_path": format!("/sections/{section_gid}/addTask"),
+                "method": "post",
+                "data": { "task": gid },
+            }),
             TaskWrite::Delete { gid } => json!({
                 "relative_path": format!("/tasks/{gid}"),
                 "method": "delete",
@@ -1162,6 +1167,7 @@ mod tests {
                 batch_reply(200, json!({ "data": {} })),
                 batch_reply(200, json!({ "data": {} })),
                 batch_reply(200, json!({ "data": {} })),
+                batch_reply(200, json!({ "data": {} })),
             ]
         })]);
         let client = HttpAsanaClient::with_transport(transport, "pat_123", None);
@@ -1175,6 +1181,13 @@ mod tests {
             TaskWrite::Parent {
                 gid: "t3".to_string(),
                 parent_gid: None,
+            },
+            // The one action that is not addressed to a task: a section
+            // placement is `/sections/{gid}/addTask`, with the task in the
+            // body, which is the inverse of every other write here.
+            TaskWrite::Section {
+                gid: "t5".to_string(),
+                section_gid: "sec-ship".to_string(),
             },
             TaskWrite::Delete {
                 gid: "t4".to_string(),
@@ -1190,7 +1203,7 @@ mod tests {
         let actions = posts[0].1["data"]["actions"]
             .as_array()
             .expect("an actions array");
-        assert_eq!(actions.len(), 4);
+        assert_eq!(actions.len(), 5);
         assert_eq!(actions[0]["relative_path"], "/tasks/t1");
         assert_eq!(actions[0]["method"], "put");
         assert_eq!(actions[0]["data"]["completed"], true);
@@ -1199,10 +1212,13 @@ mod tests {
         assert_eq!(actions[1]["data"]["project"], "p9");
         assert_eq!(actions[2]["relative_path"], "/tasks/t3/setParent");
         assert_eq!(actions[2]["data"]["parent"], serde_json::Value::Null);
-        assert_eq!(actions[3]["relative_path"], "/tasks/t4");
-        assert_eq!(actions[3]["method"], "delete");
+        assert_eq!(actions[3]["relative_path"], "/sections/sec-ship/addTask");
+        assert_eq!(actions[3]["method"], "post");
+        assert_eq!(actions[3]["data"]["task"], "t5");
+        assert_eq!(actions[4]["relative_path"], "/tasks/t4");
+        assert_eq!(actions[4]["method"], "delete");
 
-        // The field write's timestamp comes back; the three verb endpoints
+        // The field write's timestamp comes back; the four verb endpoints
         // have none to give.
         assert_eq!(
             results[0].as_ref().expect("the field write"),

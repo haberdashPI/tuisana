@@ -185,6 +185,7 @@ The keys that change which rows exist.
 | `mark_for_deletion` | mark the task, or the selection, for deletion |
 | `delete_marked_tasks` | carry out the marked deletions |
 | `make_subtask` | hold the selection, then pick what it hangs off |
+| `promote_task` | lift the selection one level up the tree |
 | `edit_cancel` | cancel the pick, clear the marks, or leave edit mode |
 | `toggle_task_selection` | select or deselect, as in task mode |
 
@@ -208,6 +209,23 @@ there is nothing to write for it.
 
 Past `edit.confirm_threshold` tasks the pick asks first, like every other bulk
 edit — see [Editing](/config/editing).
+
+## One level up
+
+`promote_task` — `<` — is `make_subtask` the other way, and needs no second
+gesture: where "up" is cannot be picked, it is read off each task's own parent.
+So it resolves per task rather than naming one parent for the lot. A task whose
+parent is itself a subtask moves to its grandparent, and nothing else changes.
+
+A task whose parent is **top level** has no grandparent, so it leaves the tree
+altogether — and that costs three requests rather than one, because Asana does
+not give a promoted subtask its parent's project. Without the membership it
+lands in the workspace and leaves the view; without the section it lands at the
+bottom of the project. So the parent's project and the parent's section come
+with it. All three go out as one burst, with one count and one rollback.
+
+Tasks that cannot move are skipped. When *every* one of them is already a
+top-level task the command says so rather than doing nothing.
 
 ## Gantt mode
 

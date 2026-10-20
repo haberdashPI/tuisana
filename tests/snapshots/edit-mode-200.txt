@@ -36,5 +36,5 @@
 ┃                                                                                                                                                                                                      ┃
 ┃                                                                                                                                                                                                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-i new task   I new subtask   S new section   K/J move section   x mark delete   X drop empty section   esc done   ␣ select   > make subtask   ? help                                  r refresh   q quit
+i new task   I new subtask   S new section   K/J move section   x mark delete   X drop empty section   esc done   ␣ select   > make subtask   < one level up   ? help                 r refresh   q quit
  EDIT

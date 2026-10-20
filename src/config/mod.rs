@@ -1420,6 +1420,10 @@ fn default_bindings() -> Vec<Bind> {
         // opens is a mode of its own, so `enter` there is the parent rather
         // than the deletion `enter` means a keystroke earlier.
         Bind::with_mode(">", Mode::Edit, "make_subtask"),
+        // The other half of the indent pair, and the only structural key that
+        // needs no second gesture: where "one level up" is cannot be picked,
+        // it is read off each task's own parent.
+        Bind::with_mode("<", Mode::Edit, "promote_task"),
         Bind::with_mode("enter", Mode::ParentPick, "pick_parent"),
         Bind::with_mode("esc", Mode::ParentPick, "edit_cancel"),
         Bind::with_mode("enter", Mode::ColumnEdit, "commit_column_edit"),
@@ -2893,6 +2897,7 @@ projects = ["1201", "  "]
             (KeyBinding::Enter, Action::DeleteMarkedTasks),
             (KeyBinding::Esc, Action::EditCancel),
             (KeyBinding::Char('>'), Action::MakeSubtask),
+            (KeyBinding::Char('<'), Action::PromoteTask),
         ] {
             assert_eq!(
                 keymap.action_for(&key, Mode::Edit),

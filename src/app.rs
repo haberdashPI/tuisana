@@ -27,6 +27,7 @@ pub mod text_edit;
 
 use self::gantt::MoveTo;
 use self::task::DraftCommit;
+use self::task::SectionMove;
 use self::project_list::ProjectListState;
 use self::task::TaskState;
 use self::text_edit::TextCut;
@@ -276,6 +277,7 @@ fn bulk_edit_summary(writes: &[PendingEdit], column: Option<&str>) -> String {
             PendingEdit::Field(edit) => edit.field.summary(column),
             PendingEdit::Project(edit) => edit.summary(),
             PendingEdit::Parent(edit) => edit.summary(),
+            PendingEdit::Section(moved) => moved.summary(),
         })
         .collect::<std::collections::BTreeSet<_>>();
 
@@ -315,6 +317,7 @@ enum PendingEdit {
     Field(TaskEdit),
     Project(ProjectEdit),
     Parent(ParentEdit),
+    Section(SectionMove),
 }
 
 impl PendingEdit {
@@ -323,6 +326,7 @@ impl PendingEdit {
             Self::Field(edit) => &edit.gid,
             Self::Project(edit) => &edit.gid,
             Self::Parent(edit) => &edit.gid,
+            Self::Section(moved) => &moved.gid,
         }
     }
 
@@ -340,6 +344,10 @@ impl PendingEdit {
             Self::Parent(edit) => TaskWrite::Parent {
                 gid: edit.gid.clone(),
                 parent_gid: edit.parent_gid.clone(),
+            },
+            Self::Section(moved) => TaskWrite::Section {
+                gid: moved.gid.clone(),
+                section_gid: moved.section_gid.clone(),
             },
         }
     }
@@ -1023,6 +1031,44 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     fn make_subtask(&mut self) {
         match self.tasks.begin_parent_pick() {
             Ok(()) => self.mode = Mode::ParentPick,
+            Err(message) => self.tasks.set_edit_notice(message),
+        }
+    }
+
+    /// `<`: lifts the selection one level up the tree.
+    ///
+    /// No second gesture, unlike `>`: where "up" is cannot be picked, it is
+    /// read off each task's own parent. That makes it the one structural key
+    /// whose writes are not all the same change — a promotion out from under
+    /// a top-level parent is a re-parenting *and* a project membership *and*
+    /// a section placement, three endpoints for one task — so the question a
+    /// wide one asks counts the writes and says how many changes they are
+    /// rather than naming one of them.
+    fn promote_tasks(&mut self) {
+        let context = self.edit_context();
+        match self.tasks.promote_edits(&context) {
+            Ok(edits) => {
+                // Parent first, then the project, then the section: the local
+                // apply follows this order and the batch is sent in it.
+                let writes = edits
+                    .parents
+                    .into_iter()
+                    .map(PendingEdit::Parent)
+                    .chain(edits.projects.into_iter().map(PendingEdit::Project))
+                    .chain(edits.sections.into_iter().map(PendingEdit::Section))
+                    .collect::<Vec<_>>();
+                if writes.is_empty() {
+                    // Reached when the targets were a mixture and none of the
+                    // movable ones had a parent this session has loaded —
+                    // `promote_edits` refuses the all-top-level case itself,
+                    // where it can say which reason it was.
+                    self.tasks
+                        .set_edit_notice("nothing to promote".to_string());
+                    return;
+                }
+                self.tasks.clear_edit_notice();
+                self.submit_writes(writes, None);
+            }
             Err(message) => self.tasks.set_edit_notice(message),
         }
     }
@@ -2362,6 +2408,10 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 self.pick_parent();
                 return Ok(None);
             }
+            Action::PromoteTask => {
+                self.promote_tasks();
+                return Ok(None);
+            }
             Action::MarkForDeletion => {
                 self.tasks.toggle_deletion_marks();
                 return Ok(None);
@@ -2836,6 +2886,13 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let sections = writes
+            .iter()
+            .filter_map(|write| match write {
+                PendingEdit::Section(moved) => Some(moved.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
 
         // One rebuild each rather than one for the lot: the three apply to
         // different parts of the record and each already batches its own.
@@ -2847,6 +2904,12 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         }
         if !parents.is_empty() {
             self.tasks.apply_parent_edits_locally(&parents);
+        }
+        // After the re-parentings: a promotion is both, and a row that joined
+        // a section while it was still drawn as a subtask would be grouped
+        // under its old parent for exactly one frame.
+        if !sections.is_empty() {
+            self.tasks.apply_section_moves_locally(&sections);
         }
 
         self.enqueue_writes(writes);
@@ -2988,6 +3051,9 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                     }
                     PendingEdit::Parent(edit) => {
                         self.tasks.apply_parent_edits_locally(&[edit.undo()]);
+                    }
+                    PendingEdit::Section(moved) => {
+                        self.tasks.undo_section_move_locally(moved);
                     }
                 }
             }

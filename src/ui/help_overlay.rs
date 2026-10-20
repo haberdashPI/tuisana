@@ -238,6 +238,7 @@ fn edit_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::DeleteMarkedTasks], "delete what is marked"),
                 Hint::new(&[Action::DeleteSection], "delete an empty section"),
                 Hint::new(&[Action::MakeSubtask], "hang these off a task you pick"),
+                Hint::new(&[Action::PromoteTask], "lift these one level up"),
                 Hint::new(&[Action::EditCancel], "clear the marks, then leave"),
             ],
         ),
