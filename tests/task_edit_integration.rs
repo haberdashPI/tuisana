@@ -1397,3 +1397,140 @@ fn ctrl_n_still_negates_a_filter_row_when_no_overlay_is_open() {
         "the complement, which is what ctrl-n has always meant here"
     );
 }
+
+// --- `>`: the selection becomes subtasks of a row picked afterwards --------
+
+/// The gesture end to end, through the keys: select, `>`, move, `enter`.
+#[test]
+fn angle_bracket_then_enter_hangs_the_selection_off_the_row_it_lands_on() {
+    let mut session = Session::start();
+
+    // `space` marks and advances, so two presses mark t1 and t2 and leave the
+    // cursor on t3 — which is where the parent happens to be anyway.
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    assert_eq!(session.app.tasks.selected_task_count(), 2);
+
+    session.press(KeyCode::Char('t'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('>'), KeyModifiers::SHIFT);
+    assert_eq!(
+        session.app.mode(),
+        tuisana::config::Mode::ParentPick,
+        "the keys belong to the pick now"
+    );
+    assert_eq!(session.app.tasks.awaiting_parent_count(), 2);
+
+    move_to_task(&mut session, "t3");
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(
+        session.client.structural_calls(),
+        vec![
+            StructuralCall::SetParent {
+                gid: "t1".to_string(),
+                parent_gid: Some("t3".to_string()),
+            },
+            StructuralCall::SetParent {
+                gid: "t2".to_string(),
+                parent_gid: Some("t3".to_string()),
+            },
+        ]
+    );
+    assert_eq!(
+        session.app.mode(),
+        tuisana::config::Mode::Edit,
+        "and the keys come back to edit mode, pick spent"
+    );
+    assert_eq!(session.app.tasks.awaiting_parent_count(), 0);
+}
+
+/// The detour the pick exists for: the parent is usually not in the filter
+/// that found the children, so the panel has to be reachable mid-gesture and
+/// the way back has to land in the pick rather than in plain task mode.
+#[test]
+fn the_pick_survives_a_trip_to_the_filter_panel_and_back() {
+    let mut session = Session::start();
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char('t'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('>'), KeyModifiers::SHIFT);
+
+    // Off to the panel, type a filter, and back the way `f` came.
+    session.press(KeyCode::Char('f'), KeyModifiers::NONE);
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Filter);
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    session.type_keys("cut the");
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    session.wait_for_tasks();
+    session.press(KeyCode::Char('f'), KeyModifiers::NONE);
+
+    assert_eq!(
+        session.app.mode(),
+        tuisana::config::Mode::ParentPick,
+        "still picking: the rows it is holding would have nowhere to go otherwise"
+    );
+    assert_eq!(session.app.tasks.awaiting_parent_count(), 1);
+    assert_eq!(
+        visible_gids(&session),
+        vec!["t3".to_string()],
+        "and the filter found the parent"
+    );
+
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(
+        session.client.structural_calls(),
+        vec![StructuralCall::SetParent {
+            gid: "t1".to_string(),
+            parent_gid: Some("t3".to_string()),
+        }]
+    );
+}
+
+/// `esc` backs out of the pick without backing out of edit mode, and leaves
+/// the selection alone — the rows were picked before the gesture started, and
+/// changing your mind about the parent is not changing your mind about them.
+#[test]
+fn esc_cancels_the_pick_back_into_edit_mode_with_the_selection_intact() {
+    let mut session = Session::start();
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char('t'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('>'), KeyModifiers::SHIFT);
+
+    session.press(KeyCode::Esc, KeyModifiers::NONE);
+
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Edit);
+    assert_eq!(session.app.tasks.awaiting_parent_count(), 0);
+    assert_eq!(session.app.tasks.selected_task_count(), 1);
+    assert!(session.client.structural_calls().is_empty());
+
+    // And a second `esc` leaves edit mode, as it always did.
+    session.press(KeyCode::Esc, KeyModifiers::NONE);
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Task);
+}
+
+/// A wide re-parent is a bulk edit like any other, so it meets the same
+/// question — and `n` leaves a table that never moved.
+#[test]
+fn a_wide_pick_is_confirmed_before_anything_is_sent() {
+    let mut session = Session::confirming_above(1);
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char(' '), KeyModifiers::NONE);
+    session.press(KeyCode::Char('t'), KeyModifiers::NONE);
+    session.press(KeyCode::Char('>'), KeyModifiers::SHIFT);
+    move_to_task(&mut session, "t3");
+    session.press(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(session.app.mode(), tuisana::config::Mode::Confirm);
+    assert_eq!(
+        session.app.pending_bulk_edit_view(),
+        Some((2, "hang off Cut the tag".to_string()))
+    );
+    assert!(session.client.structural_calls().is_empty(), "nothing yet");
+
+    session.press(KeyCode::Char('n'), KeyModifiers::NONE);
+    assert!(session.client.structural_calls().is_empty());
+    assert_eq!(
+        session.app.mode(),
+        tuisana::config::Mode::Edit,
+        "back where the pick left the keys"
+    );
+}

@@ -6,27 +6,27 @@
 │                                                                              │
 │                                                                              │
 │                                                                              │
-│                                                                              │
 ┏ Help · edit mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃Create                                   Modes                                ┃
-┃i         new task beside this one       p         projects                   ┃
-┃I         new subtask of this one        f         filters                    ┃
-┃S         new section after this one     t         tasks                      ┃
-┃                                         m         toggle tasks               ┃
+┃Create                                      Modes                             ┃
+┃i         new task beside this one          p         projects                ┃
+┃I         new subtask of this one           f         filters                 ┃
+┃S         new section after this one        t         tasks                   ┃
+┃                                            m         toggle tasks            ┃
 ┃Move & remove                                                                 ┃
-┃K/J       move between sections          Panes                                ┃
-┃␣         select, then mark              [/]       shrink / grow              ┃
-┃x         mark for deletion              {         minimize                   ┃
-┃⏎         delete what is marked          }         maximize                   ┃
-┃X         delete an empty section        0         restore                    ┃
-┃esc       clear the marks, then leave                                         ┃
-┃                                         App                                  ┃
-┃Move                                     r         refresh                    ┃
-┃j/k       down / up                      q ^c      quit                       ┃
-┃^d/^u     page down / up                 ?         close this help            ┃
+┃K/J       move between sections             Panes                             ┃
+┃␣         select, then mark                 [/]       shrink / grow           ┃
+┃x         mark for deletion                 {         minimize                ┃
+┃⏎         delete what is marked             }         maximize                ┃
+┃X         delete an empty section           0         restore                 ┃
+┃>         hang these off a task you pick                                      ┃
+┃esc       clear the marks, then leave       App                               ┃
+┃                                            r         refresh                 ┃
+┃Move                                        q ^c      quit                    ┃
+┃j/k       down / up                         ?         close this help         ┃
+┃^d/^u     page down / up                                                      ┃
 ┃home/end  top / bottom                                                        ┃
 ┃                                                                              ┃
-┃                                                                    ? to close┃
+┃                                                                        ? to c┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ┃   Close the quarter's shipping report           │ Priya Raman  │  Dec 18 │  N┃
 ┃                                                                              ┃

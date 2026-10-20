@@ -861,6 +861,15 @@ pub enum Mode {
     /// the same rows, the same cursor and selection, different keys. Task mode
     /// is about what the table *says*; this one is about what it *contains*.
     Edit,
+    /// A re-parenting is waiting for its parent to be picked.
+    ///
+    /// The transient half of `>`: the rows to hang off something are already
+    /// decided and held, and the cursor is choosing what to hang them off.
+    /// Another sibling of [`Mode::Task`] — the same pane, the same rows — but
+    /// the one that is *entered with work pending*, so it outlives a detour
+    /// through the filter panel and `set_task_mode` lands back in it. `esc`
+    /// and a pick are the only two ways out.
+    ParentPick,
     /// A bulk edit is waiting to be confirmed.
     ///
     /// Owns every key while it is up, so it allows no `Any` fallback: a
@@ -921,6 +930,7 @@ impl Mode {
             Self::Confirm => "confirm",
             Self::Task => "task",
             Self::Edit => "edit",
+            Self::ParentPick => "parent",
             Self::ColumnEdit => "column",
             Self::Gantt => "gantt",
             Self::GanttOrder => "colors",
@@ -1405,6 +1415,13 @@ fn default_bindings() -> Vec<Bind> {
         Bind::with_mode("space", Mode::Edit, "toggle_task_selection"),
         Bind::with_mode("enter", Mode::Edit, "delete_marked_tasks"),
         Bind::with_mode("esc", Mode::Edit, "edit_cancel"),
+        // Punctuation rather than a letter, and the editor's own indent key:
+        // `>` is what moves a thing *under* the thing above it. The pick it
+        // opens is a mode of its own, so `enter` there is the parent rather
+        // than the deletion `enter` means a keystroke earlier.
+        Bind::with_mode(">", Mode::Edit, "make_subtask"),
+        Bind::with_mode("enter", Mode::ParentPick, "pick_parent"),
+        Bind::with_mode("esc", Mode::ParentPick, "edit_cancel"),
         Bind::with_mode("enter", Mode::ColumnEdit, "commit_column_edit"),
         Bind::with_mode("esc", Mode::ColumnEdit, "cancel_column_edit"),
         // Letters type in this mode, so the value picker's keys are only
@@ -2875,6 +2892,7 @@ projects = ["1201", "  "]
             (KeyBinding::Char(' '), Action::ToggleTaskSelection),
             (KeyBinding::Enter, Action::DeleteMarkedTasks),
             (KeyBinding::Esc, Action::EditCancel),
+            (KeyBinding::Char('>'), Action::MakeSubtask),
         ] {
             assert_eq!(
                 keymap.action_for(&key, Mode::Edit),
@@ -2897,6 +2915,46 @@ projects = ["1201", "  "]
             keymap.action_for(&KeyBinding::Char('x'), Mode::Task),
             Some(&Action::ClearTaskSelection)
         );
+    }
+
+    /// The pick reads four keys: two of its own and two it inherits.
+    ///
+    /// The fallback is the point of the other two. Moving the cursor is the
+    /// whole gesture, and `f` is how the parent gets found when the filter
+    /// that found the children does not show it.
+    #[test]
+    fn default_bindings_include_the_parent_picks_controls() {
+        let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
+            .expect("default bindings parse");
+
+        for (key, action) in [
+            (KeyBinding::Enter, Action::PickParent),
+            (KeyBinding::Esc, Action::EditCancel),
+            (KeyBinding::Char('j'), Action::MoveDown),
+            (KeyBinding::Char('f'), Action::SetFilterMode),
+            (KeyBinding::Char('?'), Action::ToggleHelpDetails),
+        ] {
+            assert_eq!(
+                keymap.action_for(&key, Mode::ParentPick),
+                Some(&action),
+                "{key:?} in the parent pick"
+            );
+        }
+
+        // Edit mode's own keys are off here: the pick has one question
+        // outstanding, and inserting or deleting a row is not an answer to it.
+        for key in [
+            KeyBinding::Char('i'),
+            KeyBinding::Char('x'),
+            KeyBinding::Char('S'),
+            KeyBinding::Char('>'),
+        ] {
+            assert_eq!(
+                keymap.action_for(&key, Mode::ParentPick),
+                None,
+                "{key:?} is an edit-mode key"
+            );
+        }
     }
 
     /// Edit mode takes the `Any` fallback, because moving the cursor is most

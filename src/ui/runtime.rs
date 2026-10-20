@@ -179,6 +179,7 @@ fn focused_pane(mode: Mode, filter_focused: bool) -> FocusedPane {
     match mode {
         Mode::Task
         | Mode::Edit
+        | Mode::ParentPick
         | Mode::ColumnEdit
         | Mode::Gantt
         | Mode::GanttOrder
@@ -298,6 +299,9 @@ fn draw<B: Backend, C: AsanaClient + Clone + Send + 'static>(
             // The cursor is drawn only where it can be moved: in Gantt mode
             // `h` and `l` scroll the timeline, so there is no column cursor
             // to show there.
+            // Not in the pick: `h` and `l` still move the column cursor, but
+            // what `enter` takes there is the row, so a cell highlight would
+            // be pointing at the wrong half of the question.
             let cursor_column = matches!(mode, Mode::Task | Mode::Edit | Mode::ColumnEdit)
                 .then(|| app.tasks.selected_column());
 
@@ -472,6 +476,7 @@ fn help_visible<C: AsanaClient + Clone + Send + 'static>(app: &App<C>, mode: Mod
     match mode {
         Mode::Task
         | Mode::Edit
+        | Mode::ParentPick
         | Mode::ColumnEdit
         | Mode::Gantt
         | Mode::GanttOrder
@@ -549,7 +554,9 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
     let context = hints::HintContext {
         searching: app.projects.search_active() || !app.projects.search_query().is_empty(),
         has_selection: match mode {
-            Mode::Task | Mode::Edit | Mode::ColumnEdit => app.tasks.selected_task_count() > 0,
+            Mode::Task | Mode::Edit | Mode::ParentPick | Mode::ColumnEdit => {
+                app.tasks.selected_task_count() > 0
+            }
             Mode::Filter | Mode::FilterEdit | Mode::FilterSetName | Mode::Calendar => false,
             _ => app.projects.selected_count() > 0,
         },
@@ -569,6 +576,7 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
             || app.tasks.filter_autocomplete_open(),
         has_recent_edits: app.tasks.recent_hidden_count() > 0,
         marked_for_deletion: app.tasks.marked_for_deletion_count(),
+        awaiting_parent: app.tasks.awaiting_parent_count(),
     };
 
     let line = hints::hint_line(

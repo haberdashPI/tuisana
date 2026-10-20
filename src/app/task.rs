@@ -137,6 +137,15 @@ struct TaskViewState {
     /// backend knows about, and it has to survive the rebuilds that a
     /// streaming load triggers between the mark and the confirmation.
     marked_for_deletion: HashSet<String>,
+    /// The tasks `>` is hanging off something, waiting for the parent.
+    ///
+    /// A list of its own rather than the live selection, for the same reason
+    /// `marked_for_deletion` is a set of its own: the pick is allowed to go
+    /// *looking* for the parent, through a filter change that reloads the
+    /// table, so the rows it is holding may be nowhere on screen when it
+    /// lands. Captured in reading order at the keystroke, which is the order
+    /// the writes then go out in.
+    awaiting_parent: Vec<String>,
     /// The columns the renderer last drew, as a half-open range.
     ///
     /// Only the renderer knows the widths, so only the renderer can say what
@@ -5716,6 +5725,91 @@ impl TaskState {
         had
     }
 
+    // --- the pending re-parent --------------------------------------------
+
+    /// `>`: takes the selection, or the cursor row, as the tasks to re-parent.
+    ///
+    /// Only decides *what* moves. The parent is the cursor's answer a few
+    /// keystrokes later, which is why this holds the gids rather than
+    /// resolving anything: between the two the user is free to filter, and
+    /// the rows named here may be filtered out by the time one is picked.
+    pub fn begin_parent_pick(&mut self) -> std::result::Result<(), String> {
+        self.view.edit_notice = None;
+        let targets = self.edit_targets();
+        if targets.is_empty() {
+            return Err("no task under the cursor".to_string());
+        }
+        self.view.awaiting_parent = targets;
+        Ok(())
+    }
+
+    /// How many tasks the pick is holding. `0` when there is no pick.
+    pub fn awaiting_parent_count(&self) -> usize {
+        self.view.awaiting_parent.len()
+    }
+
+    /// Whether a pick is in progress.
+    ///
+    /// What keeps the mode on through a detour: `set_task_mode` asks this and
+    /// hands the keys back to the pick rather than to the table.
+    pub fn parent_pick_pending(&self) -> bool {
+        !self.view.awaiting_parent.is_empty()
+    }
+
+    /// Whether this row is one of the ones waiting for a parent.
+    ///
+    /// The explicit rows only, unlike [`TaskState::is_marked_for_deletion`]:
+    /// a subtask of one travels with it, but it is *drawn* under it and goes
+    /// on being drawn under it, so nothing on screen needs to say so. A
+    /// deleted descendant, by contrast, vanishes.
+    pub fn is_awaiting_parent(&self, gid: &str) -> bool {
+        self.view.awaiting_parent.iter().any(|held| held == gid)
+    }
+
+    /// `esc`: drops the pick, answering whether there was one.
+    ///
+    /// The same shape as [`TaskState::clear_deletion_marks`], and for the
+    /// same reason: one key means "back out of whatever is pending", and the
+    /// answer is how it knows what that was.
+    pub fn cancel_parent_pick(&mut self) -> bool {
+        let had = self.parent_pick_pending();
+        self.view.awaiting_parent.clear();
+        had
+    }
+
+    /// Resolves the pick against the row under the cursor.
+    ///
+    /// Refuses outright for the two cases that are a cursor in the wrong
+    /// place rather than a change to make — the parent is one of the tasks
+    /// being moved, or it is somewhere under one of them, which is a cycle
+    /// Asana would reject anyway. Tasks already hanging off it are dropped
+    /// quietly, because there is nothing to write for them.
+    pub fn parent_pick_edits(&self) -> std::result::Result<Vec<ParentEdit>, String> {
+        let targets = self.view.awaiting_parent.clone();
+        if targets.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(parent) = self.cursor_task_gid() else {
+            return Err("no task under the cursor to hang these off".to_string());
+        };
+
+        if targets.iter().any(|gid| gid == &parent) {
+            return Err("a task cannot be its own parent".to_string());
+        }
+        for gid in &targets {
+            if self.descendants_of(gid).contains(&parent) {
+                return Err(format!(
+                    "{} is already under {}",
+                    self.task_title(&parent),
+                    self.task_title(gid)
+                ));
+            }
+        }
+
+        let title = self.task_title(&parent);
+        Ok(self.parent_edits(&targets, Some((&parent, &title))))
+    }
+
     /// Takes rows out of the cache and the table, answering what it took.
     ///
     /// Each marked task takes its loaded descendants with it, because Asana
@@ -5875,25 +5969,45 @@ impl TaskState {
             Unresolved::Ambiguous(text) => format!("{text} is ambiguous"),
             Unresolved::Unknown(text) => format!("no task called {text} is loaded"),
         })?;
-        let parent = items.first();
+        let parent = items
+            .first()
+            .map(|item| (item.handle.as_str(), item.display.as_str()));
 
+        Ok(CommittedEdits {
+            parents: self.parent_edits(&edit.targets, parent),
+            ..CommittedEdits::default()
+        })
+    }
+
+    /// One re-parenting per target that needs one.
+    ///
+    /// The shared half of the two gestures that re-parent: the `Parent` cell
+    /// editor, which names the parent by typing it, and `>`, which names it
+    /// with the cursor. `None` promotes the targets to top level, which only
+    /// the editor can ask for — a pick has a row under it by definition.
+    ///
+    /// Two targets produce nothing: one already hanging off that parent,
+    /// because there is no change to write, and one that *is* the parent,
+    /// because the editor opens on a single row's candidates and a bulk edit
+    /// can therefore name a row inside its own set. `>` refuses that second
+    /// case instead, before it gets here: a cursor parked on one of the rows
+    /// it is moving is a mistake worth a message rather than a silent skip.
+    fn parent_edits(&self, targets: &[String], parent: Option<(&str, &str)>) -> Vec<ParentEdit> {
         let mut parents = Vec::new();
-        for gid in &edit.targets {
+        for gid in targets {
             let Some(record) = self.record(gid) else {
                 continue;
             };
-            if parent.map(|item| item.handle.as_str()) == record.parent_gid.as_deref() {
+            if parent.map(|(handle, _)| handle) == record.parent_gid.as_deref() {
                 continue;
             }
-            // A task cannot be its own parent, and the editor opened on one
-            // row's candidates — a bulk edit can name a row in the set.
-            if parent.is_some_and(|item| &item.handle == gid) {
+            if parent.is_some_and(|(handle, _)| handle == gid) {
                 continue;
             }
             parents.push(ParentEdit {
                 gid: gid.clone(),
-                parent_gid: parent.map(|item| item.handle.clone()),
-                parent_name: parent.map(|item| item.display.clone()),
+                parent_gid: parent.map(|(handle, _)| handle.to_string()),
+                parent_name: parent.map(|(_, display)| display.to_string()),
                 previous_name: record
                     .parent_gid
                     .as_deref()
@@ -5901,11 +6015,7 @@ impl TaskState {
                 previous_gid: record.parent_gid.clone(),
             });
         }
-
-        Ok(CommittedEdits {
-            parents,
-            ..CommittedEdits::default()
-        })
+        parents
     }
 
     /// Applies re-parentings locally, then rebuilds so the limb moves.

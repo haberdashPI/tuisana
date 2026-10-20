@@ -6,28 +6,28 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
-│                                                                                                                      │
-│                   ┏ Help · edit mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                   │
-│                   ┃Create                                   Modes                                ┃                   │
-└───────────────────┃i         new task beside this one       p         projects                   ┃───────────────────┘
-┏ Tasks ━━━━━━━━━━━━┃I         new subtask of this one        f         filters                    ┃w 1 · columns 0/10 ┓
-┃   Task            ┃S         new section after this one     t         tasks                      ┃          │ Parent ┃
-┃                   ┃                                         m         toggle tasks               ┃                   ┃
-┃▌Northwind BTX 4412┃Move & remove                                                                 ┃───────────────────┃
-┃                   ┃K/J       move between sections          Panes                                ┃                   ┃
-┃   Study Kit Design┃␣         select, then mark              [/]       shrink / grow              ┃···················┃
-┃▍  Draft the assay ┃x         mark for deletion              {         minimize                   ┃ BTX 4412 │ —      ┃
-┃   Review shipment ┃⏎         delete what is marked          }         maximize                   ┃ BTX 4412 │ —      ┃
-┃   Ship release can┃X         delete an empty section        0         restore                    ┃ BTX 4412 │ —      ┃
-┃   Confirm carrier ┃esc       clear the marks, then leave                                         ┃ BTX 4412 │ —      ┃
-┃   Update the sampl┃                                         App                                  ┃ BTX 4412 │ —      ┃
-┃   Qualify the seco┃Move                                     r         refresh                    ┃ BTX 4412 │ —      ┃
-┃                   ┃j/k       down / up                      q ^c      quit                       ┃                   ┃
-┃   Shipment ·······┃^d/^u     page down / up                 ?         close this help            ┃···················┃
-┃   Book the courier┃home/end  top / bottom                                                        ┃ BTX 4412 │ —      ┃
-┃   Label the retent┃                                                                              ┃ BTX 4412 │ —      ┃
-┃   Reconcile the fr┃                                                                    ? to close┃ BTX 4412 │ —      ┃
-┃   Close out packag┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ BTX 4412 │ —      ┃
+│                 ┏ Help · edit mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                 │
+│                 ┃Create                                      Modes                                 ┃                 │
+│                 ┃i         new task beside this one          p         projects                    ┃                 │
+└─────────────────┃I         new subtask of this one           f         filters                     ┃─────────────────┘
+┏ Tasks ━━━━━━━━━━┃S         new section after this one        t         tasks                       ┃1 · columns 0/10 ┓
+┃   Task          ┃                                            m         toggle tasks                ┃        │ Parent ┃
+┃                 ┃Move & remove                                                                     ┃                 ┃
+┃▌Northwind BTX 44┃K/J       move between sections             Panes                                 ┃─────────────────┃
+┃                 ┃␣         select, then mark                 [/]       shrink / grow               ┃                 ┃
+┃   Study Kit Desi┃x         mark for deletion                 {         minimize                    ┃·················┃
+┃▍  Draft the assa┃⏎         delete what is marked             }         maximize                    ┃TX 4412 │ —      ┃
+┃   Review shipmen┃X         delete an empty section           0         restore                     ┃TX 4412 │ —      ┃
+┃   Ship release c┃>         hang these off a task you pick                                          ┃TX 4412 │ —      ┃
+┃   Confirm carrie┃esc       clear the marks, then leave       App                                   ┃TX 4412 │ —      ┃
+┃   Update the sam┃                                            r         refresh                     ┃TX 4412 │ —      ┃
+┃   Qualify the se┃Move                                        q ^c      quit                        ┃TX 4412 │ —      ┃
+┃                 ┃j/k       down / up                         ?         close this help             ┃                 ┃
+┃   Shipment ·····┃^d/^u     page down / up                                                          ┃·················┃
+┃   Book the couri┃home/end  top / bottom                                                            ┃TX 4412 │ —      ┃
+┃   Label the rete┃                                                                                  ┃TX 4412 │ —      ┃
+┃   Reconcile the ┃                                                                        ? to close┃TX 4412 │ —      ┃
+┃   Close out pack┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛TX 4412 │ —      ┃
 ┃   Close the quarter's shipping report           │ Priya Raman  │  Dec 18 │  Nov 2 │ ○  │ Northwind BTX 4412 │ —      ┃
 ┃                                                                                                                      ┃
 ┃                                                                                                                      ┃

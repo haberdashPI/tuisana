@@ -352,6 +352,13 @@ pub enum Action {
     InsertTask,
     /// Open a draft task whose parent is the one under the cursor.
     InsertSubtask,
+    /// Hang the selection off a task the cursor then picks.
+    ///
+    /// The command half of a two-part gesture: this one only decides *what*
+    /// moves, and [`Action::PickParent`] decides what it moves under.
+    MakeSubtask,
+    /// Take the row under the cursor as the parent of what `>` is holding.
+    PickParent,
     /// Mark the cursor row, or the selection, for deletion. Again unmarks.
     MarkForDeletion,
     /// Carry out the marked deletions.
@@ -523,6 +530,8 @@ impl Action {
             "edit_cancel" => Ok(Self::EditCancel),
             "insert_task" => Ok(Self::InsertTask),
             "insert_subtask" => Ok(Self::InsertSubtask),
+            "make_subtask" => Ok(Self::MakeSubtask),
+            "pick_parent" => Ok(Self::PickParent),
             "mark_for_deletion" => Ok(Self::MarkForDeletion),
             "delete_marked_tasks" => Ok(Self::DeleteMarkedTasks),
             "insert_section" => Ok(Self::InsertSection),
@@ -808,6 +817,8 @@ impl Display for Action {
             Action::EditCancel => "edit_cancel",
             Action::InsertTask => "insert_task",
             Action::InsertSubtask => "insert_subtask",
+            Action::MakeSubtask => "make_subtask",
+            Action::PickParent => "pick_parent",
             Action::MarkForDeletion => "mark_for_deletion",
             Action::DeleteMarkedTasks => "delete_marked_tasks",
             Action::InsertSection => "insert_section",
@@ -1023,6 +1034,8 @@ mod tests {
             Action::EditCancel,
             Action::InsertTask,
             Action::InsertSubtask,
+            Action::MakeSubtask,
+            Action::PickParent,
             Action::MarkForDeletion,
             Action::DeleteMarkedTasks,
             Action::InsertSection,

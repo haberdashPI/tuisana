@@ -513,6 +513,9 @@ impl Theme {
             // Red, alone among the modes: this is the one whose keys change
             // which rows exist rather than what a row says.
             Mode::Edit => Color::Red,
+            // Red too: the pick is edit mode with one question outstanding,
+            // and the colour is what says the keys have not come back yet.
+            Mode::ParentPick => Color::Red,
             // Yellow, like every other mode where something is being typed.
             Mode::ColumnEdit => Color::Yellow,
             Mode::Gantt => Color::Cyan,

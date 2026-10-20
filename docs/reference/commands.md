@@ -184,8 +184,30 @@ The keys that change which rows exist.
 | `move_task_to_next_section` / `move_task_to_prev_section` | move the task between its project's sections |
 | `mark_for_deletion` | mark the task, or the selection, for deletion |
 | `delete_marked_tasks` | carry out the marked deletions |
-| `edit_cancel` | clear the marks, or leave edit mode when there are none |
+| `make_subtask` | hold the selection, then pick what it hangs off |
+| `edit_cancel` | cancel the pick, clear the marks, or leave edit mode |
 | `toggle_task_selection` | select or deselect, as in task mode |
+
+## Parent pick mode
+
+`make_subtask` has taken the selection — or the cursor row, when there is no
+selection — and the cursor is choosing the parent. The rows it is holding are
+underlined and counted on the pane's border, and they stay held while the
+filter changes, so the parent can be found before it is picked.
+
+| command | what it does |
+| --- | --- |
+| `pick_parent` | hang the held tasks off the row under the cursor |
+| `edit_cancel` | drop the pick, back to edit mode with the selection intact |
+
+A pick is refused, with the message in the corner, when the cursor is on one of
+the tasks being moved or on something below one of them in the tree — both are
+cycles, and a cursor in the wrong place is fixed with another keystroke rather
+than a request. A task already hanging off the picked row is skipped, because
+there is nothing to write for it.
+
+Past `edit.confirm_threshold` tasks the pick asks first, like every other bulk
+edit — see [Editing](/config/editing).
 
 ## Gantt mode
 

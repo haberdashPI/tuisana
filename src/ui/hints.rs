@@ -101,6 +101,9 @@ pub struct HintContext {
     /// How many tasks are marked for deletion, which is what decides whether
     /// `enter` and `esc` have anything to act on.
     pub marked_for_deletion: usize,
+    /// How many tasks `>` is holding for a parent, which is what the pick's
+    /// own bar counts back to the reader.
+    pub awaiting_parent: usize,
 }
 
 /// The three forward cuts, as one hint.
@@ -223,6 +226,7 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
         }
         Mode::Task => task_hints(context),
         Mode::Edit => edit_hints(context),
+        Mode::ParentPick => parent_pick_hints(context),
         Mode::ColumnEdit => task_edit_hints(context),
         Mode::Gantt => gantt_hints(context),
         Mode::Description => vec![
@@ -387,8 +391,32 @@ fn edit_hints(context: HintContext) -> Vec<Hint> {
         hints.push(Hint::new(&[Action::EditCancel], "done"));
     }
     hints.push(Hint::new(&[Action::ToggleTaskSelection], "select"));
+    hints.push(Hint::new(&[Action::MakeSubtask], "make subtask"));
     hints.push(Hint::new(&[Action::ToggleHelpDetails], "help"));
     hints
+}
+
+/// The keys the parent pick reads.
+///
+/// Says what it is holding rather than naming the mode: the one thing the
+/// reader cannot see from the rows is how many of them are coming along, and
+/// the underline on a row scrolled out of view says nothing at all. `f` is on
+/// the bar because going to look for the parent is the expected move, not an
+/// escape from the gesture.
+fn parent_pick_hints(context: HintContext) -> Vec<Hint> {
+    vec![
+        Hint::new(
+            &[Action::PickParent],
+            match context.awaiting_parent {
+                1 => "parent for this row",
+                _ => "parent for the selection",
+            },
+        ),
+        Hint::new(&[Action::MoveDown, Action::MoveUp], "cursor"),
+        Hint::new(&[Action::SetFilterMode], "go find it"),
+        Hint::new(&[Action::EditCancel], "cancel"),
+        Hint::new(&[Action::ToggleHelpDetails], "help"),
+    ]
 }
 
 /// The keys an open cell editor reads.

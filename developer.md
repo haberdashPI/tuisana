@@ -163,6 +163,20 @@ a convention.
   question too, as `Mode::Confirm`: `submit_writes` holds the resolved writes
   on `App` and applies *nothing* — not even the optimistic update — until `y`,
   so `n` leaves a table that never moved.
+- **Re-parenting is asked in two halves, and the second half can wait.** `>`
+  in edit mode takes `edit_targets` and holds them on `TaskViewState` as
+  `awaiting_parent`, then hands the keys to `Mode::ParentPick`; `enter` there
+  resolves them against the cursor row through `parent_pick_edits` and rejoins
+  the ordinary write path at `submit_writes`. The held gids are a list of
+  their own, like the deletion marks and for the same reason — the expected
+  move mid-gesture is `f`, a new filter, and `f` back, which is a reload that
+  can take every row being moved off the screen. That round trip is why this
+  is a mode: `set_task_mode` asks `parent_pick_pending` and puts the keys back
+  in the pick rather than in the table, and it is the one place that knows,
+  because every way back from the panel comes through it. `parent_edits` is
+  the half shared with the `Parent` cell editor, which names the parent by
+  typing it instead; the difference is that a pick *refuses* a cursor on one
+  of its own rows, where the editor silently drops it.
 - An edit is **optimistic**. `apply_and_enqueue` writes it onto the cached
   record and the visible dataset at once, then queues it for the write pool;
   `poll_task_edits` takes the server's `modified_at` on success and puts the
@@ -253,6 +267,11 @@ a convention.
 - To change how a name is completed, start in `src/app/autocomplete.rs`; the
   candidate overlay is `src/ui/completion.rs` and is drawn for whichever of
   the two callers has an editor open (`TaskState::open_completion`).
+- To change the parent pick, the state and both its resolutions are
+  `begin_parent_pick` / `parent_pick_edits` in `src/app/task.rs`, the keys are
+  `App::make_subtask` and `App::pick_parent`, the way back from a detour is the
+  tail of `App::set_task_mode`, and the underline and the `re-parenting n` chip
+  are in `src/ui/task_table.rs`.
 - To change when a bulk edit is asked about, the threshold is
   `EditConfig::needs_confirmation` in `src/config/mod.rs`, the gate is
   `App::submit_writes`, the keys are `App::handle_confirm_input`, and the

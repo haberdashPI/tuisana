@@ -55,6 +55,7 @@ pub fn groups_for(mode: Mode) -> Vec<HelpGroup> {
     let mut groups = match mode {
         Mode::Task => task_groups(),
         Mode::Edit => edit_groups(),
+        Mode::ParentPick => parent_pick_groups(),
         Mode::ColumnEdit => {
             let mut groups = task_groups();
             groups.push(text_editing_group());
@@ -236,10 +237,31 @@ fn edit_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::MarkForDeletion], "mark for deletion"),
                 Hint::new(&[Action::DeleteMarkedTasks], "delete what is marked"),
                 Hint::new(&[Action::DeleteSection], "delete an empty section"),
+                Hint::new(&[Action::MakeSubtask], "hang these off a task you pick"),
                 Hint::new(&[Action::EditCancel], "clear the marks, then leave"),
             ],
         ),
     ]
+}
+
+/// The pick's own help: four keys, and the detour spelled out.
+///
+/// The filter line is the one worth the space. That the table can be changed
+/// *mid-gesture* is the whole reason this is a mode rather than a prompt, and
+/// nothing else on screen would say so.
+fn parent_pick_groups() -> Vec<HelpGroup> {
+    vec![HelpGroup::new(
+        "Pick a parent",
+        vec![
+            Hint::new(&[Action::MoveDown, Action::MoveUp], "move the cursor"),
+            Hint::new(&[Action::PickParent], "hang the held rows off this one"),
+            Hint::new(
+                &[Action::SetFilterMode],
+                "filter for the parent, then come back",
+            ),
+            Hint::new(&[Action::EditCancel], "cancel, keeping the selection"),
+        ],
+    )]
 }
 
 fn description_groups() -> Vec<HelpGroup> {

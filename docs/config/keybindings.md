@@ -80,6 +80,7 @@ default binding that uses `alt-` is rebindable if your terminal cannot send it.
 | `calendar` | the date picker |
 | `task` | the task table |
 | `edit` | the structural edits — insert, delete, move between sections |
+| `parent_pick` | `>` is holding rows and the cursor is choosing their parent |
 | `column_edit` | a table cell is open for editing |
 | `confirm` | a bulk edit is waiting on `y` or `n` |
 | `gantt` | the timeline |
@@ -328,6 +329,22 @@ The structural edits: the keys that change which rows exist.
 | `space` | `toggle_task_selection` |
 | `enter` | `delete_marked_tasks` |
 | `esc` | `edit_cancel` |
+| `>` | `make_subtask` |
+
+### Parent pick mode (`parent_pick`)
+
+`>` has taken the selection and is waiting to be told what it hangs off. The
+cursor is the answer, and `enter` takes the row it is on.
+
+| key | command |
+| --- | --- |
+| `enter` | `pick_parent` |
+| `esc` | `edit_cancel` |
+
+Everything else comes from `any`, which is the point: `j` and `k` move the
+cursor, and `f` opens the filter panel. The parent is often not in the filter
+that found the children, so going to look for it — `f`, a filter, then `f` or
+`esc` back — keeps the pick alive and lands back in it.
 
 ### Column edit mode (`column_edit`)
 

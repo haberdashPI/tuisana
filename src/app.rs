@@ -969,6 +969,16 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         // is not a request to put the project list back: the filters you just
         // built are the thing you are reading the table against, and `f` and
         // `p` are both one keystroke away when you do want them gone.
+
+        // A pick that is still holding rows takes the keys back instead.
+        // Going to the filter panel to *find* the parent is the detour `>`
+        // is built around — `f` there and `f` or `esc` back — and every way
+        // back comes through here, so this is the one place that has to
+        // know. Landing in plain task mode would leave the rows held with
+        // no key left that could spend them.
+        if self.tasks.parent_pick_pending() {
+            self.mode = Mode::ParentPick;
+        }
     }
 
     /// Enters edit mode, taking the keys that change which rows exist.
@@ -986,14 +996,64 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         }
     }
 
-    /// Leaves edit mode, or clears the deletion marks when there are any.
+    /// Leaves edit mode, or clears whatever is pending in it.
     ///
-    /// One key, one sentence: back out of whatever is pending.
+    /// One key, one sentence: back out of whatever is pending. The pick comes
+    /// first because it is the one that took the mode with it — cancelling it
+    /// goes back to edit mode rather than out of it, so `esc` `esc` is still
+    /// "stop doing this, then leave".
     fn edit_cancel(&mut self) {
+        if self.tasks.cancel_parent_pick() {
+            self.set_edit_mode();
+            return;
+        }
         if self.tasks.clear_deletion_marks() {
             return;
         }
         self.set_task_mode();
+    }
+
+    /// `>`: holds the selection and asks the cursor for a parent.
+    ///
+    /// The gesture is deliberately in two halves. Naming several tasks and
+    /// then naming what they hang off are different questions, and the second
+    /// one usually needs the table changed to answer — the parent is often
+    /// not in the filter that found the children. So this one only decides
+    /// what moves, and hands the keys to a mode that survives that search.
+    fn make_subtask(&mut self) {
+        match self.tasks.begin_parent_pick() {
+            Ok(()) => self.mode = Mode::ParentPick,
+            Err(message) => self.tasks.set_edit_notice(message),
+        }
+    }
+
+    /// `enter` in the pick: hangs the held tasks off the row under the cursor.
+    ///
+    /// Rejoins the ordinary edit path at [`App::submit_writes`], so a wide
+    /// re-parent is confirmed, counted, applied optimistically, and rolled
+    /// back on failure exactly as a wide cell edit is. The mode goes back
+    /// before the writes do, for the same reason the cell editor's commit
+    /// closes first: whichever way the question is answered, the pick is
+    /// spent and the keys belong to the table again.
+    fn pick_parent(&mut self) {
+        match self.tasks.parent_pick_edits() {
+            Ok(edits) => {
+                self.tasks.cancel_parent_pick();
+                self.set_edit_mode();
+                if edits.is_empty() {
+                    // Not silence: the keystroke resolved to nothing, and a
+                    // pick that ended with the table unchanged and no word
+                    // said would read as a key that does not work.
+                    self.tasks
+                        .set_edit_notice("already hanging off that task".to_string());
+                    return;
+                }
+                self.submit_writes(edits.into_iter().map(PendingEdit::Parent).collect(), None);
+            }
+            // The pick stays up: the cursor is in the wrong place, which is
+            // the one thing another keystroke can fix.
+            Err(message) => self.tasks.set_edit_notice(message),
+        }
     }
 
     /// Opens a draft task, committing any draft already open.
@@ -2292,6 +2352,14 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
             }
             Action::MoveTaskToSection(delta) => {
                 self.move_task_to_section(*delta);
+                return Ok(None);
+            }
+            Action::MakeSubtask => {
+                self.make_subtask();
+                return Ok(None);
+            }
+            Action::PickParent => {
+                self.pick_parent();
                 return Ok(None);
             }
             Action::MarkForDeletion => {

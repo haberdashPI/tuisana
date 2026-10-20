@@ -162,6 +162,12 @@ pub struct RenderRow {
     /// Drawn struck through — a glyph change, not a colour change, so it
     /// reads under `variant = "mono"`.
     pub marked_for_deletion: bool,
+    /// Whether this row is one of the ones `>` is holding for a parent.
+    ///
+    /// Underlined, a glyph change like the strike-through above and for the
+    /// same reason: both have to read under `variant = "mono"`, and the two
+    /// cannot be told apart by colour on a row that is also under the cursor.
+    pub awaiting_parent: bool,
     /// How deeply the task is nested under a parent.
     pub subtask_depth: usize,
     /// One entry per column, for task rows.
@@ -375,7 +381,15 @@ pub fn render_task_table(
     let rows = model
         .rows
         .iter()
-        .map(|row| resolve_row(row, today, theme, state.is_marked_for_deletion(&row.gid)))
+        .map(|row| {
+            resolve_row(
+                row,
+                today,
+                theme,
+                state.is_marked_for_deletion(&row.gid),
+                state.is_awaiting_parent(&row.gid),
+            )
+        })
         .collect::<Vec<_>>();
 
     let split = split_pane(
@@ -526,7 +540,15 @@ pub fn recent_pane_view(
         .recent_table()
         .rows
         .iter()
-        .map(|row| resolve_row(row, today, theme, state.is_marked_for_deletion(&row.gid)))
+        .map(|row| {
+            resolve_row(
+                row,
+                today,
+                theme,
+                state.is_marked_for_deletion(&row.gid),
+                state.is_awaiting_parent(&row.gid),
+            )
+        })
         .collect::<Vec<_>>();
     let hidden = state.recent_hidden_count();
 
@@ -730,6 +752,18 @@ fn task_line(
         .then_some(view.cursor_column)
         .flatten();
     let mut cells = cell_spans(&row.cells, view, theme, false, editing, target_column);
+    if row.awaiting_parent {
+        // Under every cell rather than beside the row: the band that says how
+        // wide the *next* edit is belongs to the cursor column, and these rows
+        // are the subject of an edit whose other half is not decided yet.
+        cells = cells
+            .into_iter()
+            .map(|span| {
+                let style = span.style.add_modifier(ratatui::style::Modifier::UNDERLINED);
+                span.style(style)
+            })
+            .collect();
+    }
     if row.marked_for_deletion {
         // On the spans rather than the whole `Line`, which keeps the chart's
         // "one line per row" invariant intact: the bar beside a marked row is
@@ -902,6 +936,7 @@ fn resolve_row(
     today: date::CivilDate,
     theme: &Theme,
     marked_for_deletion: bool,
+    awaiting_parent: bool,
 ) -> RenderRow {
     if !row.kind.is_task() {
         return RenderRow {
@@ -910,6 +945,7 @@ fn resolve_row(
             label: row.cells.first().cloned().unwrap_or_default(),
             completed: false,
             marked_for_deletion: false,
+            awaiting_parent: false,
             subtask_depth: 0,
             cells: Vec::new(),
         };
@@ -938,6 +974,7 @@ fn resolve_row(
         label: String::new(),
         completed,
         marked_for_deletion,
+        awaiting_parent,
         subtask_depth: row.subtask_depth,
         cells,
     }
@@ -1105,6 +1142,16 @@ fn counts(state: &TaskState) -> Vec<Chip> {
     if state.cell_edit_target_count() > 1 {
         chips.push(Chip::toned(
             format!("editing {}", state.cell_edit_target_count()),
+            Tone::Accent,
+        ));
+    }
+
+    // What `>` is holding, which is the one pending state that can be read
+    // while the keys are in another pane entirely: the filter detour is part
+    // of the gesture, so the count has to be legible from inside it.
+    if state.awaiting_parent_count() > 0 {
+        chips.push(Chip::toned(
+            format!("re-parenting {}", state.awaiting_parent_count()),
             Tone::Accent,
         ));
     }
@@ -1606,6 +1653,41 @@ mod tests {
         assert!(struck(marked.0), "the marked row is struck through");
         assert!(!struck(kept.0), "and nothing else is");
         assert_eq!(state.marked_for_deletion_count(), 1);
+    }
+
+    /// The pick's own marking, which has to be told apart from the band that
+    /// says how wide an edit is — that one is underlined *and* bold over the
+    /// target background, and only ever on one column.
+    #[test]
+    fn a_row_waiting_for_a_parent_is_underlined() {
+        let mut state = state_with(vec![
+            task("t1", "Moving", Some("2026-01-01"), false),
+            task("t2", "Staying", Some("2026-01-02"), false),
+        ]);
+        state.begin_parent_pick().expect("the cursor is on a task");
+        let theme = Theme::default();
+        let view = render_task_table(&mut state, 120, &theme, None);
+
+        let lines = task_body_lines(&view, state.selected_index(), &theme, 120);
+        let underlined = |line: &ratatui::text::Line<'_>| {
+            line.spans
+                .iter()
+                .any(|span| span.style.add_modifier.contains(Modifier::UNDERLINED))
+        };
+        let held = lines
+            .iter()
+            .zip(view.rows.iter())
+            .find(|(_, row)| row.gid == "t1")
+            .expect("the held row");
+        let other = lines
+            .iter()
+            .zip(view.rows.iter())
+            .find(|(_, row)| row.gid == "t2")
+            .expect("the other row");
+
+        assert!(underlined(held.0), "the row the pick is holding says so");
+        assert!(!underlined(other.0), "and nothing else does");
+        assert_eq!(state.awaiting_parent_count(), 1);
     }
 
     /// Which rows band is the same question as which rows an edit changes, so

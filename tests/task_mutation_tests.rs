@@ -21,6 +21,7 @@ use tuisana::{
         AsanaClient,
     },
     domain::{CustomFieldValue, NewTask, ParentEdit, Project, Section, TaskFieldEdit},
+    input::Action,
 };
 
 fn priority_field(gid: &str) -> ProjectCustomFieldSettingDto {
@@ -854,6 +855,22 @@ fn section_of(state: &TaskState, gid: &str) -> Option<String> {
 }
 
 /// The `Parent` cell of a row.
+/// Marks a row the way `space` does, leaving the cursor where it left it.
+fn mark_task(state: &mut TaskState, gid: &str) {
+    select_task(state, gid);
+    state.apply_action(&Action::ToggleTaskSelection, 10, false);
+}
+
+/// What a resolved pick would write, as `(task, parent)` pairs.
+fn pick_pairs(state: &TaskState) -> Vec<(String, Option<String>)> {
+    state
+        .parent_pick_edits()
+        .expect("the pick resolves")
+        .into_iter()
+        .map(|edit| (edit.gid, edit.parent_name))
+        .collect()
+}
+
 fn parent_cell(state: &TaskState, gid: &str) -> Option<String> {
     state
         .table()
@@ -994,5 +1011,127 @@ fn a_task_created_under_the_assigned_to_me_row_stays_in_that_group() {
         client.structural_calls(),
         vec![StructuralCall::CreateTask(new_task)],
         "no section call: the row had no section to inherit"
+    );
+}
+
+// --- `>`: the selection becomes subtasks of a row picked afterwards --------
+
+/// The whole point of the two-part gesture: what moves is decided first, and
+/// the cursor is free to go anywhere before it says what they move under.
+#[test]
+fn the_pick_hangs_everything_it_holds_off_the_row_the_cursor_lands_on() {
+    let (mut state, _, _) = sectioned_state();
+    // t1a starts out under t1, which is the row this pick ends on — so it is
+    // promoted first, leaving two top-level tasks with somewhere to go.
+    state.apply_parent_edits_locally(&[ParentEdit {
+        gid: "t1a".to_string(),
+        parent_gid: None,
+        parent_name: None,
+        previous_gid: Some("t1".to_string()),
+        previous_name: Some("Draft the protocol".to_string()),
+    }]);
+    mark_task(&mut state, "t1a");
+    mark_task(&mut state, "t2");
+
+    state.begin_parent_pick().expect("two rows are selected");
+    assert_eq!(state.awaiting_parent_count(), 2);
+    assert!(state.is_awaiting_parent("t2"), "and the rows say so on screen");
+
+    select_task(&mut state, "t1");
+    assert_eq!(
+        pick_pairs(&state),
+        vec![
+            ("t1a".to_string(), Some("Draft the protocol".to_string())),
+            ("t2".to_string(), Some("Draft the protocol".to_string())),
+        ],
+        "both hang off the cursor row, in reading order"
+    );
+}
+
+/// With nothing selected the cursor row stands in, the same as every other
+/// edit: `TaskState::edit_targets` is the one rule for how wide an edit is.
+#[test]
+fn the_pick_falls_back_to_the_cursor_row_when_nothing_is_selected() {
+    let (mut state, _, _) = sectioned_state();
+    select_task(&mut state, "t2");
+
+    state.begin_parent_pick().expect("the cursor is on a task");
+    assert_eq!(state.awaiting_parent_count(), 1);
+
+    select_task(&mut state, "t1");
+    assert_eq!(
+        pick_pairs(&state),
+        vec![("t2".to_string(), Some("Draft the protocol".to_string()))]
+    );
+}
+
+/// The two refusals are the cases where the cursor is somewhere a pick cannot
+/// mean anything — not changes to skip, but a cursor to move.
+#[test]
+fn the_pick_refuses_a_parent_that_is_one_of_the_tasks_or_under_one() {
+    let (mut state, _, _) = sectioned_state();
+    mark_task(&mut state, "t1");
+    mark_task(&mut state, "t2");
+    state.begin_parent_pick().expect("two rows are selected");
+
+    select_task(&mut state, "t2");
+    assert_eq!(
+        state.parent_pick_edits(),
+        Err("a task cannot be its own parent".to_string())
+    );
+
+    // t1a hangs off t1, which is in the set: hanging t1 off it would be a
+    // cycle, and Asana rejecting it is a worse answer than this one.
+    select_task(&mut state, "t1a");
+    assert_eq!(
+        state.parent_pick_edits(),
+        Err("Collect the samples is already under Draft the protocol".to_string())
+    );
+
+    assert!(
+        state.parent_pick_pending(),
+        "and the pick stays up, because another keystroke is what fixes it"
+    );
+}
+
+/// Nothing to write is not an error, but it is not silence either: the app
+/// turns an empty resolution into a notice rather than a table that sat still.
+#[test]
+fn a_task_already_hanging_off_the_picked_row_resolves_to_no_write() {
+    let (mut state, _, _) = sectioned_state();
+    select_task(&mut state, "t1a");
+    state.begin_parent_pick().expect("the cursor is on a task");
+
+    select_task(&mut state, "t1");
+    assert_eq!(pick_pairs(&state), Vec::new());
+}
+
+/// The reason the pick holds gids rather than reading the selection when it
+/// lands: going to find the parent is a filter change, and a filter change is
+/// a reload that can take the rows being moved off the screen entirely.
+#[test]
+fn the_pick_keeps_its_rows_through_a_filter_that_hides_them() {
+    let (mut state, _, _) = sectioned_state();
+    mark_task(&mut state, "t2");
+    state.begin_parent_pick().expect("a row is selected");
+
+    // A filter only the parent-to-be matches. `Title` is the panel's first
+    // row and the cursor starts there.
+    state.toggle_filter_panel();
+    for ch in "protocol".chars() {
+        state.filter_push_char(ch);
+    }
+    state.settle_table();
+    assert_eq!(
+        visible_gids(&state),
+        vec!["t1".to_string()],
+        "the row being moved is not even in the table now"
+    );
+
+    select_task(&mut state, "t1");
+    assert_eq!(
+        pick_pairs(&state),
+        vec![("t2".to_string(), Some("Draft the protocol".to_string()))],
+        "and it is still what the pick is holding"
     );
 }

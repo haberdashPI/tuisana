@@ -859,6 +859,25 @@ fn edit_mode_with_rows_marked_for_deletion() {
     });
 }
 
+/// The parent pick: two rows underlined, `re-parenting 2` on the border, and
+/// a hint bar that says what `enter` would do.
+///
+/// The underline is a glyph change rather than a colour change, for the same
+/// reason the deletion strike-through is: it has to read under
+/// `variant = "mono"`, and on a row that is also under the cursor.
+#[test]
+fn the_parent_pick_holding_two_rows() {
+    assert_snapshot("parent-pick", || {
+        vec![
+            enter_task_mode(),
+            // Two rows selected, then `t` for edit mode and `>` to hold them.
+            // The cursor is left a row past the last one marked, which is the
+            // row a parent would be taken from.
+            vec![key(' '), key(' '), key('t'), key('>')],
+        ]
+    });
+}
+
 /// A draft task on screen, directly after the cursor row, with its title
 /// half-typed.
 #[test]
