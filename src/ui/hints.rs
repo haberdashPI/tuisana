@@ -104,6 +104,9 @@ pub struct HintContext {
     /// How many tasks `>` is holding for a parent, which is what the pick's
     /// own bar counts back to the reader.
     pub awaiting_parent: usize,
+    /// How many rows the `/` search found, which is what decides whether
+    /// `n` and `N` have anywhere to go.
+    pub search_matches: usize,
 }
 
 /// The three forward cuts, as one hint.
@@ -225,6 +228,19 @@ pub fn hints_for(mode: Mode, context: HintContext) -> Vec<Hint> {
             hints
         }
         Mode::Task => task_hints(context),
+        // Read outside the keymap, so the three keys that end or edit the
+        // query are literals. `ctrl-l` is bound, but it is bound to the same
+        // action the filter panel's `clear` is, so naming the action here
+        // would advertise whichever key that resolves to first.
+        Mode::TaskSearch => vec![
+            Hint::literal("enter", "keep, then n/N"),
+            Hint::literal("esc", "cancel"),
+            Hint::new(&[Action::ClearSearch], "clear"),
+            Hint::new(&[Action::SearchFuzzy], "fuzzy"),
+            Hint::new(&[Action::SearchSubstring], "contains"),
+            Hint::new(&[Action::SearchRegex], "regex"),
+        ],
+        Mode::SearchMatches => search_matches_hints(context),
         Mode::Edit => edit_hints(context),
         Mode::ParentPick => parent_pick_hints(context),
         Mode::ColumnEdit => task_edit_hints(context),
@@ -347,6 +363,10 @@ fn task_hints(context: HintContext) -> Vec<Hint> {
         "column",
     ));
     hints.push(Hint::new(&[Action::Open], "open"));
+    // Beside the filter panel, because they are the two halves of finding a
+    // row: the panel changes which rows there are, and this picks one out of
+    // the rows already on screen.
+    hints.push(Hint::new(&[Action::StartSearch], "search"));
     hints.push(Hint::new(&[Action::SetFilterMode], "filters"));
     hints.push(Hint::new(&[Action::ToggleColumnSort], "sort"));
     // Ranked above the view toggles: when columns are off-screen, how to
@@ -365,6 +385,34 @@ fn task_hints(context: HintContext) -> Vec<Hint> {
         hints.push(Hint::new(&[Action::ToggleRecentPane], "recent"));
     }
     hints.push(Hint::new(&[Action::ToggleCompletedFilter], "completed"));
+    hints.push(Hint::new(&[Action::ToggleHelpDetails], "help"));
+    hints
+}
+
+/// The keys a committed search reads.
+///
+/// The cursor keys are named here even though they work in task mode too: in
+/// this mode they are what takes the cursor *off* the matches, and the bar is
+/// the only thing that says `n` will still find its way back.
+fn search_matches_hints(context: HintContext) -> Vec<Hint> {
+    let mut hints = Vec::new();
+    // Nothing to step through until something is found, and a `n` advertised
+    // over an empty result is a key that looks broken.
+    if context.search_matches > 0 {
+        hints.push(Hint::new(
+            &[Action::SearchStepMatch(1), Action::SearchStepMatch(-1)],
+            "match",
+        ));
+    }
+    hints.push(Hint::new(&[Action::StartSearch], "edit search"));
+    hints.push(Hint::new(&[Action::MoveDown, Action::MoveUp], "cursor"));
+    // A literal, the way description mode names its own `esc`: the key is
+    // bound to `set_task_mode`, which is also `t` globally, and `t done`
+    // would advertise the one key of the three nobody reaches for.
+    hints.push(Hint::literal("esc", "done"));
+    hints.push(Hint::new(&[Action::SearchFuzzy], "fuzzy"));
+    hints.push(Hint::new(&[Action::SearchSubstring], "contains"));
+    hints.push(Hint::new(&[Action::SearchRegex], "regex"));
     hints.push(Hint::new(&[Action::ToggleHelpDetails], "help"));
     hints
 }

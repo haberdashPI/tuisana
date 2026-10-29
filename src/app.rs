@@ -23,12 +23,14 @@ pub mod gantt;
 pub mod project_list;
 pub mod task;
 pub mod task_edit;
+pub mod task_search;
 pub mod text_edit;
 
 use self::gantt::MoveTo;
 use self::task::DraftCommit;
 use self::task::SectionMove;
 use self::project_list::ProjectListState;
+use self::project_list::SearchMode;
 use self::task::TaskState;
 use self::text_edit::TextCut;
 
@@ -756,7 +758,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
     }
 
     /// Shared setup for mode transitions that use the top pane: restores the
-    /// pane if it was minimized and closes any active project search.
+    /// pane if it was minimized and closes any search that was open.
     fn prepare_mode_switch(&mut self) {
         if self.panel_size.is_minimized() {
             self.restore_top_pane();
@@ -764,6 +766,26 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         if self.projects.search_active() {
             self.projects.end_search();
         }
+        self.tasks.end_search();
+    }
+
+    /// `/`: types a query over the task table, or reopens the one typed.
+    ///
+    /// The top pane is left exactly as it is — this is not a pane switch, and
+    /// a search that rearranged the screen before showing its first match
+    /// would be a worse answer than the one it was asked.
+    fn begin_task_search(&mut self) {
+        self.tasks.begin_search();
+        self.mode = Mode::TaskSearch;
+    }
+
+    /// Whether the keys are currently driving the task table's search.
+    ///
+    /// The sibling of [`Self::filter_panel_focused`], and asked for the same
+    /// reason: `ctrl-z` and the clear mean "this search" in four different
+    /// places, and only the app knows which of them is being typed into.
+    fn task_search_focused(&self) -> bool {
+        matches!(self.mode, Mode::TaskSearch | Mode::SearchMatches)
     }
 
     fn set_project_mode(&mut self) {
@@ -964,6 +986,11 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         if self.projects.search_active() {
             self.projects.end_search();
         }
+        // The way out of the matches, and the reason `enter` and `esc` are
+        // bound to the same command there: the search is over and the cursor
+        // stays on the row it last jumped to. Every other route in here has
+        // no search to end, so this costs them nothing.
+        self.tasks.end_search();
         self.mode = Mode::Task;
         self.tasks.set_visible(true);
         // No binding reaches here from filter-edit mode — that mode has no
@@ -997,6 +1024,7 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         if self.projects.search_active() {
             self.projects.end_search();
         }
+        self.tasks.end_search();
         self.mode = Mode::Edit;
         self.tasks.set_visible(true);
         if self.tasks.filter_panel_editing() {
@@ -1999,6 +2027,49 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         }
     }
 
+    /// Reads one key into the task table's `/` query.
+    ///
+    /// The same three keys the project search reads directly, and for the
+    /// same reason: `enter`, `esc`, and `backspace` are what a prompt means
+    /// everywhere, and binding them would let a config leave a query with no
+    /// way out of it. The two ways out are the whole of the difference
+    /// between them — `enter` keeps the jump and hands the keys to `n`,
+    /// `esc` undoes the jump and the search with it.
+    fn handle_task_search_input(&mut self, event: crossterm::event::KeyEvent) -> Result<bool> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        match event.code {
+            KeyCode::Enter => {
+                self.mode = Mode::SearchMatches;
+                Ok(true)
+            }
+            KeyCode::Esc => {
+                self.tasks.cancel_search();
+                self.set_task_mode();
+                Ok(true)
+            }
+            KeyCode::Backspace => {
+                self.tasks.search_pop_char();
+                Ok(true)
+            }
+            KeyCode::Char(c)
+                if !event
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                // Case preserved, unlike the project search's: regex mode
+                // is one of the three here, and `\W` is not `\w`. Fuzzy and
+                // contains lower both sides before they compare, and the
+                // pattern is compiled case-insensitively, so what this
+                // actually protects is the handful of patterns whose meaning
+                // *is* their case.
+                self.tasks.search_push_char(c);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     /// The task targets as they stand, for `update_task_data_after_action` to
     /// compare against once an action has run.
     fn task_targets_before(&self) -> Option<Vec<String>> {
@@ -2028,6 +2099,35 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
         ));
 
         match action {
+            // The task table's own `/`, which the project list's shares a
+            // command with: one key, one word, and the pane under the cursor
+            // decides which list it is asking about. From the matches it
+            // reopens the query rather than starting a new one.
+            Action::StartSearch if matches!(mode, Mode::Task | Mode::SearchMatches) => {
+                self.begin_task_search();
+                return Ok(None);
+            }
+            Action::SearchStepMatch(delta) if matches!(mode, Mode::SearchMatches) => {
+                self.tasks.step_search_match(*delta);
+                return Ok(None);
+            }
+            // The three match modes and the clear, for whichever search is
+            // live. The filter panel reads the same four actions from
+            // `TaskState::apply_action`, behind its own focus check.
+            Action::SearchFuzzy | Action::SearchSubstring | Action::SearchRegex
+                if self.task_search_focused() =>
+            {
+                self.tasks.set_search_mode(match action {
+                    Action::SearchSubstring => SearchMode::Substring,
+                    Action::SearchRegex => SearchMode::Regex,
+                    _ => SearchMode::Fuzzy,
+                });
+                return Ok(None);
+            }
+            Action::ClearSearch if self.task_search_focused() => {
+                self.tasks.clear_search_query();
+                return Ok(None);
+            }
             Action::BeginFilterEdit => {
                 // A date field is edited on the calendar rather than as raw
                 // text, so it gets its own mode instead of the text buffer.
@@ -2747,6 +2847,13 @@ impl<C: AsanaClient + Clone + Send + 'static> App<C> {
                 return self.handle_action(&action, page_size);
             }
             debug_log("no action for binding");
+        }
+
+        // Before the other three, and gated on the mode rather than on state
+        // of its own: nothing else can be open while a query is being typed,
+        // and an unbound letter here belongs in the query.
+        if matches!(self.mode, Mode::TaskSearch) && self.handle_task_search_input(event)? {
+            return Ok(None);
         }
 
         if self.handle_calendar_input(event)? {

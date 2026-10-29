@@ -1,0 +1,40 @@
+ TUISANA  ▸ 1 project ▸ 11 tasks
+┌ Projects ────────────────────────────────────────────────────────────────────────────────────── 3 shown · 1 selected ┐
+│  ● ★ Northwind BTX 4412                                                                                              │
+│▍   ★ Platform Infrastructure                                                                                         │
+│    ☆ Backlog                                                                                                         │
+│                                                                                                                      │
+│                 ┏ Help · matches mode ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                 │
+│                 ┃Type a query                                             Move                     ┃                 │
+│                 ┃a-z             narrow it, one character at a time       j/k             down / up┃                 │
+│                 ┃bksp            delete                                   ^d/^u           page down┃                 │
+│                 ┃enter           keep it, then walk the matches           home/end        top / bot┃                 │
+└─────────────────┃esc             cancel, cursor goes back                                          ┃─────────────────┘
+┏ Tasks ━━━━━━━━━━┃                                                         Modes                    ┃2 · columns 0/10 ┓
+┃   Task          ┃Walk the matches                                         p               projects ┃        │ Parent ┃
+┃                 ┃n               next match                               f               filters  ┃                 ┃
+┃▌Northwind BTX 44┃N               previous match                           t ⏎             tasks    ┃─────────────────┃
+┃                 ┃/               edit the query again                     m               toggle ta┃                 ┃
+┃   Study Kit Desi┃j/k             move off them                                                     ┃·················┃
+┃   Draft the assa┃enter esc       done, cursor stays                       Panes                    ┃TX 4412 │ —      ┃
+┃▍  Review shipmen┃                                                         [/]             shrink / ┃TX 4412 │ —      ┃
+┃   Ship release c┃Match mode                                               {               minimize ┃TX 4412 │ —      ┃
+┃   Confirm carrie┃^z              fuzzy, the default                       }               maximize ┃TX 4412 │ —      ┃
+┃   Update the sam┃^s              contains                                 0               restore  ┃TX 4412 │ —      ┃
+┃   Qualify the se┃^r              regex                                                             ┃TX 4412 │ —      ┃
+┃                 ┃                                                         App                      ┃                 ┃
+┃   Shipment ·····┃What is searched                                         r               refresh  ┃·················┃
+┃   Book the couri┃titles          every task's own text                    q ^c            quit     ┃TX 4412 │ —      ┃
+┃   Label the rete┃sections        a heading sends you to its first task    ?               close thi┃TX 4412 │ —      ┃
+┃   Reconcile the ┃nothing hidden  the filter panel is what hides rows                               ┃TX 4412 │ —      ┃
+┃   Close out pack┃                                                                                  ┃TX 4412 │ —      ┃
+┃   Close the quar┃                                                                        ? to close┃TX 4412 │ —      ┃
+┃                 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                 ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┃                                                                                                                      ┃
+┗ /ship  fuzzy  1/4 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+n/N match   / edit search   j/k cursor   esc done   ^z fuzzy   ^s contains   ^r regex   ? help        r refresh   q quit
+ MATCHES

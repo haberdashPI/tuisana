@@ -564,6 +564,63 @@ fn project_search() {
     assert_snapshot("project-search", || vec![vec![key('/'), key('l')]]);
 }
 
+/// The query half of `/`: matches picked out where they are, the cursor sent
+/// to the first of them, and the border saying how many there are.
+#[test]
+fn task_search_typing() {
+    assert_snapshot("task-search", || {
+        vec![
+            enter_task_mode(),
+            vec![key('/'), key('s'), key('h'), key('i'), key('p')],
+        ]
+    });
+}
+
+/// The same search committed and stepped once, so the cursor is on the second
+/// match and the bar offers `n` rather than `enter`.
+#[test]
+fn task_search_matches() {
+    assert_snapshot("task-search-matches", || {
+        vec![
+            enter_task_mode(),
+            vec![
+                key('/'),
+                key('s'),
+                key('h'),
+                key('i'),
+                key('p'),
+                enter(),
+                key('n'),
+            ],
+        ]
+    });
+}
+
+/// A pattern that matches nothing says so on the border rather than leaving
+/// the reader to wonder which row it landed on.
+#[test]
+fn task_search_with_nothing_found() {
+    assert_snapshot_with(config(), vec![120], "task-search-empty", || {
+        vec![
+            enter_task_mode(),
+            vec![key('/'), key('z'), key('z'), key('z')],
+        ]
+    });
+}
+
+/// The search's own help, which is one of the two places the modes explain
+/// what `/` searches.
+#[test]
+fn task_search_matches_with_help() {
+    assert_snapshot_with(config(), vec![120], "task-search-help", || {
+        vec![
+            enter_task_mode(),
+            vec![key('/'), key('s'), key('h'), key('i'), key('p'), enter()],
+            vec![key('?')],
+        ]
+    });
+}
+
 #[test]
 fn gantt_mode() {
     assert_snapshot("gantt", || vec![vec![key(' '), key('t')], vec![key('g')]]);
@@ -1460,6 +1517,62 @@ fn the_monochrome_theme_emits_no_color() {
             cell.symbol()
         );
     }
+}
+
+/// The highlight is the whole point of a search and the text snapshots throw
+/// colour away, so it is checked against the styled buffer instead.
+///
+/// A yellow *background* is unique to `Theme::search_match` inside the panes:
+/// the theme's other yellow is `warn`, which is a foreground. The chrome's own
+/// two lines are left out, because the mode badge down there is black on the
+/// mode's colour and search mode's colour is yellow.
+#[test]
+fn the_rows_a_search_found_are_the_rows_it_highlights() {
+    std::env::set_var("TUISANA_TODAY", TODAY);
+
+    let buffer = render_buffer(
+        config(),
+        120,
+        vec![
+            enter_task_mode(),
+            vec![key('/'), key('s'), key('h'), key('i'), key('p')],
+        ],
+    );
+
+    let highlighted = buffer
+        .content
+        .chunks(buffer.area.width as usize)
+        .take(HEIGHT as usize - 2)
+        .filter(|row| row.iter().any(|cell| cell.bg == Color::Yellow))
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+
+    // Three task titles and one section name, which is the fourth thing
+    // `ship` appears in on this fixture.
+    assert_eq!(highlighted.len(), 4, "highlighted: {highlighted:#?}");
+    for expected in [
+        "Shipment",
+        "Review shipment requirements doc",
+        "Ship release candidate to the study team",
+        "Close the quarter's shipping report",
+    ] {
+        assert!(
+            highlighted.iter().any(|row| row.contains(expected)),
+            "{expected:?} was not highlighted; highlighted: {highlighted:#?}"
+        );
+    }
+    assert!(
+        !highlighted
+            .iter()
+            .any(|row| row.contains("Draft the assay validation protocol")),
+        "a row that does not match must not be highlighted"
+    );
 }
 
 #[test]

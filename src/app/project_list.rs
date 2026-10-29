@@ -24,12 +24,28 @@ use crate::{
 pub const ASSIGNED_TO_ME_TOKEN: &str = "me";
 
 /// The search strategy used by the project list.
+///
+/// Shared with the task table's `/` search, which runs the same three modes
+/// over the same three keys. The default is this pane's: a project is picked
+/// by a name the reader already knows, where a task title is a sentence, so
+/// the task search opens in `Fuzzy` instead.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SearchMode {
     Fuzzy,
     #[default]
     Substring,
     Regex,
+}
+
+impl SearchMode {
+    /// What this mode is called on screen.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fuzzy => "fuzzy",
+            Self::Substring => "contains",
+            Self::Regex => "regex",
+        }
+    }
 }
 
 /// Live state for the project list pane.

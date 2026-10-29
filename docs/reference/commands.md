@@ -58,7 +58,7 @@ not bindable.
 
 ## Search modes
 
-Bound in project, filter, and filter-edit modes.
+Bound in project, task search, search matches, filter, and filter-edit modes.
 
 | command | what it does |
 | --- | --- |
@@ -155,6 +155,51 @@ items already picked alone.
 | `set_edit_mode` | enter edit mode |
 | `set_gantt_mode` | draw the Gantt chart and enter gantt mode |
 | `set_description_mode` | draw the description and comments pane, and enter description mode |
+| `start_search` | type a `/` query over the rows on screen |
+
+## Task search mode
+
+A `/` query is being typed. It picks rows out where they are rather than
+hiding any: **task titles** and **section names** are what it matches, and the
+filter panel is still the only thing that changes which rows exist.
+
+| command | what it does |
+| --- | --- |
+| `clear_search` | empty the query, cursor back to where `/` was pressed |
+
+Typing, `backspace`, `enter`, and `esc` are handled directly and are not
+bindable. `enter` keeps the query and hands the keys to `n`; `esc` drops the
+search and puts the cursor back on the row it started from.
+
+The cursor goes to the first match at or after the row the search started on,
+wrapping at the end of the table — measured from that row on every keystroke,
+so narrowing or widening a query never walks the cursor down the table. A
+matched section name sends the cursor to the first task **in that section**,
+because the cursor only ever sits on a task row; an empty section is
+highlighted and visited by nothing.
+
+The match mode is fuzzy by default, and the three
+[search mode](#search-modes) commands change it — the same keys the project
+list and the filter panel use.
+
+## Search matches mode
+
+The query is settled and the cursor is walking what it found.
+
+| command | what it does |
+| --- | --- |
+| `search_next_match` | cursor to the next match, wrapping |
+| `search_prev_match` | cursor to the previous match, wrapping |
+| `start_search` | edit the query again, keeping it and the row `/` started from |
+| `set_task_mode` | done — the search ends and the cursor stays where it is |
+
+The ordinary cursor keys still work here, which is the point of it being a
+mode of its own rather than a prompt: `j` and `k` take the cursor off the
+matches, and `n` finds its way back from wherever it lands.
+
+Leaving for any other pane also ends the search. The highlight and the key
+that walks it are the same fact, so neither outlives the mode — what the
+search found is not something to come back to three keystrokes later.
 
 ## Column edit mode
 

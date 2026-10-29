@@ -79,6 +79,8 @@ default binding that uses `alt-` is rebindable if your terminal cannot send it.
 | `filter_set_name` | naming a set for `w`, or answering the `d` confirmation |
 | `calendar` | the date picker |
 | `task` | the task table |
+| `task_search` | typing a `/` search over the task table |
+| `search_matches` | a `/` search is committed and `n` walks its matches |
 | `edit` | the structural edits — insert, delete, move between sections |
 | `parent_pick` | `>` is holding rows and the cursor is choosing their parent |
 | `column_edit` | a table cell is open for editing |
@@ -89,13 +91,17 @@ default binding that uses `alt-` is rebindable if your terminal cannot send it.
 
 ### Which modes fall back to `any`
 
-Most modes do. These do **not**: `project_search`, `filter_edit`,
-`filter_set_name`, `calendar`, `column_edit`, and `confirm`.
+Most modes do. These do **not**: `project_search`, `task_search`,
+`filter_edit`, `filter_set_name`, `calendar`, `column_edit`, and `confirm`.
 
-All six either accept typed text or own the screen. An unbound letter in a cell
-editor has to type into the cell rather than fire whatever global command that
-letter carries, and a confirmation that acted on `j` would be worse than no
-confirmation at all.
+All seven either accept typed text or own the screen. An unbound letter in a
+cell editor has to type into the cell rather than fire whatever global command
+that letter carries, and a confirmation that acted on `j` would be worse than
+no confirmation at all.
+
+`search_matches` is the counter-example on purpose: the query is settled by the
+time it is reached, so `j`, `k`, `q`, and `?` all keep working while `n` and
+`N` jump between what was found.
 
 ::: tip Legacy spelling
 `mode = "task_edit"` is accepted as an alias for `column_edit`, so a
@@ -109,7 +115,7 @@ and mode; everything else below stays in force.
 
 ### Global (`mode` omitted)
 
-Active in every mode that does not override the key. Modes that swallow every key — project search, filter edit, the calendar, a cell editor, and a confirmation — do not fall back here, because an unbound letter there has to type rather than fire a global command.
+Active in every mode that does not override the key. Modes that swallow every key — project search, task search, filter edit, the calendar, a cell editor, and a confirmation — do not fall back here, because an unbound letter there has to type rather than fire a global command.
 
 | key | command |
 | --- | --- |
@@ -312,6 +318,36 @@ The task table.
 | `enter` | `edit_column` |
 | `d` | `toggle_task_completed` |
 | `t` | `set_edit_mode` |
+| `/` | `start_search` |
+
+### Task search mode (`task_search`)
+
+A `/` query is being typed over the table.
+
+| key | command |
+| --- | --- |
+| `ctrl-l` | `clear_search` |
+| `ctrl-z` | `search_fuzzy` |
+| `ctrl-s` | `search_substring` |
+| `ctrl-r` | `search_regex` |
+
+Ordinary typing, `backspace`, `enter`, and `esc` are handled directly and are
+not bindable.
+
+### Search matches mode (`search_matches`)
+
+The query is settled and the cursor is walking what it found.
+
+| key | command |
+| --- | --- |
+| `n` | `search_next_match` |
+| `N` | `search_prev_match` |
+| `/` | `start_search` |
+| `enter` | `set_task_mode` |
+| `esc` | `set_task_mode` |
+| `ctrl-z` | `search_fuzzy` |
+| `ctrl-s` | `search_substring` |
+| `ctrl-r` | `search_regex` |
 
 ### Edit mode (`edit`)
 
@@ -441,3 +477,8 @@ everywhere except project mode.
 
 **`search_fuzzy` is on `ctrl-z`, not `ctrl-f`**, so that `ctrl-b` and `ctrl-f`
 can move the caret in every mode that edits text.
+
+**`/` is `start_search` in two modes and means the same thing in both.** In
+task mode it opens a query; from `search_matches` it reopens the one already
+typed, with the row the search started from still remembered — so editing a
+query and then pressing `esc` still goes back to where `/` was first pressed.

@@ -7,32 +7,32 @@
 │       ┃o           open in Asana        g           gantt chart      ┃       │
 │       ┃␣           select               v           description      ┃       │
 │       ┃a           select all           f           filter panel     ┃       │
-│       ┃i           invert               c           open / done / all┃       │
-│       ┃x           clear                z           subtasks         ┃       │
-└───────┃^x          clear hidden         left/right  scroll columns   ┃───────┘
-┏ Tasks ┃y           copy links           b           recently edited  ┃s 0/50 ┓
-┃   Task┃                                                              ┃ue │  S┃
-┃       ┃Group & sort                     Move                         ┃       ┃
-┃▌Northw┃[/]         jump section         j/k         down / up        ┃───────┃
-┃       ┃{/}         jump project         ^d/^u       page down / up   ┃       ┃
-┃   Stud┃,           group by project     home/end    top / bottom     ┃·······┃
-┃▍  Draf┃.           group by section                                  ┃10 │ Ju┃
-┃   Revi┃s           sort this column     Modes                        ┃19 │  A┃
-┃   Ship┃                                 p           projects         ┃ay │ Au┃
-┃   Conf┃Edit                             f           filters          ┃ed │ Au┃
-┃   Upda┃t           add & delete rows    m           toggle tasks     ┃ 4 │ Au┃
-┃   Qual┃h/l         column cursor                                     ┃12 │  J┃
-┃       ┃⏎           edit the cell        Panes                        ┃       ┃
-┃   Ship┃d           open / done          0           restore          ┃·······┃
-┃   Book┃                                                              ┃15 │  S┃
-┃   Labe┃                                 App                          ┃ 9 │   ┃
-┃   Reco┃                                 r           refresh          ┃30 │ Se┃
-┃   Clos┃                                 q ^c        quit             ┃14 │  O┃
-┃   Clos┃                                 ?           close this help  ┃18 │  N┃
+│       ┃i           invert               /           search these rows┃       │
+│       ┃x           clear                c           open / done / all┃       │
+└───────┃^x          clear hidden         z           subtasks         ┃───────┘
+┏ Tasks ┃y           copy links           left/right  scroll columns   ┃s 0/50 ┓
+┃   Task┃                                 b           recently edited  ┃ue │  S┃
+┃       ┃Group & sort                                                  ┃       ┃
+┃▌Northw┃[/]         jump section         Move                         ┃───────┃
+┃       ┃{/}         jump project         j/k         down / up        ┃       ┃
+┃   Stud┃,           group by project     ^d/^u       page down / up   ┃·······┃
+┃▍  Draf┃.           group by section     home/end    top / bottom     ┃10 │ Ju┃
+┃   Revi┃s           sort this column                                  ┃19 │  A┃
+┃   Ship┃                                 Modes                        ┃ay │ Au┃
+┃   Conf┃Edit                             p           projects         ┃ed │ Au┃
+┃   Upda┃t           add & delete rows    f           filters          ┃ 4 │ Au┃
+┃   Qual┃h/l         column cursor        m           toggle tasks     ┃12 │  J┃
+┃       ┃⏎           edit the cell                                     ┃       ┃
+┃   Ship┃d           open / done          Panes                        ┃·······┃
+┃   Book┃                                 0           restore          ┃15 │  S┃
+┃   Labe┃                                                              ┃ 9 │   ┃
+┃   Reco┃                                 App                          ┃30 │ Se┃
+┃   Clos┃                                 r           refresh          ┃14 │  O┃
+┃   Clos┃                                 q ^c        quit             ┃18 │  N┃
+┃       ┃                                 ?           close this help  ┃       ┃
 ┃       ┃                                                              ┃       ┃
 ┃       ┃                                                    ? to close┃       ┃
 ┃       ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛       ┃
-┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛

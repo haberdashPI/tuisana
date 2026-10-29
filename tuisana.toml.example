@@ -610,6 +610,84 @@ key = "t"
 mode = "task"
 command = "set_edit_mode"
 
+# The `/` search, in the two modes it is read in. It picks rows out where they
+# are — task titles and section names — rather than hiding any; the filter
+# panel is still the only thing that changes which rows exist.
+#
+# While the query is being typed every letter is a character of it, so the
+# match-mode keys need their ctrl- pairs. `enter` keeps the query and hands the
+# keys to `n`; `esc` drops the search and puts the cursor back on the row it
+# started from. Those three, and `backspace`, are read directly and are not
+# bindable.
+
+[[bind]]
+key = "/"
+mode = "task"
+command = "start_search"
+
+[[bind]]
+key = "ctrl-l"
+mode = "task_search"
+command = "clear_search"
+
+[[bind]]
+key = "ctrl-z"
+mode = "task_search"
+command = "search_fuzzy"
+
+[[bind]]
+key = "ctrl-s"
+mode = "task_search"
+command = "search_substring"
+
+[[bind]]
+key = "ctrl-r"
+mode = "task_search"
+command = "search_regex"
+
+# Once the query is settled the ordinary cursor keys come back, and these walk
+# what it found. `/` reopens the query rather than starting a new one.
+
+[[bind]]
+key = "n"
+mode = "search_matches"
+command = "search_next_match"
+
+[[bind]]
+key = "N"
+mode = "search_matches"
+command = "search_prev_match"
+
+[[bind]]
+key = "/"
+mode = "search_matches"
+command = "start_search"
+
+[[bind]]
+key = "enter"
+mode = "search_matches"
+command = "set_task_mode"
+
+[[bind]]
+key = "esc"
+mode = "search_matches"
+command = "set_task_mode"
+
+[[bind]]
+key = "ctrl-z"
+mode = "search_matches"
+command = "search_fuzzy"
+
+[[bind]]
+key = "ctrl-s"
+mode = "search_matches"
+command = "search_substring"
+
+[[bind]]
+key = "ctrl-r"
+mode = "search_matches"
+command = "search_regex"
+
 [[bind]]
 key = "i"
 mode = "edit"

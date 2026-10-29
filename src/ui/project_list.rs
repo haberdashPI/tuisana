@@ -7,7 +7,7 @@
 //! read as columns.
 
 use crate::{
-    app::project_list::{ProjectListState, ProjectListStatus, SearchMode},
+    app::project_list::{ProjectListState, ProjectListStatus},
     domain::ProjectKind,
     ui::{
         chrome::{Chip, PaneMessage, Tone},
@@ -237,18 +237,10 @@ fn search_line(state: &ProjectListState) -> Option<SearchLine> {
 
     Some(SearchLine {
         query: state.search_query().to_string(),
-        mode: search_mode_label(state.search_mode()),
+        mode: state.search_mode().label(),
         awaiting: state.search_active(),
         error: state.search_error().map(|error| error.to_string()),
     })
-}
-
-fn search_mode_label(mode: SearchMode) -> &'static str {
-    match mode {
-        SearchMode::Fuzzy => "fuzzy",
-        SearchMode::Substring => "contains",
-        SearchMode::Regex => "regex",
-    }
 }
 
 #[cfg(test)]

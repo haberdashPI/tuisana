@@ -180,6 +180,12 @@ pub enum Action {
     SearchFuzzy,
     SearchSubstring,
     SearchRegex,
+    /// Move the cursor to the next match of the task table's `/` search, or to
+    /// the previous one.
+    ///
+    /// The direction is a payload rather than two variants, following
+    /// [`Action::ColumnEditCycleValue`].
+    SearchStepMatch(i32),
     JumpTop,
     JumpBottom,
     PageUp,
@@ -436,6 +442,8 @@ impl Action {
             "search_fuzzy" => Ok(Self::SearchFuzzy),
             "search_substring" => Ok(Self::SearchSubstring),
             "search_regex" => Ok(Self::SearchRegex),
+            "search_next_match" => Ok(Self::SearchStepMatch(1)),
+            "search_prev_match" => Ok(Self::SearchStepMatch(-1)),
             "jump_top" => Ok(Self::JumpTop),
             "jump_bottom" => Ok(Self::JumpBottom),
             "page_up" => Ok(Self::PageUp),
@@ -668,6 +676,12 @@ impl Display for Action {
                 false => "complete_prev_candidate",
             });
         }
+        if let Action::SearchStepMatch(delta) = self {
+            return f.write_str(match *delta >= 0 {
+                true => "search_next_match",
+                false => "search_prev_match",
+            });
+        }
         if let Action::MoveTaskToSection(delta) = self {
             return f.write_str(match *delta >= 0 {
                 true => "move_task_to_next_section",
@@ -765,6 +779,7 @@ impl Display for Action {
             | Action::ColumnEditCycleValue(_)
             | Action::MoveTaskToSection(_)
             | Action::HighlightCandidate(_)
+            | Action::SearchStepMatch(_)
             | Action::CompleteCandidate(_) => {
                 unreachable!("handled before the match")
             }
@@ -1081,6 +1096,37 @@ mod tests {
                 "{old} is a version-1 name and the migration is what renames it"
             );
         }
+    }
+
+    /// The task search's two commands, through the same three places every
+    /// command has to be added in.
+    #[test]
+    fn every_task_search_command_round_trips_through_its_name() {
+        for action in [
+            Action::StartSearch,
+            Action::ClearSearch,
+            Action::SearchFuzzy,
+            Action::SearchSubstring,
+            Action::SearchRegex,
+            Action::SearchStepMatch(1),
+            Action::SearchStepMatch(-1),
+        ] {
+            assert_eq!(
+                Action::from_command(&action.to_string()).expect("parses"),
+                action,
+                "{action} did not round trip"
+            );
+        }
+
+        // The direction is a payload, so it needs two names rather than one.
+        assert_eq!(
+            Action::SearchStepMatch(1).to_string(),
+            "search_next_match"
+        );
+        assert_eq!(
+            Action::SearchStepMatch(-1).to_string(),
+            "search_prev_match"
+        );
     }
 
     /// Shift+letter is a namespace of its own from milestone 15 on, which is

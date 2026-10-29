@@ -183,6 +183,10 @@ fn focused_pane(mode: Mode, filter_focused: bool) -> FocusedPane {
         | Mode::ColumnEdit
         | Mode::Gantt
         | Mode::GanttOrder
+        // Both halves of the `/` search: the same pane and the same rows, with
+        // the matches drawn where they already are.
+        | Mode::TaskSearch
+        | Mode::SearchMatches
         // The rows it is asking about are in the task pane, and `n` hands the
         // keys straight back to them.
         | Mode::Confirm => FocusedPane::Task,
@@ -481,6 +485,13 @@ fn help_visible<C: AsanaClient + Clone + Send + 'static>(app: &App<C>, mode: Mod
         | Mode::Gantt
         | Mode::GanttOrder
         | Mode::Description
+        // Both halves of the search, following project search: help asked for
+        // before `/` was pressed stays up. `?` is a character while the query
+        // is being typed, so it cannot be closed from there — `esc` is one
+        // keystroke, and dropping it out from under the reader instead would
+        // be answering a question nobody asked.
+        | Mode::TaskSearch
+        | Mode::SearchMatches
         | Mode::Filter
         | Mode::FilterEdit
         | Mode::FilterSetName
@@ -554,9 +565,12 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
     let context = hints::HintContext {
         searching: app.projects.search_active() || !app.projects.search_query().is_empty(),
         has_selection: match mode {
-            Mode::Task | Mode::Edit | Mode::ParentPick | Mode::ColumnEdit => {
-                app.tasks.selected_task_count() > 0
-            }
+            Mode::Task
+            | Mode::TaskSearch
+            | Mode::SearchMatches
+            | Mode::Edit
+            | Mode::ParentPick
+            | Mode::ColumnEdit => app.tasks.selected_task_count() > 0,
             Mode::Filter | Mode::FilterEdit | Mode::FilterSetName | Mode::Calendar => false,
             _ => app.projects.selected_count() > 0,
         },
@@ -577,6 +591,11 @@ fn render_hint_bar<C: AsanaClient + Clone + Send + 'static>(
         has_recent_edits: app.tasks.recent_hidden_count() > 0,
         marked_for_deletion: app.tasks.marked_for_deletion_count(),
         awaiting_parent: app.tasks.awaiting_parent_count(),
+        search_matches: app
+            .tasks
+            .search_position()
+            .map(|(_, total)| total)
+            .unwrap_or_default(),
     };
 
     let line = hints::hint_line(
@@ -820,9 +839,24 @@ fn render_task_pane<C: AsanaClient + Clone + Send + 'static>(
     view: &TaskTableView,
 ) -> usize {
     let mut block = chrome::pane_block(theme, focused, mode, &view.title, &view.counts);
+    // Ahead of the chart's legend, and displacing it: a search is a question
+    // being asked right now, where the legend says what the bars have meant
+    // all along — and the border has room for one of them. The legend comes
+    // back on the keystroke that ends the search.
+    if let Some(search) = &view.search {
+        block = block.title_bottom(
+            task_table::search_footer_line(
+                search,
+                theme,
+                matches!(mode, Mode::TaskSearch),
+                area.width.saturating_sub(2) as usize,
+            )
+            .left_aligned(),
+        );
+    }
     // The legend rides the bottom border, so turning the chart on costs no
     // body lines and reflows nothing.
-    if let Some(chart) = &view.chart {
+    else if let Some(chart) = &view.chart {
         // Two cells for the border and two for the spaces that keep the
         // legend off it, matching how pane_block pads its title chips.
         let width = area.width.saturating_sub(4) as usize;

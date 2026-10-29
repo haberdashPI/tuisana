@@ -15,9 +15,11 @@ use crate::{
         debug_log,
         description::DescriptionState,
         gantt::{GanttViewState, MoveTo},
+        project_list::SearchMode,
         task_edit::{
             CellEditView, CellEditor, CommittedEdits, EditContext, TaskCellEditState,
         },
+        task_search::TaskSearchState,
         text_edit::{TextCut, TextEdit},
     },
     asana::{
@@ -185,6 +187,13 @@ struct TaskViewState {
     /// default: the first edit that hides a task is the moment it is needed,
     /// which is too late to go looking for a key.
     recent_hidden: bool,
+    /// The `/` search, while one is live.
+    ///
+    /// `Some` means the keys are in one of the two search modes: a highlight
+    /// on screen and a key that jumps between the highlighted rows are the
+    /// same fact, so they are the same field. Which of the two modes it is
+    /// belongs to `App`, as every other "where do the keys go" question does.
+    search: Option<TaskSearchState>,
     /// What went wrong with the last edit, shown in the corner notice pane.
     ///
     /// Held whole, newlines and all: `ui::notice` wraps it and the breaks a
@@ -2421,6 +2430,9 @@ impl TaskState {
     pub fn finish_loading(&mut self, table: TaskTableModel) {
         self.loading.dataset = None;
         self.view.table = table;
+        // One of the two places a table arrives without being rebuilt; the
+        // matches are indices into it, so they are stale until they are not.
+        self.refresh_search(false);
         self.view.horizontal_scroll = 0;
         self.view.selected = self.view.table.first_selectable_row_index();
         self.loading.loaded_target_ids = self.loading.progress.target_ids().to_vec();
@@ -3339,6 +3351,9 @@ impl TaskState {
         self.loading.status = TaskStatus::Error(message.into());
         self.view.selected = None;
         self.view.table = TaskTableModel::empty();
+        // The other one. An empty table finds nothing, which is what the
+        // search's own border then says.
+        self.refresh_search(false);
         self.view.horizontal_scroll = 0;
         self.loading.progress = LoadProgress::Idle;
         self.loading.loaded_target_ids.clear();
@@ -4225,6 +4240,14 @@ impl TaskState {
         // draft is not a task the dataset knows about, and it must not count
         // towards "no tasks here".
         self.inject_draft();
+
+        // After the draft, because a draft row shifts every index below it
+        // and the matches *are* indices. Every table this pane filters is
+        // rebuilt here, so this is where the search is told — and it re-aims
+        // nothing: a reload that happens to deliver a new match must not move
+        // a cursor the reader put where it is. The two paths that replace the
+        // table wholesale rather than rebuilding it say the same thing.
+        self.refresh_search(false);
     }
 
     fn active_target_ids(&self) -> &[String] {
@@ -6500,6 +6523,154 @@ impl TaskState {
     }
 }
 
+/// The `/` search: the query, the rows it found, and the cursor it moves.
+///
+/// The state itself is [`TaskSearchState`]; what lives here is everything that
+/// needs the table — which rows matched, and where the cursor goes next.
+impl TaskState {
+    /// Whether a search is live, in either of its two halves.
+    pub fn search_active(&self) -> bool {
+        self.view.search.is_some()
+    }
+
+    pub(crate) fn search(&self) -> Option<&TaskSearchState> {
+        self.view.search.as_ref()
+    }
+
+    /// `/`: opens a search, or reopens the one already on screen.
+    ///
+    /// One method for both callers, because the state decides which it is:
+    /// from task mode there is never a search to resume — every way out of
+    /// the search modes drops it — and from the matches it is always the
+    /// query already typed, with the row it started from still remembered.
+    pub fn begin_search(&mut self) {
+        if self.view.search.is_some() {
+            return;
+        }
+        let origin = self.cursor_task_gid();
+        self.view.search = Some(TaskSearchState::new(origin));
+    }
+
+    pub fn search_push_char(&mut self, ch: char) {
+        if let Some(search) = self.view.search.as_mut() {
+            search.push_char(ch);
+        }
+        self.refresh_search(true);
+    }
+
+    pub fn search_pop_char(&mut self) {
+        if let Some(search) = self.view.search.as_mut() {
+            search.pop_char();
+        }
+        self.refresh_search(true);
+    }
+
+    /// `ctrl-l`: empties the query without closing the search.
+    ///
+    /// The cursor goes back to where the search started, because with nothing
+    /// typed there is nothing for it to be sitting on — which is the same
+    /// place an empty query left it in the first place.
+    pub fn clear_search_query(&mut self) {
+        if let Some(search) = self.view.search.as_mut() {
+            search.clear_query();
+        }
+        self.refresh_search(true);
+    }
+
+    pub(crate) fn set_search_mode(&mut self, mode: SearchMode) {
+        if let Some(search) = self.view.search.as_mut() {
+            search.set_mode(mode);
+        }
+        self.refresh_search(true);
+    }
+
+    /// `esc` while typing: drops the search and puts the cursor back.
+    ///
+    /// The one difference between the two ways out. Typing a query is a look
+    /// around, and a look around that moved the cursor and could not be taken
+    /// back would make `/` a key people stop pressing.
+    pub fn cancel_search(&mut self) {
+        let Some(search) = self.view.search.take() else {
+            return;
+        };
+        if let Some(origin) = search.origin() {
+            self.place_cursor_on_task(origin);
+        }
+    }
+
+    /// `enter` or `esc` from the matches: drops the search, cursor stays.
+    pub fn end_search(&mut self) {
+        self.view.search = None;
+    }
+
+    /// `n` / `N`: moves the cursor to the next match, or the previous one.
+    pub fn step_search_match(&mut self, delta: i32) {
+        let Some(search) = self.view.search.as_ref() else {
+            return;
+        };
+        let Some(next) = search.step(self.view.selected, delta) else {
+            return;
+        };
+        self.view.selected = Some(next);
+        self.leave_recent_pane();
+    }
+
+    /// Whether this row of the table is one the search found.
+    pub fn search_matched_row(&self, index: usize) -> bool {
+        self.view
+            .search
+            .as_ref()
+            .is_some_and(|search| search.matched_row(index))
+    }
+
+    /// The cursor's position among the matches, and how many there are.
+    ///
+    /// `None` for the position when the cursor has been moved off them with
+    /// `j` or `k`, which is a real state and reads as a count on its own.
+    pub fn search_position(&self) -> Option<(Option<usize>, usize)> {
+        let search = self.view.search.as_ref()?;
+        let position = self
+            .view
+            .selected
+            .and_then(|row| search.position_of(row));
+        Some((position, search.target_count()))
+    }
+
+    /// Recomputes what the query finds, and optionally re-aims the cursor.
+    ///
+    /// `jump` is the difference between a keystroke and a rebuild: a changed
+    /// query sends the cursor to the first match from where the search
+    /// started, where a table rebuilt under a settled search must leave the
+    /// cursor exactly where the reader last sent it.
+    fn refresh_search(&mut self, jump: bool) {
+        let Some(mut search) = self.view.search.take() else {
+            return;
+        };
+        search.refresh(&self.view.table);
+
+        if jump {
+            let origin_row = search
+                .origin()
+                .and_then(|gid| self.view.table.rows.iter().position(|row| row.gid == gid));
+            match search.first_target(origin_row) {
+                Some(row) => {
+                    self.view.selected = Some(row);
+                    self.leave_recent_pane();
+                }
+                // Nothing found — including the moment before anything has
+                // been typed — so the cursor waits where the search started.
+                None => {
+                    if let Some(origin) = search.origin() {
+                        self.place_cursor_on_task(origin);
+                    }
+                }
+            }
+        }
+
+        self.view.search = Some(search);
+    }
+}
+
 /// Moves a selected project to the front of each record's project list.
 ///
 /// A task in several projects is grouped under the first name in its list, and
@@ -6891,6 +7062,7 @@ mod tests {
             fake::FakeAsanaClient,
             TaskLoadScope,
         },
+        app::project_list::SearchMode,
         domain::{Project, TaskRecord, TaskRowKind, TaskTableModel},
     };
 
@@ -11207,5 +11379,220 @@ mod tests {
 
         state.move_column(100);
         assert_eq!(state.selected_column(), state.table().columns.len() - 1);
+    }
+
+    // ---- The `/` search --------------------------------------------------
+
+    /// Four tasks in one section, titled so their default order is the order
+    /// they are written in: no dates, so the table falls through to sorting
+    /// by title, and a test that guessed otherwise would be a test about
+    /// `compare_default` rather than about the search.
+    fn searchable_state() -> TaskState {
+        let mut state = loaded_state_with_tasks(vec![
+            sel_task("t1", "A draft of the protocol", false),
+            sel_task("t2", "B ship the release candidate", false),
+            sel_task("t3", "C confirm carrier pickup", false),
+            sel_task("t4", "D close the shipping report", false),
+        ]);
+        state.jump_top();
+        state
+    }
+
+    fn cursor_title(state: &TaskState) -> String {
+        state
+            .selected_index()
+            .and_then(|index| state.table().rows.get(index))
+            .and_then(|row| row.cells.first().cloned())
+            .unwrap_or_default()
+    }
+
+    fn matched_titles(state: &TaskState) -> Vec<String> {
+        state
+            .table()
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| state.search_matched_row(*index))
+            .map(|(_, row)| row.cells[0].clone())
+            .collect()
+    }
+
+    fn type_query(state: &mut TaskState, query: &str) {
+        state.begin_search();
+        for ch in query.chars() {
+            state.search_push_char(ch);
+        }
+    }
+
+    #[test]
+    fn typing_a_query_sends_the_cursor_to_the_first_match() {
+        let mut state = searchable_state();
+        assert_eq!(cursor_title(&state), "A draft of the protocol");
+
+        type_query(&mut state, "ship");
+
+        assert_eq!(cursor_title(&state), "B ship the release candidate");
+        assert_eq!(state.search_position(), Some((Some(1), 2)));
+        assert_eq!(
+            matched_titles(&state),
+            vec![
+                "B ship the release candidate".to_string(),
+                "D close the shipping report".to_string(),
+            ]
+        );
+    }
+
+    /// The jump is measured from the row the search started on rather than
+    /// from the cursor it last moved, which is what keeps a `bksp` from
+    /// leaving the cursor below a match the wider query has just let back in.
+    #[test]
+    fn editing_a_query_re_aims_from_the_row_the_search_started_on() {
+        let mut state = searchable_state();
+
+        type_query(&mut state, "cfr");
+        assert_eq!(cursor_title(&state), "C confirm carrier pickup");
+
+        state.search_pop_char();
+        state.search_pop_char();
+
+        // Every title has a `c` in it, so the first match is the row the
+        // search started on — and the cursor goes back up to it.
+        assert_eq!(cursor_title(&state), "A draft of the protocol");
+        assert_eq!(state.search_position(), Some((Some(1), 4)));
+    }
+
+    #[test]
+    fn escaping_a_search_puts_the_cursor_back_where_it_started() {
+        let mut state = searchable_state();
+
+        type_query(&mut state, "ship");
+        state.cancel_search();
+
+        assert!(!state.search_active());
+        assert_eq!(cursor_title(&state), "A draft of the protocol");
+        assert_eq!(state.search_position(), None);
+    }
+
+    /// The other way out, and the whole of the difference between the two.
+    #[test]
+    fn ending_a_search_leaves_the_cursor_on_the_match_it_jumped_to() {
+        let mut state = searchable_state();
+
+        type_query(&mut state, "ship");
+        state.end_search();
+
+        assert!(!state.search_active());
+        assert_eq!(cursor_title(&state), "B ship the release candidate");
+    }
+
+    #[test]
+    fn stepping_walks_the_matches_and_wraps() {
+        let mut state = searchable_state();
+
+        type_query(&mut state, "ship");
+        state.step_search_match(1);
+        assert_eq!(cursor_title(&state), "D close the shipping report");
+
+        // Wrapped, because there is nothing below it.
+        state.step_search_match(1);
+        assert_eq!(cursor_title(&state), "B ship the release candidate");
+
+        state.step_search_match(-1);
+        assert_eq!(cursor_title(&state), "D close the shipping report");
+    }
+
+    /// A query that finds nothing leaves the cursor where it is rather than
+    /// dropping it on the first row.
+    #[test]
+    fn a_query_that_finds_nothing_moves_nothing() {
+        let mut state = searchable_state();
+        state.move_down();
+        let before = cursor_title(&state);
+
+        type_query(&mut state, "zzz");
+
+        assert_eq!(cursor_title(&state), before);
+        assert_eq!(state.search_position(), Some((None, 0)));
+        state.step_search_match(1);
+        assert_eq!(cursor_title(&state), before);
+    }
+
+    /// Emptying the query is the same state as a search that has only just
+    /// opened, cursor included.
+    #[test]
+    fn clearing_the_query_brings_the_cursor_back_without_closing_the_search() {
+        let mut state = searchable_state();
+
+        type_query(&mut state, "ship");
+        state.clear_search_query();
+
+        assert!(state.search_active());
+        assert_eq!(cursor_title(&state), "A draft of the protocol");
+        assert_eq!(state.search_position(), Some((None, 0)));
+        assert!(matched_titles(&state).is_empty());
+    }
+
+    /// The match mode is changed mid-search, and the query already typed is
+    /// re-run under it.
+    #[test]
+    fn changing_the_match_mode_re_runs_the_query() {
+        let mut state = searchable_state();
+
+        // A subsequence of "C confirm carrier pickup" and of nothing else.
+        type_query(&mut state, "cfr");
+        assert_eq!(cursor_title(&state), "C confirm carrier pickup");
+
+        state.set_search_mode(SearchMode::Substring);
+
+        assert_eq!(state.search_position(), Some((None, 0)));
+        assert_eq!(
+            cursor_title(&state),
+            "A draft of the protocol",
+            "nothing contains it, so the cursor goes back to the start"
+        );
+    }
+
+    /// The matches are row indices and a rebuild renumbers every row. What
+    /// must not survive it is a highlight on the row that took a match's
+    /// place; what must survive it is the cursor exactly where it was.
+    #[test]
+    fn the_matches_survive_the_rebuild_a_reload_triggers() {
+        let mut state = searchable_state();
+
+        type_query(&mut state, "ship");
+        state.step_search_match(1);
+        let cursor = cursor_title(&state);
+
+        state.refresh_from_cache();
+
+        assert_eq!(cursor_title(&state), cursor, "a reload must not re-aim");
+        assert_eq!(
+            matched_titles(&state),
+            vec![
+                "B ship the release candidate".to_string(),
+                "D close the shipping report".to_string(),
+            ]
+        );
+    }
+
+    /// A section name is searched too, and the cursor cannot sit on a
+    /// heading, so the match sends it to the first task under it.
+    #[test]
+    fn a_section_name_matches_and_sends_the_cursor_into_the_section() {
+        let mut state = searchable_state();
+
+        type_query(&mut state, "today");
+
+        assert_eq!(
+            matched_titles(&state),
+            vec!["Today".to_string()],
+            "the heading is what matched"
+        );
+        assert_eq!(
+            cursor_title(&state),
+            "A draft of the protocol",
+            "and the first task under it is where the cursor goes"
+        );
+        assert_eq!(state.search_position(), Some((Some(1), 1)));
     }
 }

@@ -36,5 +36,5 @@
 #                                                                                                                      #
 #                                                                                                                      #
 +======================================================================================================================+
-j/k move   space select   enter edit   t add   d done   h/l column   o open   f filters   s sort      r refresh   q quit
+j/k move   space select   enter edit   t add   d done   h/l column   o open   / search   f filters    r refresh   q quit
  TASK

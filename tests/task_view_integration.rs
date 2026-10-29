@@ -11,7 +11,7 @@ use tuisana::{
         fake::FakeAsanaClient,
         AsanaClient,
     },
-    config::Config,
+    config::{Config, Mode},
     domain::Project,
     ui::runtime::{run_session, InputEvent, KeySource, RecordingHost},
 };
@@ -1016,4 +1016,124 @@ fn screen(terminal: &mut Terminal<TestBackend>) -> String {
         .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The row the cursor is on, by the text in its title cell.
+fn cursor_name<C: AsanaClient + Clone + Send + 'static>(app: &App<C>) -> String {
+    app.tasks
+        .selected_index()
+        .and_then(|index| app.tasks.table().rows.get(index))
+        .map(|row| row.cells[0].trim().to_string())
+        .unwrap_or_default()
+}
+
+fn esc() -> KeyEvent {
+    KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+}
+
+/// Shift plus a letter is a key of its own, which is what `N` is bound in.
+fn shift(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT)
+}
+
+/// `/` through the real keymap: the keys type rather than doing what they do
+/// to the table, and `esc` undoes the jump along with the search.
+#[test]
+fn escaping_a_search_puts_the_cursor_back_on_the_row_it_started_from() {
+    let (mut app, mut terminal) = spread_app();
+
+    press(&mut app, &mut terminal, vec![chr(' '), chr('t')]);
+    let origin = cursor_name(&app);
+    assert_eq!(origin, "Imminent", "the fixture's first row by due date");
+
+    // `o` is `open` in task mode and `t` is `set_edit_mode`; here they are
+    // three characters of a query.
+    press(&mut app, &mut terminal, vec![chr('/'), chr('o'), chr('u'), chr('t')]);
+
+    assert_eq!(app.mode(), Mode::TaskSearch);
+    assert!(app.tasks.search_active());
+    assert_eq!(cursor_name(&app), "Far out");
+    assert!(screen(&mut terminal).contains("/out"));
+
+    press(&mut app, &mut terminal, vec![esc()]);
+
+    assert_eq!(app.mode(), Mode::Task);
+    assert!(!app.tasks.search_active());
+    assert_eq!(cursor_name(&app), origin);
+}
+
+/// `enter` keeps the jump and hands the keys to `n`, which walks the matches
+/// and wraps; `enter` again leaves the cursor on the last one it reached.
+#[test]
+fn committing_a_search_hands_the_keys_to_n_and_keeps_the_cursor() {
+    let (mut app, mut terminal) = spread_app();
+
+    press(&mut app, &mut terminal, vec![chr(' '), chr('t')]);
+    press(&mut app, &mut terminal, vec![chr('/'), chr('e'), chr('n')]);
+    assert_eq!(cursor_name(&app), "Imminent", "the first match is row one");
+
+    press(&mut app, &mut terminal, vec![ret()]);
+    assert_eq!(app.mode(), Mode::SearchMatches);
+
+    press(&mut app, &mut terminal, vec![chr('n')]);
+    assert_eq!(cursor_name(&app), "In between");
+
+    // Two matches, so the third `n` is back at the first.
+    press(&mut app, &mut terminal, vec![chr('n')]);
+    assert_eq!(cursor_name(&app), "Imminent");
+
+    press(&mut app, &mut terminal, vec![shift('N')]);
+    assert_eq!(cursor_name(&app), "In between");
+
+    press(&mut app, &mut terminal, vec![ret()]);
+    assert_eq!(app.mode(), Mode::Task);
+    assert!(!app.tasks.search_active());
+    assert_eq!(cursor_name(&app), "In between", "the cursor is not reset");
+}
+
+/// `/` from the matches reopens the query already typed rather than starting
+/// a new one, and `esc` from there still goes back to where `/` was first
+/// pressed.
+#[test]
+fn editing_a_committed_search_keeps_the_query_and_the_row_it_started_from() {
+    let (mut app, mut terminal) = spread_app();
+
+    press(&mut app, &mut terminal, vec![chr(' '), chr('t')]);
+    let origin = cursor_name(&app);
+    press(
+        &mut app,
+        &mut terminal,
+        vec![chr('/'), chr('o'), chr('u'), chr('t'), ret()],
+    );
+    assert_eq!(cursor_name(&app), "Far out");
+
+    press(&mut app, &mut terminal, vec![chr('/')]);
+    assert_eq!(app.mode(), Mode::TaskSearch);
+    assert!(screen(&mut terminal).contains("/out"), "the query is still there");
+
+    press(&mut app, &mut terminal, vec![esc()]);
+    assert_eq!(cursor_name(&app), origin);
+}
+
+/// Leaving for another pane ends the search: the highlight and the key that
+/// walks it are the same fact, so neither outlives the mode.
+#[test]
+fn going_to_the_filter_panel_ends_the_search() {
+    let (mut app, mut terminal) = spread_app();
+
+    press(&mut app, &mut terminal, vec![chr(' '), chr('t')]);
+    press(
+        &mut app,
+        &mut terminal,
+        vec![chr('/'), chr('o'), chr('u'), chr('t'), ret()],
+    );
+    assert!(app.tasks.search_active());
+
+    press(&mut app, &mut terminal, vec![chr('f')]);
+
+    assert_eq!(app.mode(), Mode::Filter);
+    assert!(!app.tasks.search_active());
+    // The jump stands: `f` is not `esc`, and nothing about opening the panel
+    // says the row under the cursor was the wrong one.
+    assert_eq!(cursor_name(&app), "Far out");
 }

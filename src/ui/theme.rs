@@ -253,6 +253,13 @@ pub struct Theme {
     /// while it is banded. See the mono assertions below, which hold it to
     /// that.
     pub target_cell: Style,
+    /// The text a `/` search found, on a row it found it on.
+    ///
+    /// Patched over the cell's own tone like [`Theme::target_cell`], and for
+    /// the same reason — but with a foreground of its own, because a search
+    /// highlight has to read as the brightest thing on the line even when the
+    /// row it lands on is the muted grey of a completed task.
+    pub search_match: Style,
     /// A key name in the hint bar or help overlay.
     pub key: Style,
     /// The app-name badge in the header bar.
@@ -327,6 +334,11 @@ impl Theme {
                 header_cursor: plain
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED | Modifier::REVERSED),
                 target_cell: plain.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                // Reverse video, which is the cursor row's own cue: on the
+                // cursor row the two merge and the match is simply not told
+                // apart from the row it is on, which is the right answer —
+                // the reader is already looking at it.
+                search_match: plain.add_modifier(Modifier::REVERSED),
                 key: plain.add_modifier(Modifier::BOLD),
                 brand: plain.add_modifier(Modifier::REVERSED | Modifier::BOLD),
                 zebra: None,
@@ -382,6 +394,16 @@ impl Theme {
             target_cell: Style::default()
                 .bg(cursor_bg)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            // Deliberately not the cursor's band: a match sits *under* the
+            // cursor as often as not, and two shades of the same grey would
+            // make the cursor row the one place a match could not be seen.
+            // Black on yellow is what a search highlight looks like
+            // everywhere else, and it cannot be read as `warn`, which is
+            // yellow text on the terminal's own background.
+            search_match: Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
             key: plain.fg(accent).add_modifier(Modifier::BOLD),
             brand: plain
                 .fg(Color::Black)
@@ -510,6 +532,11 @@ impl Theme {
             // field, so the color only needs to signal "you are typing".
             Mode::Calendar => Color::Yellow,
             Mode::Task => Color::Green,
+            // Yellow, like every other mode where something is being typed.
+            Mode::TaskSearch => Color::Yellow,
+            // Cyan, like the chart and the description pane: another
+            // read-only pass over the rows the table is already showing.
+            Mode::SearchMatches => Color::Cyan,
             // Red, alone among the modes: this is the one whose keys change
             // which rows exist rather than what a row says.
             Mode::Edit => Color::Red,
@@ -623,6 +650,7 @@ mod tests {
             theme.header,
             theme.header_cursor,
             theme.target_cell,
+            theme.search_match,
             theme.key,
             theme.danger,
         ] {

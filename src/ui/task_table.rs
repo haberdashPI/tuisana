@@ -21,6 +21,7 @@ use crate::{
     },
     domain::{
         GanttModel, SortDirection, TaskRowKind, TaskSort, TaskTableModel, TimelineView,
+        TITLE_COLUMN,
     },
     ui::{
         chrome::{Chip, PaneMessage, Tone},
@@ -170,8 +171,30 @@ pub struct RenderRow {
     pub awaiting_parent: bool,
     /// How deeply the task is nested under a parent.
     pub subtask_depth: usize,
+    /// Whether the `/` search found this row.
+    ///
+    /// A colour change, unlike the two marks above, and deliberately: a
+    /// search is read rather than acted on, it is over in a keystroke, and
+    /// the underline and the strike-through are both already spoken for by
+    /// edits that have not happened yet.
+    pub search_match: bool,
     /// One entry per column, for task rows.
     pub cells: Vec<RenderCell>,
+}
+
+/// The `/` search, as the task pane's bottom border reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SearchFooter {
+    /// The query as typed.
+    pub query: String,
+    /// Which matching strategy is active.
+    pub mode: &'static str,
+    /// A regex compilation error, if the query is not a valid pattern.
+    pub error: Option<String>,
+    /// Where the cursor sits among the matches, when it sits on one.
+    pub position: Option<usize>,
+    /// How many rows `n` and `N` have to visit.
+    pub total: usize,
 }
 
 /// Snapshot of the task table used by the UI renderer.
@@ -214,6 +237,8 @@ pub struct TaskTableView {
     pub cursor_column: Option<usize>,
     /// The cell editor drawn in place of a cell, while one is open.
     pub editing: Option<CellEditView>,
+    /// The live `/` search, for the pane's bottom border.
+    pub search: Option<SearchFooter>,
 }
 
 impl TaskTableView {
@@ -381,13 +406,15 @@ pub fn render_task_table(
     let rows = model
         .rows
         .iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(index, row)| {
             resolve_row(
                 row,
                 today,
                 theme,
                 state.is_marked_for_deletion(&row.gid),
                 state.is_awaiting_parent(&row.gid),
+                state.search_matched_row(index),
             )
         })
         .collect::<Vec<_>>();
@@ -467,6 +494,7 @@ pub fn render_task_table(
         visible_columns: split.visible_columns,
         cursor_column: cursor_column.filter(|column| *column < split.visible_columns),
         editing,
+        search: search_footer(state),
     }
     .with_scroll_count()
     .with_narrow_chart_warning(split.too_narrow)
@@ -547,6 +575,10 @@ pub fn recent_pane_view(
                 theme,
                 state.is_marked_for_deletion(&row.gid),
                 state.is_awaiting_parent(&row.gid),
+                // The matches are rows of the *table*, and this is the other
+                // list: `/` searches what is on screen below, and a highlight
+                // up here would be pointing at a row `n` cannot reach.
+                false,
             )
         })
         .collect::<Vec<_>>();
@@ -562,6 +594,7 @@ pub fn recent_pane_view(
         message: None,
         chart: None,
         chart_width: 0,
+        search: None,
         ..view.clone()
     })
 }
@@ -586,7 +619,17 @@ pub fn task_header_line(view: &TaskTableView, theme: &Theme, width: usize) -> Li
         })
         .collect::<Vec<_>>();
 
-    let cells = cell_spans(&header_cells, view, theme, true, None, view.cursor_column);
+    // No search highlight on the header: the column labels are not what is
+    // searched, and a banded `Title` would read as a column that matched.
+    let cells = cell_spans(
+        &header_cells,
+        view,
+        theme,
+        true,
+        None,
+        view.cursor_column,
+        None,
+    );
     spans.extend(slice_spans(
         &cells,
         view.scroll_offset,
@@ -603,6 +646,61 @@ pub fn task_header_line(view: &TaskTableView, theme: &Theme, width: usize) -> Li
     }
 
     Line::from(spans).style(theme.header)
+}
+
+/// Renders the search footer shown in the task pane's bottom border.
+///
+/// `typing` is the mode, and the only thing here that is not the view's own:
+/// a caret is drawn while the query is still being typed and not once it has
+/// been committed to `n` and `N`. That is the same distinction the focused
+/// border draws, and it is known in the same place.
+pub fn search_footer_line(
+    search: &SearchFooter,
+    theme: &Theme,
+    typing: bool,
+    width: usize,
+) -> Line<'static> {
+    let caret = match typing {
+        true => theme.glyphs.edit_cursor,
+        false => "",
+    };
+
+    // The count is resolved first so the query gets whatever is left: a long
+    // query is still recognizable truncated, where "3/12" truncated is a lie.
+    let (count, count_style) = match (&search.error, search.total, search.position) {
+        (Some(error), _, _) => (error.clone(), theme.danger),
+        (None, 0, _) if search.query.is_empty() => (String::new(), theme.muted),
+        (None, 0, _) => ("no matches".to_string(), theme.warn),
+        (None, total, Some(position)) => (format!("{position}/{total}"), theme.accent),
+        // The cursor has been moved off the matches with `j` or `k`, so there
+        // is a count to report and no position in it.
+        (None, total, None) => (format!("{total} matches"), theme.muted),
+    };
+
+    let fixed = visible_width(&count) + visible_width(search.mode) + visible_width(caret) + 7;
+    let query = pad_cell(
+        &search.query,
+        visible_width(&search.query).min(width.saturating_sub(fixed)),
+        theme.glyphs.ellipsis,
+    );
+
+    let query_style = match search.error.is_some() {
+        true => theme.danger,
+        false => theme.accent,
+    };
+    let mut spans = vec![
+        Span::raw(" "),
+        Span::styled(format!("/{query}{caret}"), query_style),
+        Span::raw("  "),
+        Span::styled(search.mode.to_string(), theme.muted),
+    ];
+    if !count.is_empty() {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(count, count_style));
+    }
+    spans.push(Span::raw(" "));
+
+    Line::from(spans)
 }
 
 /// Cells available to the table columns on one line of the pane.
@@ -650,7 +748,7 @@ pub fn task_body_lines(
                 Line::from(Span::raw(" ".repeat(width)))
             }
             TaskRowKind::ProjectHeader => with_chart(
-                group_header_line(&row.label, theme, table_width, true),
+                group_header_line(&row.label, theme, table_width, true, false),
                 view,
                 theme,
                 None,
@@ -672,6 +770,7 @@ pub fn task_body_lines(
                         theme,
                         table_width,
                         false,
+                        row.search_match,
                     ),
                     view,
                     theme,
@@ -751,7 +850,18 @@ fn task_line(
         .is_edit_target(&row.gid, is_cursor)
         .then_some(view.cursor_column)
         .flatten();
-    let mut cells = cell_spans(&row.cells, view, theme, false, editing, target_column);
+    let mut cells = cell_spans(
+        &row.cells,
+        view,
+        theme,
+        false,
+        editing,
+        target_column,
+        // The title is the cell the search reads, so it is the cell the
+        // highlight goes on: a found row says *what* was found rather than
+        // merely that something on it was.
+        row.search_match.then_some(TITLE_COLUMN),
+    );
     if row.awaiting_parent {
         // Under every cell rather than beside the row: the band that says how
         // wide the *next* edit is belongs to the cursor column, and these rows
@@ -797,11 +907,16 @@ fn decorate_task_line(
 }
 
 /// Renders a project or section group heading as a labeled rule.
+///
+/// `search_match` highlights the label and nothing else: the rule after it is
+/// decoration, and a highlight running the width of the pane would read as a
+/// selected row rather than as a name that matched.
 fn group_header_line(
     label: &str,
     theme: &Theme,
     width: usize,
     is_project: bool,
+    search_match: bool,
 ) -> Line<'static> {
     let glyphs = &theme.glyphs;
 
@@ -830,6 +945,10 @@ fn group_header_line(
 
     let used = spans_width(&spans);
     let label_width = width.saturating_sub(used + 2).max(1);
+    let label_style = match search_match {
+        true => label_style.patch(theme.search_match),
+        false => label_style,
+    };
     spans.push(Span::styled(
         crate::ui::text::truncate_with_ellipsis(label, label_width, glyphs.ellipsis),
         label_style,
@@ -848,6 +967,11 @@ fn group_header_line(
 /// row the column cursor does not apply to. The header passes the cursor
 /// column always; a task row passes it only when the row is one an edit would
 /// change.
+///
+/// `match_column` is the search's own highlight, and it is applied after the
+/// band so it wins where the two land on the same cell: one says what the
+/// next edit will reach, the other says what the last keystroke found, and
+/// the question just asked is the one worth answering.
 fn cell_spans(
     cells: &[RenderCell],
     view: &TaskTableView,
@@ -855,6 +979,7 @@ fn cell_spans(
     is_header: bool,
     editing: Option<&CellEditView>,
     band_column: Option<usize>,
+    match_column: Option<usize>,
 ) -> Vec<Span<'static>> {
     let mut spans = Vec::with_capacity(cells.len() * 4);
 
@@ -897,6 +1022,9 @@ fn cell_spans(
                 false => style.patch(theme.target_cell),
             };
         }
+        if match_column == Some(index) {
+            style = style.patch(theme.search_match);
+        }
         spans.push(Span::styled(padded, style));
     }
 
@@ -937,6 +1065,7 @@ fn resolve_row(
     theme: &Theme,
     marked_for_deletion: bool,
     awaiting_parent: bool,
+    search_match: bool,
 ) -> RenderRow {
     if !row.kind.is_task() {
         return RenderRow {
@@ -947,6 +1076,9 @@ fn resolve_row(
             marked_for_deletion: false,
             awaiting_parent: false,
             subtask_depth: 0,
+            // Carried on a heading row as well as a task row: a section name
+            // is searched, and the label is where it is drawn.
+            search_match,
             cells: Vec::new(),
         };
     }
@@ -976,8 +1108,22 @@ fn resolve_row(
         marked_for_deletion,
         awaiting_parent,
         subtask_depth: row.subtask_depth,
+        search_match,
         cells,
     }
+}
+
+/// Resolves the live search into what the pane's border says about it.
+fn search_footer(state: &TaskState) -> Option<SearchFooter> {
+    let search = state.search()?;
+    let (position, total) = state.search_position()?;
+    Some(SearchFooter {
+        query: search.query().to_string(),
+        mode: search.mode().label(),
+        error: search.error().map(|error| error.to_string()),
+        position,
+        total,
+    })
 }
 
 fn resolve_cell(

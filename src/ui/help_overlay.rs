@@ -61,6 +61,7 @@ pub fn groups_for(mode: Mode) -> Vec<HelpGroup> {
             groups.push(text_editing_group());
             groups
         }
+        Mode::TaskSearch | Mode::SearchMatches => search_groups(),
         Mode::Gantt => gantt_groups(),
         Mode::GanttOrder => gantt_order_groups(),
         Mode::Description => description_groups(),
@@ -202,6 +203,10 @@ fn task_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::SetGanttMode], "gantt chart"),
                 Hint::new(&[Action::SetDescriptionMode], "description"),
                 Hint::new(&[Action::SetFilterMode], "filter panel"),
+                // The way *in* to the search, documented where the reader is
+                // when they want it: a mode's own help is no use to someone
+                // who does not know the key that reaches it.
+                Hint::new(&[Action::StartSearch], "search these rows"),
                 Hint::new(&[Action::ToggleCompletedFilter], "open / done / all"),
                 Hint::new(&[Action::ToggleSubtaskVisibility], "subtasks"),
                 Hint::new(&[Action::ScrollLeft, Action::ScrollRight], "scroll columns"),
@@ -240,6 +245,52 @@ fn edit_groups() -> Vec<HelpGroup> {
                 Hint::new(&[Action::MakeSubtask], "hang these off a task you pick"),
                 Hint::new(&[Action::PromoteTask], "lift these one level up"),
                 Hint::new(&[Action::EditCancel], "clear the marks, then leave"),
+            ],
+        ),
+    ]
+}
+
+/// The `/` search, in the two halves it is read in.
+///
+/// One set of groups for both modes: the second half is the first half with
+/// the query settled, and someone who opened help from either wants to know
+/// how the other one ends.
+fn search_groups() -> Vec<HelpGroup> {
+    vec![
+        HelpGroup::new(
+            "Type a query",
+            vec![
+                Hint::literal("a-z", "narrow it, one character at a time"),
+                Hint::literal("bksp", "delete"),
+                Hint::new(&[Action::ClearSearch], "empty the query"),
+                Hint::literal("enter", "keep it, then walk the matches"),
+                Hint::literal("esc", "cancel, cursor goes back"),
+            ],
+        ),
+        HelpGroup::new(
+            "Walk the matches",
+            vec![
+                Hint::new(&[Action::SearchStepMatch(1)], "next match"),
+                Hint::new(&[Action::SearchStepMatch(-1)], "previous match"),
+                Hint::new(&[Action::StartSearch], "edit the query again"),
+                Hint::new(&[Action::MoveDown, Action::MoveUp], "move off them"),
+                Hint::literal("enter esc", "done, cursor stays"),
+            ],
+        ),
+        HelpGroup::new(
+            "Match mode",
+            vec![
+                Hint::new(&[Action::SearchFuzzy], "fuzzy, the default"),
+                Hint::new(&[Action::SearchSubstring], "contains"),
+                Hint::new(&[Action::SearchRegex], "regex"),
+            ],
+        ),
+        HelpGroup::new(
+            "What is searched",
+            vec![
+                Hint::literal("titles", "every task's own text"),
+                Hint::literal("sections", "a heading sends you to its first task"),
+                Hint::literal("nothing hidden", "the filter panel is what hides rows"),
             ],
         ),
     ]

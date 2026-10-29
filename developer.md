@@ -25,7 +25,9 @@ This file is the quickest way to understand the codebase without reading everyth
     the one-line text buffer every editable field runs on.
 16. `src/app/autocomplete.rs` is the completion state machine behind
     `Assignee`, `Projects`, and the filter panel's `list` match mode.
-17. `src/asana/throttle.rs` is the write budget: how many actions may be in
+17. `src/app/task_search.rs` is the `/` search: the query, how it matches,
+    and the rows it found.
+18. `src/asana/throttle.rs` is the write budget: how many actions may be in
     flight and how fast they may go.
 
 The async task-data path is split across two modules:
@@ -146,6 +148,26 @@ a convention.
 - `KeyMap` is built from config bindings and resolves keys to actions. A binding
   with a `mode` shadows the global one, which is how `c`, `t`, and `h`/`l` mean
   different things in different modes.
+- A **search is not a filter**, and the two are deliberately the only pair of
+  ways to find a row. `/` picks rows out where they already are — nothing is
+  hidden, nothing is reordered — and the filter panel changes which rows exist.
+  What it reads is the **title cell**, which is the one cell every row kind
+  fills in: a task's own text, and a section's name on a heading. A task's
+  description is not searched, because it is fetched for the row under the
+  cursor and no other.
+  `TaskSearchState` holds the query and the rows it found as **indices into
+  the current table**, which is safe only because nothing stores them across a
+  rebuild: `refresh_table` ends by recomputing them, after `inject_draft`,
+  since a draft row renumbers everything below it. That call passes `jump =
+  false` — a reload must not move a cursor the reader placed — where every
+  change to the query re-aims from the row the search *started* on, which is
+  what keeps a `bksp` from stranding the cursor below a match the wider query
+  just let back in. A matched heading resolves to the first task in its own
+  section, because the cursor only ever sits on a task row; the two lists on
+  the state are that distinction. `Mode::TaskSearch` and `Mode::SearchMatches`
+  are the two halves — typing and reading — and the state is dropped by every
+  way out of them, so a highlight on screen always means `n` is one keystroke
+  from doing something.
 - `Mode::Gantt` and `Mode::GanttOrder` drive the chart and its colour dialog.
   Both are siblings of `Mode::Task`: the same pane, the same rows, different
   keys. Both allow the `Any` fallback, so `j`/`k`, `q`, and `?` keep working.
@@ -378,6 +400,14 @@ a convention.
   is `App::stage_view_state`. Adding a field means touching all three: the
   restore and the capture are deliberately separate functions, so a field
   added to one and not the other is written and never read back.
+- To change what `/` searches, the whole of the matching is
+  `TaskSearchState::refresh` in `src/app/task_search.rs`; the cursor it moves
+  is `TaskState::refresh_search` and `step_search_match` in `src/app/task.rs`,
+  the keys are `App::begin_task_search` and `handle_task_search_input`, and the
+  highlight is `cell_spans`' `match_column` plus `group_header_line`'s
+  `search_match` in `src/ui/task_table.rs`. The border's `/query  fuzzy  2/7`
+  is `search_footer_line` there too, drawn from `render_task_pane`, where it
+  displaces the chart's legend for as long as the search is live.
 - To change how input is dispatched, update `src/ui/runtime.rs` and `src/app.rs`.
 
 ## Testing Strategy

@@ -855,6 +855,19 @@ pub enum Mode {
     FilterSetName,
     Calendar,
     Task,
+    /// A `/` search is being typed over the task table.
+    ///
+    /// Every key types, as in [`Mode::ProjectSearch`]: `enter`, `esc`, and
+    /// `backspace` are read directly rather than bound, and the only bindings
+    /// are the ctrl- pairs that change how the query matches.
+    TaskSearch,
+    /// A `/` search has been committed and `n` is walking its matches.
+    ///
+    /// Another sibling of [`Mode::Task`] — the same pane, the same rows, the
+    /// same cursor — and the half of the search that is *read* rather than
+    /// typed, so the ordinary cursor keys still work through the `Any`
+    /// fallback while `n` and `N` jump between what was found.
+    SearchMatches,
     /// The structural edits: the keys that change which rows exist.
     ///
     /// A sibling of [`Mode::Task`] the way [`Mode::Gantt`] is — the same pane,
@@ -912,6 +925,9 @@ impl Mode {
                 | Self::FilterSetName
                 | Self::Calendar
                 | Self::Confirm
+                // Typing a search, so an unbound letter belongs in the query
+                // rather than in whatever that letter does to the table.
+                | Self::TaskSearch
                 // An unbound letter has to type into the cell rather than
                 // fire the global binding that letter carries.
                 | Self::ColumnEdit
@@ -929,6 +945,8 @@ impl Mode {
             Self::Calendar => "calendar",
             Self::Confirm => "confirm",
             Self::Task => "task",
+            Self::TaskSearch => "search",
+            Self::SearchMatches => "matches",
             Self::Edit => "edit",
             Self::ParentPick => "parent",
             Self::ColumnEdit => "column",
@@ -1395,6 +1413,34 @@ fn default_bindings() -> Vec<Bind> {
         // `t` is `set_task_mode` globally, which is what gets you *out* of
         // edit mode by way of task mode; from task mode it is the way in.
         Bind::with_mode("t", Mode::Task, "set_edit_mode"),
+        // The same key the project list searches with, over the pane below it.
+        // `/` is bound in project mode only, so taking it here displaces
+        // nothing, and the two searches read the same three mode keys.
+        Bind::with_mode("/", Mode::Task, "start_search"),
+        // Letters type while the query is being written, so everything the
+        // search itself offers needs a ctrl- pair — the same four the project
+        // list and the filter panel already use for the same four things.
+        Bind::with_mode("ctrl-l", Mode::TaskSearch, "clear_search"),
+        Bind::with_mode("ctrl-z", Mode::TaskSearch, "search_fuzzy"),
+        Bind::with_mode("ctrl-s", Mode::TaskSearch, "search_substring"),
+        Bind::with_mode("ctrl-r", Mode::TaskSearch, "search_regex"),
+        // `n` and `N` are the editor's own pair, and the case split is the
+        // mnemonic edit mode already uses: the shifted key is the same
+        // gesture backwards. Both are free in task mode, where `n` is
+        // `filter_set_new` only in the two views that have a sidebar.
+        Bind::with_mode("n", Mode::SearchMatches, "search_next_match"),
+        Bind::with_mode("N", Mode::SearchMatches, "search_prev_match"),
+        // Back to typing, with the query as it stands rather than from
+        // nothing: the key that opened the search is the key that reopens it.
+        Bind::with_mode("/", Mode::SearchMatches, "start_search"),
+        // Both ways out, and they do the same thing: the cursor stays where
+        // the last jump left it. `esc` resetting it is the typing half's
+        // promise, and it has already been kept by the time `enter` gets here.
+        Bind::with_mode("enter", Mode::SearchMatches, "set_task_mode"),
+        Bind::with_mode("esc", Mode::SearchMatches, "set_task_mode"),
+        Bind::with_mode("ctrl-z", Mode::SearchMatches, "search_fuzzy"),
+        Bind::with_mode("ctrl-s", Mode::SearchMatches, "search_substring"),
+        Bind::with_mode("ctrl-r", Mode::SearchMatches, "search_regex"),
         // Edit mode. The case split is the whole mnemonic: lowercase acts on
         // the task, uppercase on the structure around it. `i`/`I` is a task
         // and a nested task, `x`/`X` is a task and the section holding it,
@@ -2750,6 +2796,73 @@ projects = ["1201", "  "]
         assert_eq!(
             keymap.action_for(&KeyBinding::Char('b'), Mode::FilterSetName),
             None
+        );
+    }
+
+    #[test]
+    fn default_bindings_include_task_search_controls() {
+        let keymap = KeyMap::from_bindings(&Config::default().effective_bindings())
+            .expect("default bindings parse");
+
+        // The way in, and the same key the project list opens its own search
+        // with.
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('/'), Mode::Task),
+            Some(&Action::StartSearch)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('/'), Mode::SearchMatches),
+            Some(&Action::StartSearch)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('n'), Mode::SearchMatches),
+            Some(&Action::SearchStepMatch(1))
+        );
+        // Shift plus a letter is a key of its own, so `N` is reachable at all.
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('N'), Mode::SearchMatches),
+            Some(&Action::SearchStepMatch(-1))
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Enter, Mode::SearchMatches),
+            Some(&Action::SetTaskMode)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Esc, Mode::SearchMatches),
+            Some(&Action::SetTaskMode)
+        );
+
+        // While the query is being typed the three match modes need their
+        // ctrl- pairs, because every letter is a character of the query.
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('z'), Mode::TaskSearch),
+            Some(&Action::SearchFuzzy)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('s'), Mode::TaskSearch),
+            Some(&Action::SearchSubstring)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('r'), Mode::TaskSearch),
+            Some(&Action::SearchRegex)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Ctrl('l'), Mode::TaskSearch),
+            Some(&Action::ClearSearch)
+        );
+
+        // And a plain letter resolves to nothing there, which is what sends
+        // it to the query instead of to the table.
+        assert_eq!(keymap.action_for(&KeyBinding::Char('s'), Mode::TaskSearch), None);
+        assert_eq!(keymap.action_for(&KeyBinding::Char('q'), Mode::TaskSearch), None);
+        // The matches are read rather than typed, so the globals come back.
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('q'), Mode::SearchMatches),
+            Some(&Action::Quit)
+        );
+        assert_eq!(
+            keymap.action_for(&KeyBinding::Char('j'), Mode::SearchMatches),
+            Some(&Action::MoveDown)
         );
     }
 

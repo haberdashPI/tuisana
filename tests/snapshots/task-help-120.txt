@@ -7,34 +7,34 @@
 │                           ┃o           open in Asana        g           gantt chart      ┃                           │
 │                           ┃␣           select               v           description      ┃                           │
 │                           ┃a           select all           f           filter panel     ┃                           │
-│                           ┃i           invert               c           open / done / all┃                           │
-│                           ┃x           clear                z           subtasks         ┃                           │
-└───────────────────────────┃^x          clear hidden         left/right  scroll columns   ┃───────────────────────────┘
-┏ Tasks ━━━━━━━━━━━━━━━━━━━━┃y           copy links           b           recently edited  ┃sks · row 1 · columns 0/10 ┓
-┃   Task                    ┃                                                              ┃rojects           │ Parent ┃
-┃                           ┃Group & sort                     Move                         ┃                           ┃
-┃▌Northwind BTX 4412 ───────┃[/]         jump section         j/k         down / up        ┃───────────────────────────┃
-┃                           ┃{/}         jump project         ^d/^u       page down / up   ┃                           ┃
-┃   Study Kit Design ·······┃,           group by project     home/end    top / bottom     ┃···························┃
-┃▍  Draft the assay validati┃.           group by section                                  ┃orthwind BTX 4412 │ —      ┃
-┃   Review shipment requirem┃s           sort this column     Modes                        ┃orthwind BTX 4412 │ —      ┃
-┃   Ship release candidate t┃                                 p           projects         ┃orthwind BTX 4412 │ —      ┃
-┃   Confirm carrier pickup w┃Edit                             f           filters          ┃orthwind BTX 4412 │ —      ┃
-┃   Update the sample intake┃t           add & delete rows    m           toggle tasks     ┃orthwind BTX 4412 │ —      ┃
-┃   Qualify the second reage┃h/l         column cursor                                     ┃orthwind BTX 4412 │ —      ┃
-┃                           ┃⏎           edit the cell        Panes                        ┃                           ┃
-┃   Shipment ···············┃d           open / done          0           restore          ┃···························┃
-┃   Book the courier for the┃                                                              ┃orthwind BTX 4412 │ —      ┃
-┃   Label the retention samp┃                                 App                          ┃orthwind BTX 4412 │ —      ┃
-┃   Reconcile the freight in┃                                 r           refresh          ┃orthwind BTX 4412 │ —      ┃
-┃   Close out packaging vend┃                                 q ^c        quit             ┃orthwind BTX 4412 │ —      ┃
-┃   Close the quarter's ship┃                                 ?           close this help  ┃orthwind BTX 4412 │ —      ┃
+│                           ┃i           invert               /           search these rows┃                           │
+│                           ┃x           clear                c           open / done / all┃                           │
+└───────────────────────────┃^x          clear hidden         z           subtasks         ┃───────────────────────────┘
+┏ Tasks ━━━━━━━━━━━━━━━━━━━━┃y           copy links           left/right  scroll columns   ┃sks · row 1 · columns 0/10 ┓
+┃   Task                    ┃                                 b           recently edited  ┃rojects           │ Parent ┃
+┃                           ┃Group & sort                                                  ┃                           ┃
+┃▌Northwind BTX 4412 ───────┃[/]         jump section         Move                         ┃───────────────────────────┃
+┃                           ┃{/}         jump project         j/k         down / up        ┃                           ┃
+┃   Study Kit Design ·······┃,           group by project     ^d/^u       page down / up   ┃···························┃
+┃▍  Draft the assay validati┃.           group by section     home/end    top / bottom     ┃orthwind BTX 4412 │ —      ┃
+┃   Review shipment requirem┃s           sort this column                                  ┃orthwind BTX 4412 │ —      ┃
+┃   Ship release candidate t┃                                 Modes                        ┃orthwind BTX 4412 │ —      ┃
+┃   Confirm carrier pickup w┃Edit                             p           projects         ┃orthwind BTX 4412 │ —      ┃
+┃   Update the sample intake┃t           add & delete rows    f           filters          ┃orthwind BTX 4412 │ —      ┃
+┃   Qualify the second reage┃h/l         column cursor        m           toggle tasks     ┃orthwind BTX 4412 │ —      ┃
+┃                           ┃⏎           edit the cell                                     ┃                           ┃
+┃   Shipment ···············┃d           open / done          Panes                        ┃···························┃
+┃   Book the courier for the┃                                 0           restore          ┃orthwind BTX 4412 │ —      ┃
+┃   Label the retention samp┃                                                              ┃orthwind BTX 4412 │ —      ┃
+┃   Reconcile the freight in┃                                 App                          ┃orthwind BTX 4412 │ —      ┃
+┃   Close out packaging vend┃                                 r           refresh          ┃orthwind BTX 4412 │ —      ┃
+┃   Close the quarter's ship┃                                 q ^c        quit             ┃orthwind BTX 4412 │ —      ┃
+┃                           ┃                                 ?           close this help  ┃                           ┃
 ┃                           ┃                                                              ┃                           ┃
 ┃                           ┃                                                    ? to close┃                           ┃
 ┃                           ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                           ┃
 ┃                                                                                                                      ┃
 ┃                                                                                                                      ┃
-┃                                                                                                                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-j/k move   ␣ select   ⏎ edit   t add   d done   h/l column   o open   f filters   s sort              r refresh   q quit
+j/k move   ␣ select   ⏎ edit   t add   d done   h/l column   o open   / search   f filters   s sort   r refresh   q quit
  TASK
